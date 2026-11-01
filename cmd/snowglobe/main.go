@@ -4,15 +4,18 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"runtime/debug"
 
 	"github.com/filipecabaco/snowglobe/internal/build"
 	"github.com/filipecabaco/snowglobe/internal/bundle"
 	"github.com/filipecabaco/snowglobe/internal/instance"
+	"github.com/filipecabaco/snowglobe/internal/native"
 	"github.com/filipecabaco/snowglobe/internal/pack"
 	"github.com/filipecabaco/snowglobe/internal/pool"
 	"github.com/filipecabaco/snowglobe/internal/pwa"
@@ -54,7 +57,10 @@ Usage:
                                                      (or SNOWGLOBE_VM) names
   snowglobe warm <dir> <reads.json ...>              add the files runs recorded (run
                                                      --record-reads) to the site's warm pack
-  snowglobe run [dir | url] [--name N] [--detach]    run a built site in a sandboxed container:
+  snowglobe run [dir | url] [--name N] [--detach]    run a built site, sandboxed: in a container
+                [--runtime docker|native]            (docker, the default) or natively with no
+                                                     Docker (native: snowglobe-vm sandboxes itself;
+                                                     SNOWGLOBE_RUNTIME sets the default):
                                                      a session in a terminal; with stdin piped,
                                                      each line is typed in as a command. The site
                                                      can be a directory, a tarball, a tarball URL
@@ -190,6 +196,11 @@ func main() {
 		os.Exit(2)
 	}
 
+	var exit instance.ExitError
+	if errors.As(err, &exit) {
+		// The runtime's own exit status (what a piped session or exec ended with)
+		os.Exit(exit.Code)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\033[31merror:\033[0m %v\n", err)
 		os.Exit(1)
@@ -323,27 +334,17 @@ func runBundle(args []string) error {
 			return err
 		}
 	}
-	// The runtime: snowglobe-vm for the system the bundle will run on. Without --runtime, the
-	// tools image's (Linux on this machine's architecture), or this release's for macOS
-	if *runtime == "" && *target == "darwin" {
-		if *runtime, err = bundle.DarwinRuntime(version); err != nil {
-			return err
-		}
-	} else if *runtime == "" && *target != "linux" {
-		return fmt.Errorf("--target %s: linux or darwin", *target)
-	}
+	// The runtime: snowglobe-vm for the system the bundle will run on (this machine's
+	// architecture): --runtime, else the release's, else (Linux) the tools image's
 	if *runtime == "" {
-		t, err := tools.Build(version)
-		if err != nil {
-			return err
+		if *target != "linux" && *target != "darwin" {
+			return fmt.Errorf("--target %s: linux or darwin", *target)
 		}
-		dir, err := os.MkdirTemp("", "snowglobe-vm-")
-		if err != nil {
-			return err
+		var img *native.Image
+		if *target == "linux" {
+			img = tools.NativeSource(version)
 		}
-		defer os.RemoveAll(dir)
-		*runtime = filepath.Join(dir, "snowglobe-vm")
-		if err := t.ExtractVM(*runtime); err != nil {
+		if *runtime, err = native.For(version, *target, goruntime.GOARCH, img); err != nil {
 			return err
 		}
 	}
@@ -370,6 +371,7 @@ func runRun(args []string) error {
 	fs.BoolVar(&o.AllowPrivate, "allow-private", false, "")
 	fs.StringVar(&o.RecordReads, "record-reads", "", "")
 	fs.StringVar(&o.TunnelToken, "tunnel-token", "", "")
+	fs.StringVar(&o.Runtime, "runtime", os.Getenv("SNOWGLOBE_RUNTIME"), "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)

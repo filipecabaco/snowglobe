@@ -1,6 +1,7 @@
-// Package instance runs a built site headlessly in a sandboxed container: the guest is restored
-// from its snapshot in armless (natively, snowglobe-vm), and its app console is connected to the
-// terminal (or to a pipe, or left running for `exec` and `attach`).
+// Package instance runs a built site headlessly: the guest is restored from its snapshot in
+// armless (snowglobe-vm), natively where there is a snowglobe-vm for this system (it sandboxes
+// itself) or else in a sandboxed container, and its app console is connected to the terminal (or
+// to a pipe, or left running for `exec` and `attach`).
 package instance
 
 import (
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/filipecabaco/snowglobe/internal/docker"
+	"github.com/filipecabaco/snowglobe/internal/native"
 	"github.com/filipecabaco/snowglobe/internal/tools"
 	"github.com/filipecabaco/snowglobe/internal/tunnel"
 )
@@ -36,6 +38,9 @@ type Options struct {
 	TunnelToken string
 	// RecordReads is a file to write every file the guest reads to, for `snowglobe warm`
 	RecordReads string
+	// Runtime is "docker" (the default: a container from the tools image) or "native"
+	// (snowglobe-vm here, sandboxing itself, no Docker). Without Docker, runs are native
+	Runtime string
 }
 
 // Port is one forwarded port.
@@ -107,6 +112,26 @@ func Run(o Options, version string) error {
 	}
 	if tunnels, err = tunnel.Fill(tunnels, token); err != nil {
 		return err
+	}
+
+	runtime := o.Runtime
+	if runtime == "" {
+		runtime = "docker"
+		if !native.DockerAvailable() {
+			runtime = "native" // nothing else could run it
+		}
+	}
+	switch runtime {
+	case "native":
+		// snowglobe-vm here: it sandboxes itself
+		vm, err := native.VM(version, tools.NativeSource(version))
+		if err != nil {
+			return err
+		}
+		return runNative(o, site, vm, run.Network, tunnels)
+	case "docker":
+	default:
+		return fmt.Errorf("--runtime %s: docker or native", runtime)
 	}
 
 	t, err := tools.Build(version)
@@ -206,11 +231,23 @@ func Run(o Options, version string) error {
 
 // Exec types one command into a running instance and prints what it printed.
 func Exec(name string, command []string) error {
+	if st, _, ok := loadNative(name); ok {
+		return execNative(st, command)
+	}
+	if !inContainer(name) {
+		return fmt.Errorf("no instance called %s (snowglobe ps lists them)", name)
+	}
 	return docker.Attached(append([]string{"exec", "--interactive", name, tools.VM, "exec"}, command...)...)
 }
 
 // Attach joins a running instance's session; ctrl-] detaches.
 func Attach(name string) error {
+	if st, _, ok := loadNative(name); ok {
+		return attachNative(st)
+	}
+	if !inContainer(name) {
+		return fmt.Errorf("no instance called %s (snowglobe ps lists them)", name)
+	}
 	args := []string{"exec", "--interactive"}
 	if isTerminal(os.Stdin) {
 		args = append(args, "--tty")
@@ -220,24 +257,46 @@ func Attach(name string) error {
 
 // Stop throws an instance away.
 func Stop(name string) error {
+	if st, dir, ok := loadNative(name); ok {
+		return stopNative(st, dir)
+	}
+	if !inContainer(name) {
+		return fmt.Errorf("no instance called %s (snowglobe ps lists them)", name)
+	}
 	_, err := docker.Output("rm", "--force", name)
 	return err
 }
 
+// inContainer says whether name is an instance running in a container.
+func inContainer(name string) bool {
+	if !native.DockerAvailable() {
+		return false
+	}
+	out, err := docker.Output("ps", "--filter", "label="+label, "--filter", "name=^"+name+"$", "--format", "{{.Names}}")
+	return err == nil && strings.TrimSpace(out) == name
+}
+
 // List prints the running instances.
 func List() error {
-	out, err := docker.Output("ps", "--filter", "label="+label, "--format",
-		`{{.Names}}\t{{.Label "`+label+`"}}\t{{.RunningFor}}`)
+	n, err := listNative()
 	if err != nil {
 		return err
 	}
-	if out == "" {
-		fmt.Println("no instances running")
-		return nil
+	if native.DockerAvailable() {
+		out, err := docker.Output("ps", "--filter", "label="+label, "--format",
+			`{{.Names}}\t{{.Label "`+label+`"}}\t{{.RunningFor}}`)
+		if err == nil && out != "" {
+			if n == 0 {
+				fmt.Println("NAME\tSITE\tSTARTED\tRUNTIME")
+			}
+			for _, line := range strings.Split(out, "\n") {
+				fmt.Println(line + "\tcontainer")
+				n++
+			}
+		}
 	}
-	fmt.Println("NAME\tSITE\tSTARTED")
-	for _, line := range strings.Split(out, "\n") {
-		fmt.Println(line)
+	if n == 0 {
+		fmt.Println("no instances running")
 	}
 	return nil
 }

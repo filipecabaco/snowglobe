@@ -225,10 +225,18 @@ in `assets/cards.json` names it.
 
 ## Running a site headlessly
 
-A built site also runs without a browser, in a sandboxed container: the same snapshot, restored
-by armless natively (`snowglobe-vm`, in Rust), with its app console on your terminal. The guest is
-an emulated machine with no access to the host, and the container around it runs unprivileged,
-read-only, memory-capped and offline unless the site was built with `--network fetch`.
+A built site also runs without a browser: the same snapshot, restored by armless natively
+(`snowglobe-vm`, in Rust), with its app console on your terminal. It can run with no Docker at
+all: the guest is an emulated machine with no access to the host, and `snowglobe-vm` sandboxes
+itself before it starts (no_new_privs, Landlock and seccomp on Linux; Seatbelt on macOS: it reads only
+the site, writes only its own state, starts no programs, and has no network unless the site was
+built with `--network fetch`).
+
+`snowglobe run` runs it in a container by default (`--runtime docker`: unprivileged, read-only
+and memory-capped). `--runtime native` (or `SNOWGLOBE_RUNTIME=native`) runs `snowglobe-vm` itself,
+with no Docker: this release's for your system (fetched once into your cache), or
+`$SNOWGLOBE_VM`, or on Linux the tools image's. Without Docker, runs are native. Named instances
+keep their state under your cache directory either way (`snowglobe ps` lists both).
 
 Natively, armless compiles hot guest code to host code (its native JIT), when booting and
 snapshotting a site at build time as well as when running one: about 2–3× faster on CPU-bound work

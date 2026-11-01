@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/filipecabaco/snowglobe/internal/docker"
+	"github.com/filipecabaco/snowglobe/internal/native"
 	"github.com/filipecabaco/snowglobe/internal/tunnel"
 )
 
@@ -132,6 +133,21 @@ func (i *Image) ExtractVM(dest string) error {
 	id = strings.TrimSpace(id)
 	defer docker.Quiet("rm", id)
 	return docker.Quiet("cp", id+":"+VM, dest)
+}
+
+// NativeSource is the tools image as a source of snowglobe-vm for running natively on Linux
+// (built or pulled when first needed); nil without Docker.
+func NativeSource(version string) *native.Image {
+	if !native.DockerAvailable() {
+		return nil
+	}
+	return &native.Image{Key: Version(), Extract: func(dest string) error {
+		t, err := Build(version)
+		if err != nil {
+			return err
+		}
+		return t.ExtractVM(dest)
+	}}
 }
 
 // Snapshot boots <out>/system and writes the state, console replay and reads.json there.
