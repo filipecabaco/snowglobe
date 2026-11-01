@@ -143,6 +143,22 @@ jobs:
 
       - uses: jdx/mise-action@v5
 
+      # snowglobe-vm for Linux, so `snowglobe run` (and bundles) need no Docker there: the static
+      # (musl) binary the tools image carries, for each architecture
+      - name: snowglobe-vm for Linux, from the tools image
+        env:
+          IMAGE: ${{ needs.tools.outputs.image }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          mkdir -p release
+          for arch in amd64 arm64; do
+            name="snowglobe-vm_${TAG#v}_linux_${arch}"
+            id=$(docker create --platform "linux/$arch" "$IMAGE")
+            mkdir -p "$name" && docker cp "$id:/tools/snowglobe-vm" "$name/snowglobe-vm" && docker rm "$id"
+            cp LICENSE.md "$name/"
+            tar -czf "release/$name.tar.gz" "$name"
+          done
+
       # Docker Desktop is the only host requirement on macOS; Windows isn't tested, so not shipped
       - name: Build the binaries
         run: |

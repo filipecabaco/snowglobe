@@ -1,9 +1,6 @@
 package bundle
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -58,29 +55,5 @@ func TestWriteRead(t *testing.T) {
 	must(err)
 	if s2.Runtime != 9 {
 		t.Fatalf("runtime from a bundle: %d bytes", s2.Runtime)
-	}
-}
-
-func TestDarwinRuntimeNeedsARelease(t *testing.T) {
-	if _, err := DarwinRuntime("dev"); err == nil {
-		t.Fatal("a dev build fetched a runtime")
-	}
-}
-
-func TestExtract(t *testing.T) {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	body := []byte("#!vm")
-	tw.WriteHeader(&tar.Header{Name: "x/snowglobe-vm", Mode: 0o755, Size: int64(len(body))})
-	tw.Write(body)
-	tw.Close()
-	gz.Close()
-	dest := filepath.Join(t.TempDir(), "rt", "snowglobe-vm")
-	if err := extract(&buf, "x/snowglobe-vm", dest); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := os.ReadFile(dest); string(got) != "#!vm" {
-		t.Fatalf("got %q", got)
 	}
 }
