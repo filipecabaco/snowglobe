@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,11 +12,13 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"runtime/debug"
+	"strings"
 
 	"github.com/filipecabaco/snowglobe/internal/boot"
 	"github.com/filipecabaco/snowglobe/internal/build"
 	"github.com/filipecabaco/snowglobe/internal/bundle"
 	"github.com/filipecabaco/snowglobe/internal/instance"
+	"github.com/filipecabaco/snowglobe/internal/mcp"
 	"github.com/filipecabaco/snowglobe/internal/native"
 	"github.com/filipecabaco/snowglobe/internal/pack"
 	"github.com/filipecabaco/snowglobe/internal/pool"
@@ -56,6 +59,14 @@ Usage:
                                                      image's), macOS on Apple silicon (this
                                                      release's), or the snowglobe-vm --runtime
                                                      (or SNOWGLOBE_VM) names
+  snowglobe sh <name> [--json] <command>            run a command on a native instance's shell
+                                                     (whatever its app is): its output and exit
+                                                     status, or {"exit", "output"} with --json
+  snowglobe cp <src> <dst>                           copy files or directories in or out of a
+                                                     native instance: name:/path on one side
+  snowglobe mcp <dir | url> [--name N] [--keep]      serve a site to an agent over MCP (stdio): an
+                                                     isolated Linux machine with run_command,
+                                                     write_file and read_file tools; no Docker
   snowglobe warm <dir> <reads.json ...>              add the files runs recorded (run
                                                      --record-reads) to the site's warm pack
   snowglobe run [dir | url] [--name N] [--detach]    run a built site, sandboxed: in a container
@@ -172,6 +183,16 @@ func main() {
 		} else {
 			err = instance.Exec(os.Args[2], os.Args[3:])
 		}
+	case "sh":
+		err = runSh(os.Args[2:])
+	case "cp":
+		if len(os.Args) != 4 {
+			err = fmt.Errorf("cp takes a source and a destination, one of them name:/path in an instance")
+		} else {
+			err = instance.Copy(os.Args[2], os.Args[3])
+		}
+	case "mcp":
+		err = runMCP(os.Args[2:])
 	case "attach":
 		if len(os.Args) != 3 {
 			err = fmt.Errorf("attach takes an instance name")
@@ -447,4 +468,70 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 		positional = append(positional, args[0])
 		args = args[1:]
 	}
+}
+
+func runSh(args []string) error {
+	fs := flag.NewFlagSet("sh", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "")
+	timeout := fs.Float64("timeout", 300, "")
+	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	positional, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 2 {
+		return fmt.Errorf("sh takes an instance name and a command")
+	}
+	return instance.Shell(positional[0], strings.Join(positional[1:], " "), *asJSON, *timeout)
+}
+
+// runMCP serves a site to an agent over MCP: a native instance of it (started here, or one that is
+// running), stopped when the agent goes unless --keep.
+func runMCP(args []string) error {
+	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	name := fs.String("name", "", "")
+	keep := fs.Bool("keep", false, "")
+	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	positional, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("mcp takes a built site (a directory, a URL or a tarball)")
+	}
+	site := positional[0]
+	if *name == "" {
+		*name = fmt.Sprintf("mcp-%d", os.Getpid())
+	}
+	switch {
+	case remote.IsURL(site):
+		if site, err = remote.Fetch(site); err != nil {
+			return err
+		}
+	case remote.IsTarball(site):
+		if site, err = remote.Unpack(site); err != nil {
+			return err
+		}
+	}
+	started := false
+	if err := instance.Shell(*name, "true", false, 30); err != nil {
+		// Not running yet: start it, natively (stdout stays the protocol's)
+		if err := instance.Run(instance.Options{Site: site, Name: *name, Detach: true, Runtime: "native"}, version); err != nil {
+			return err
+		}
+		started = true
+	}
+	if started && !*keep {
+		defer instance.Stop(*name)
+	}
+	title := site
+	if data, err := os.ReadFile(filepath.Join(site, "run.json")); err == nil {
+		var info struct {
+			Title string `json:"title"`
+		}
+		if json.Unmarshal(data, &info) == nil && info.Title != "" {
+			title = info.Title
+		}
+	}
+	return (&mcp.Server{Name: *name, Title: title, Version: version}).Stdio()
 }

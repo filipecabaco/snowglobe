@@ -350,9 +350,9 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         // show to everyone on the machine. Read before the sandbox takes the file away
         env.extend(env_file);
         let timeout = Duration::from_secs_f64(args.get("timeout").map_or(Ok(300.0), str::parse).map_err(|_| "--timeout: seconds")?);
-        let job = job::Job { workspace: PathBuf::from(ws), command, env, timeout };
+        let w = job::Workspace { dir: PathBuf::from(ws), command, env, timeout };
         let begun = Instant::now();
-        let done = job::run(&board, &activity, &job)?;
+        let (done, out_files) = job::run_workspace(&board, &activity, &w)?;
         let mut out = std::io::stdout();
         let _ = out.write_all(&done.output);
         let _ = out.flush();
@@ -361,7 +361,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
                 "timing: job {:?} in {:.0} ms ({} files to out/), {:.0} ms in all",
                 done.status,
                 begun.elapsed().as_secs_f64() * 1e3,
-                done.out,
+                out_files,
                 started.elapsed().as_secs_f64() * 1e3
             );
         }
@@ -374,7 +374,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         return Ok(match done.status {
             Some(s) => s.clamp(0, 255) as u8,
             None => {
-                eprintln!("snowglobe: the job ran out of time ({}s)", job.timeout.as_secs_f64());
+                eprintln!("snowglobe: the job ran out of time ({}s)", w.timeout.as_secs_f64());
                 124
             },
         });
@@ -516,6 +516,14 @@ fn serve(session: &Session, stream: UnixStream) {
         Some("exec") => {
             let output = session.exec(request["command"].as_str().unwrap_or(""));
             let _ = writer.write_all(&output);
+        },
+        Some("job") => {
+            // A job on the serial shell: answered with one JSON line
+            let answer = match job::from_json(&request).and_then(|r| job::run(&session.board, &session.activity, &r)) {
+                Ok(done) => job::to_json(&done),
+                Err(e) => json!({ "error": e }),
+            };
+            let _ = writer.write_all(format!("{answer}\n").as_bytes());
         },
         Some("attach") => {
             if let (Some(rows), Some(cols)) = (request["rows"].as_u64(), request["cols"].as_u64()) {
