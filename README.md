@@ -692,7 +692,11 @@ flowchart LR
 3. **Snapshot.** The guest boots headless in armless (`snowglobe-vm`, natively: in the build
    container, or on your machine without Docker) until your app is ready, and the whole machine
    state is saved. Visitors restore it instead of booting Linux; `snowglobe run`, a bundle and
-   `snowglobe mcp` restore the same snapshot outside a browser.
+   `snowglobe mcp` restore the same snapshot outside a browser. A boot that stalls (nothing
+   printed, fetched or computed for 5 minutes before the app is ready;
+   `SNOWGLOBE_BOOT_STALL_SECS` changes that) prints every CPU's state and is booted once more,
+   rather than waiting out the 20-minute limit; one that stalls twice fails the build, which
+   usually means the app waits for something that never comes (`--ready` text it never prints).
 4. **Warm pack.** The files the guest read while booting and while being exercised are bundled
    into one `warm.pack` the page downloads in the background (see above).
 

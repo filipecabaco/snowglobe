@@ -274,7 +274,9 @@ jobs:
         if: matrix.site.name == 'curl'
         env:
           SNOWGLOBE_E2E_SITE: dist/curl
-        run: go test ./cmd/snowglobe -run TestE2E -v -timeout 25m
+          # Also a build whose boot stalls: found, its CPUs dumped, retried, and failed in minutes
+          SNOWGLOBE_E2E_BUILD: "1"
+        run: go test ./cmd/snowglobe -run TestE2E -v -timeout 30m
 
       # Cold, warm and 4G visits in Chromium and the exercise commands timed (bench/run.mjs), on
       # a copy made an installable app as the live demos are. Fails only if the harness does;
