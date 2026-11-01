@@ -57,8 +57,10 @@ Usage:
                                                      (or SNOWGLOBE_VM) names
   snowglobe warm <dir> <reads.json ...>              add the files runs recorded (run
                                                      --record-reads) to the site's warm pack
-  snowglobe run [dir | url] [--name N] [--detach]    run a built site, sandboxed (natively, no
-                [--docker]                           Docker; --docker for a container):
+  snowglobe run [dir | url] [--name N] [--detach]    run a built site, sandboxed: in a container
+                [--runtime docker|native]            (docker, the default) or natively with no
+                                                     Docker (native: snowglobe-vm sandboxes itself;
+                                                     SNOWGLOBE_RUNTIME sets the default):
                                                      a session in a terminal; with stdin piped,
                                                      each line is typed in as a command. The site
                                                      can be a directory, a tarball, a tarball URL
@@ -369,7 +371,7 @@ func runRun(args []string) error {
 	fs.BoolVar(&o.AllowPrivate, "allow-private", false, "")
 	fs.StringVar(&o.RecordReads, "record-reads", "", "")
 	fs.StringVar(&o.TunnelToken, "tunnel-token", "", "")
-	fs.BoolVar(&o.Docker, "docker", os.Getenv("SNOWGLOBE_RUNTIME") == "docker", "")
+	fs.StringVar(&o.Runtime, "runtime", os.Getenv("SNOWGLOBE_RUNTIME"), "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)

@@ -38,8 +38,9 @@ type Options struct {
 	TunnelToken string
 	// RecordReads is a file to write every file the guest reads to, for `snowglobe warm`
 	RecordReads string
-	// Docker runs it in a container (the tools image) rather than natively
-	Docker bool
+	// Runtime is "docker" (the default: a container from the tools image) or "native"
+	// (snowglobe-vm here, sandboxing itself, no Docker). Without Docker, runs are native
+	Runtime string
 }
 
 // Port is one forwarded port.
@@ -113,16 +114,24 @@ func Run(o Options, version string) error {
 		return err
 	}
 
-	// Natively, when there is a snowglobe-vm for this system: it sandboxes itself
-	if !o.Docker {
-		vm, err := native.VM(version, tools.NativeSource(version))
-		if err == nil {
-			return runNative(o, site, vm, run.Network, tunnels)
-		}
+	runtime := o.Runtime
+	if runtime == "" {
+		runtime = "docker"
 		if !native.DockerAvailable() {
+			runtime = "native" // nothing else could run it
+		}
+	}
+	switch runtime {
+	case "native":
+		// snowglobe-vm here: it sandboxes itself
+		vm, err := native.VM(version, tools.NativeSource(version))
+		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "%v: running it in a container\n", err)
+		return runNative(o, site, vm, run.Network, tunnels)
+	case "docker":
+	default:
+		return fmt.Errorf("--runtime %s: docker or native", runtime)
 	}
 
 	t, err := tools.Build(version)
