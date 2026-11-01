@@ -123,7 +123,11 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 				return err
 			}
 			defer os.RemoveAll(d)
-			dir, sock = d, filepath.Join(d, "sock")
+			dir = d
+			if sock, err = socketPath(d); err != nil {
+				return err
+			}
+			defer removeSocket(sock, d)
 			// snowglobe stop creates it: the run stops itself, killing its job and logging why
 			stop := filepath.Join(d, "stop")
 			os.Remove(stop)
@@ -154,7 +158,10 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	sock := filepath.Join(dir, "sock")
+	sock, err := socketPath(dir)
+	if err != nil {
+		return err
+	}
 	stop := filepath.Join(dir, "stop")
 	os.Remove(stop)
 	args = append(args, "--stop-file", stop)
@@ -182,8 +189,11 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 	for {
 		select {
 		case err := <-exited:
+			// What it said, before its directory (and the log in it) goes
+			said := lastLines(logPath, 5)
+			removeSocket(sock, dir)
 			os.RemoveAll(dir)
-			return fmt.Errorf("%s stopped while restoring (%v): %s", o.Name, err, lastLines(logPath, 5))
+			return fmt.Errorf("%s stopped while restoring (%v): %s", o.Name, err, said)
 		case <-deadline:
 			return fmt.Errorf("%s did not restore within 2 minutes; its log: %s", o.Name, logPath)
 		case <-time.After(100 * time.Millisecond):
@@ -193,6 +203,43 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 				o.Name, line, o.Name, o.Name, o.Name, logs)
 			return nil
 		}
+	}
+}
+
+// sockMax is the longest control socket path this system takes: a Unix socket's path has to fit
+// sun_path (104 bytes on macOS and the BSDs, 108 on Linux), terminating NUL included.
+var sockMax = 103
+
+// socketPath is where an instance in dir keeps its control socket: in dir, unless that path is too
+// long for a Unix socket (a long cache path, user or instance name), and then in a private
+// directory of its own under the temporary directory, so the run may write there and nowhere else
+// in it.
+func socketPath(dir string) (string, error) {
+	if p := filepath.Join(dir, "sock"); len(p) <= sockMax {
+		return p, nil
+	}
+	for _, base := range []string{os.TempDir(), "/tmp"} {
+		if len(filepath.Join(base, "sg-0123456789", "sock")) > sockMax {
+			continue
+		}
+		private, err := os.MkdirTemp(base, "sg-")
+		if err != nil {
+			continue
+		}
+		return filepath.Join(private, "sock"), nil
+	}
+	return "", fmt.Errorf("%s: too long a path for a control socket, and no short temporary directory", dir)
+}
+
+// removeSocket removes a control socket kept outside its instance's directory, and the private
+// directory socketPath made for it.
+func removeSocket(sock, dir string) {
+	if sock == "" || strings.HasPrefix(sock, dir+string(filepath.Separator)) {
+		return
+	}
+	os.Remove(sock)
+	if parent := filepath.Dir(sock); strings.HasPrefix(filepath.Base(parent), "sg-") {
+		os.Remove(parent)
 	}
 }
 
@@ -259,6 +306,7 @@ func attachNative(st *nativeState) error {
 // SIGKILL if it hasn't gone 5 s after that.
 func stopNative(st *nativeState, dir string) error {
 	defer os.RemoveAll(dir)
+	defer removeSocket(st.Socket, dir)
 	if !alive(st.Pid) {
 		return nil
 	}
@@ -295,6 +343,11 @@ func listNative() (int, error) {
 	for _, e := range entries {
 		st, d, running := loadNative(e.Name())
 		if !running {
+			// Its socket too, if it was kept outside
+			var gone nativeState
+			if data, err := os.ReadFile(filepath.Join(d, "state.json")); err == nil && json.Unmarshal(data, &gone) == nil {
+				removeSocket(gone.Socket, d)
+			}
 			os.RemoveAll(d)
 			continue
 		}
