@@ -136,6 +136,7 @@ func TestE2E(t *testing.T) {
 	e := setupE2E(t)
 	t.Run("native instance", e.nativeInstance)
 	t.Run("native stop file", e.nativeStopFile)
+	t.Run("native long cache path", e.nativeLongCachePath)
 	t.Run("native max runtime", e.nativeMaxRuntime)
 	t.Run("mcp", e.mcp)
 	t.Run("bundle", e.bundle)
@@ -261,6 +262,24 @@ func (e *e2e) nativeInstance(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(logs, "serial.log")); !bytes.Contains(data, []byte("SGDONE_")) {
 		t.Error("serial.log lacks the jobs")
 	}
+}
+
+// A cache path too long for a Unix socket (a long home, user or instance name): the instance keeps
+// its socket somewhere shorter and works as any other
+func (e *e2e) nativeLongCachePath(t *testing.T) {
+	home := filepath.Join(t.TempDir(), strings.Repeat("a-rather-long-directory-name/", 4))
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	name := fmt.Sprintf("e2e-a-long-instance-name-%d", os.Getpid())
+	e.must(t, 0, "run", e.site, "--runtime", "native", "--name", name, "--detach")
+	defer e.run(t, nil, "stop", name)
+	if out := e.must(t, 0, "sh", name, "echo long-ok"); out != "long-ok\n" {
+		t.Errorf("sh: %q", out)
+	}
+	e.must(t, 0, "stop", name)
 }
 
 func (e *e2e) nativeStopFile(t *testing.T) {
