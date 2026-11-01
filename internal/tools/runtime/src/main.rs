@@ -11,6 +11,7 @@
 //! site headlessly and connects its app console to the terminal, a pipe, or the control socket
 //! `exec` and `attach` talk to.
 
+mod b64;
 mod job;
 mod machine;
 mod profile;

@@ -140,8 +140,8 @@ fn child(
         let v: Value = serde_json::from_slice(&std::fs::read(&f).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         env.extend(v.as_object().into_iter().flatten().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))));
     }
-    let job = job::Job {
-        workspace,
+    let job = job::Workspace {
+        dir: workspace,
         command: req["cmd"].as_str().ok_or("request: no cmd")?.to_string(),
         env,
         timeout: Duration::from_secs_f64(req["timeout"].as_f64().unwrap_or(300.0)),
@@ -164,9 +164,9 @@ fn child(
     let _host = machine::host(board, site, &spec.network, net, &activity);
     runner.start();
 
-    let done = job::run(board, &activity, &job)?;
+    let (done, out) = job::run_workspace(board, &activity, &job)?;
     let mut w = conn;
-    let header = json!({ "status": done.status, "out": done.out });
+    let header = json!({ "status": done.status, "out": out });
     w.write_all(format!("{header}\n").as_bytes()).map_err(|e| e.to_string())?;
     w.write_all(&done.output).map_err(|e| e.to_string())?;
     let _ = w.flush();

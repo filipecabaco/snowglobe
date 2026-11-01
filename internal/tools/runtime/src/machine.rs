@@ -88,6 +88,8 @@ pub struct Activity {
     pub screen: Mutex<Screen>,
     pub screen_cv: Condvar,
     pub serial: Mutex<Vec<u8>>,
+    /// Bytes dropped from the front of `serial` (it keeps the last few MiB)
+    serial_dropped: std::sync::atomic::AtomicUsize,
     pub last: Mutex<Instant>,
     /// When the console last printed (None: never)
     pub last_console: Mutex<Option<Instant>>,
@@ -110,6 +112,7 @@ impl Activity {
             screen: Mutex::default(),
             screen_cv: Condvar::new(),
             serial: Mutex::default(),
+            serial_dropped: Default::default(),
             last: Mutex::new(Instant::now()),
             last_console: Mutex::new(None),
             connections: Mutex::default(),
@@ -162,7 +165,15 @@ impl Activity {
                     let _ = out.write_all(b);
                     let _ = out.flush();
                 }
-                self.serial.lock().unwrap().extend_from_slice(b);
+                {
+                    let mut s = self.serial.lock().unwrap();
+                    s.extend_from_slice(b);
+                    if s.len() > SCREEN_MAX * 4 {
+                        let cut = s.len() - SCREEN_MAX * 2;
+                        s.drain(..cut);
+                        self.serial_dropped.fetch_add(cut, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
                 self.screen_cv.notify_all();
             },
             Event::Blob(name) => {
@@ -191,6 +202,19 @@ impl Activity {
                 self.touch()
             },
         }
+    }
+
+    /// Offset of the serial output's end, in the whole stream.
+    pub fn serial_total(&self) -> usize {
+        let s = self.serial.lock().unwrap();
+        self.serial_dropped.load(std::sync::atomic::Ordering::SeqCst) + s.len()
+    }
+
+    /// The serial output since stream offset `from`.
+    pub fn serial_since(&self, from: usize) -> Vec<u8> {
+        let s = self.serial.lock().unwrap();
+        let dropped = self.serial_dropped.load(std::sync::atomic::Ordering::SeqCst);
+        s[from.saturating_sub(dropped).min(s.len())..].to_vec()
     }
 
     /// Wait until `test` passes on the serial output (or the timeout).

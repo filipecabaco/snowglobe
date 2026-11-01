@@ -223,6 +223,35 @@ demo on several CPUs gets a one-CPU build for its card: `supabase-1cpu` in `DEMO
 `examples/supabase` built with `--cpus 1` (any `<example>-<n>cpu` works), and the card's `player`
 in `assets/cards.json` names it.
 
+## For agents and tools: sh, cp and MCP
+
+A native instance (`--runtime native`) takes jobs on the guest's serial root shell, which every
+snowglobe guest has beside its app, so these work whatever the app is (a shell, a REPL), and
+leave the app's terminal alone:
+
+```console
+$ snowglobe run dist/python --name box --detach --runtime native
+$ snowglobe sh box 'python3 -c "print(6*7)"'          # output, and its exit status as ours
+42
+$ snowglobe sh box --json 'ls /nope'
+{"exit":1,"output":"ls: /nope: No such file or directory\n","timed_out":false}
+$ snowglobe cp ./project box:/root/project            # files and directories, either way
+$ snowglobe cp box:/root/project/out ./out
+```
+
+`snowglobe mcp <site>` serves a site to an agent as an MCP server over stdio: an isolated Linux
+machine with `run_command`, `write_file` and `read_file` tools. It starts a native instance (or
+uses `--name`'s, if one is running) and stops it when the agent goes (`--keep` leaves it). No
+Docker, KVM or privileges, so an agent in a container or a CI job can have one:
+
+```console
+$ claude mcp add sandbox -- snowglobe mcp https://filipecabaco.github.io/snowglobe/python/
+```
+
+Each command runs with the app's environment (a login PATH, `/etc/profile`, the image's `ENV`) in
+a fresh working directory; files elsewhere persist for the instance's life. What the guest
+sends back through `cp` can't write outside the destination (symlinks included).
+
 ## Building without Docker
 
 `snowglobe build --builder native` (or `SNOWGLOBE_BUILDER=native`) builds with no Docker at all,
