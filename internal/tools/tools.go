@@ -123,17 +123,31 @@ const (
 	ConsoleRows = 30
 )
 
+// ExtractVM copies the image's snowglobe-vm (Linux, for the image's architecture) to dest.
+func (i *Image) ExtractVM(dest string) error {
+	id, err := docker.Output("create", i.tag)
+	if err != nil {
+		return err
+	}
+	id = strings.TrimSpace(id)
+	defer docker.Quiet("rm", id)
+	return docker.Quiet("cp", id+":"+VM, dest)
+}
+
 // Snapshot boots <out>/system and writes the state, console replay and reads.json there.
 //
 // After the snapshot it types each exercise command into the app and records what it reads.
 func (i *Image) Snapshot(out string, memoryMB int, ready string, exercises []string, network string,
-	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int) error {
+	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox bool) error {
 	args := []string{VM, "snapshot", "/out/system",
 		"--memory", fmt.Sprint(memoryMB), "--network", network,
 		"--cpus", fmt.Sprint(cpus), "--build-cpus", fmt.Sprint(buildCPUs),
 		"--cols", fmt.Sprint(ConsoleCols), "--rows", fmt.Sprint(ConsoleRows)}
 	if ready != "" {
 		args = append(args, "--ready", ready)
+	}
+	if sandbox {
+		args = append(args, "--sandbox")
 	}
 	for _, e := range exercises {
 		args = append(args, "--exercise", e)

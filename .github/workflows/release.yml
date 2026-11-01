@@ -181,3 +181,32 @@ jobs:
           prerelease=
           [[ "$TAG" == *-* ]] && prerelease=--prerelease
           gh release create "$TAG" --verify-tag --generate-notes --title "$TAG" $prerelease release/*
+
+  # snowglobe-vm for macOS, attached to the release: what `snowglobe bundle --target darwin` puts
+  # in a bundle (the tools image carries only Linux's). Apple silicon; built natively there
+  vm-darwin:
+    needs: [check, release]
+    if: ${{ !failure() && !cancelled() && needs.check.outputs.tag }}
+    runs-on: macos-15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build snowglobe-vm
+        working-directory: internal/tools/runtime
+        run: |
+          rustup toolchain install stable --profile minimal
+          cargo build --release --locked
+          strip target/release/snowglobe-vm
+          ./target/release/snowglobe-vm sandbox-check
+
+      - name: Attach it to the release
+        run: |
+          name="snowglobe-vm_${TAG#v}_darwin_arm64"
+          mkdir -p "$name" && cp internal/tools/runtime/target/release/snowglobe-vm LICENSE.md "$name/"
+          tar -czf "$name.tar.gz" "$name"
+          gh release upload "$TAG" "$name.tar.gz"

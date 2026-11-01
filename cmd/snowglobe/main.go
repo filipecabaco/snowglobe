@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 
 	"github.com/filipecabaco/snowglobe/internal/build"
+	"github.com/filipecabaco/snowglobe/internal/bundle"
 	"github.com/filipecabaco/snowglobe/internal/instance"
 	"github.com/filipecabaco/snowglobe/internal/pack"
 	"github.com/filipecabaco/snowglobe/internal/pool"
@@ -43,6 +44,14 @@ Usage:
                                                      service worker)
   snowglobe pack <dir> [-o site.tar.gz]              pack a built site into one tarball (.tar.gz,
                                                      .tar.zst) to publish on a CDN
+  snowglobe bundle <dir | url> [-o FILE]             make the site one executable that runs it with
+                     [--target linux|darwin]         no Docker or hypervisor: snowglobe-vm and the
+                     [--runtime snowglobe-vm]        site in one file, sandboxed from inside
+                                                     (Landlock + seccomp, or Seatbelt). Linux on
+                                                     this machine's architecture (the tools
+                                                     image's), macOS on Apple silicon (this
+                                                     release's), or the snowglobe-vm --runtime
+                                                     (or SNOWGLOBE_VM) names
   snowglobe warm <dir> <reads.json ...>              add the files runs recorded (run
                                                      --record-reads) to the site's warm pack
   snowglobe run [dir | url] [--name N] [--detach]    run a built site in a sandboxed container:
@@ -97,6 +106,8 @@ Build flags:
   --build-cpus N  CPUs to boot and warm up on before the snapshot (default: the larger of --cpus
                   and 4); the extra ones go offline first, so build time doesn't depend on --cpus.
                   Programs that size thread pools at start (the BEAM's schedulers) keep N
+  --sandbox       snapshot for running natively (run, bundle) rather than in a page: the guest
+                  keeps its file cache, and exercises (optional) run before the snapshot
   --no-chunks     store every guest file in one blob, however large (default: files of 2 MiB
                   and more are split into content-defined chunks, so a read fetches only what it
                   covers and sites share identical chunks; the page then needs armless 0.3.0)
@@ -140,6 +151,8 @@ func main() {
 		err = runRun(os.Args[2:])
 	case "pack":
 		err = runPack(os.Args[2:])
+	case "bundle":
+		err = runBundle(os.Args[2:])
 	case "warm":
 		err = runWarm(os.Args[2:])
 	case "exec":
@@ -198,6 +211,7 @@ func runBuild(args []string) error {
 	fs.StringVar(&o.TunnelToken, "tunnel-token", "", "")
 	fs.BoolVar(&o.AllowPrivate, "allow-private", false, "")
 	fs.IntVar(&o.CPUs, "cpus", 0, "")
+	fs.BoolVar(&o.Sandbox, "sandbox", false, "")
 	fs.IntVar(&o.BuildCPUs, "build-cpus", 0, "")
 	fs.BoolVar(&o.NoChunks, "no-chunks", false, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
@@ -278,6 +292,69 @@ func runPack(args []string) error {
 		return err
 	}
 	fmt.Printf("%s: %.1f MB. Publish it anywhere and run it with: snowglobe run <its URL>\n", *out, float64(n)/(1<<20))
+	return nil
+}
+
+func runBundle(args []string) error {
+	fs := flag.NewFlagSet("bundle", flag.ContinueOnError)
+	out := fs.String("o", "", "")
+	runtime := fs.String("runtime", os.Getenv("SNOWGLOBE_VM"), "")
+	target := fs.String("target", "linux", "")
+	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+
+	positional, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("bundle takes one built site (a directory, a URL or a tarball)")
+	}
+	site := positional[0]
+	if *out == "" {
+		*out = filepath.Base(filepath.Clean(site))
+	}
+	switch {
+	case remote.IsURL(site):
+		if site, err = remote.Fetch(site); err != nil {
+			return err
+		}
+	case remote.IsTarball(site):
+		if site, err = remote.Unpack(site); err != nil {
+			return err
+		}
+	}
+	// The runtime: snowglobe-vm for the system the bundle will run on. Without --runtime, the
+	// tools image's (Linux on this machine's architecture), or this release's for macOS
+	if *runtime == "" && *target == "darwin" {
+		if *runtime, err = bundle.DarwinRuntime(version); err != nil {
+			return err
+		}
+	} else if *runtime == "" && *target != "linux" {
+		return fmt.Errorf("--target %s: linux or darwin", *target)
+	}
+	if *runtime == "" {
+		t, err := tools.Build(version)
+		if err != nil {
+			return err
+		}
+		dir, err := os.MkdirTemp("", "snowglobe-vm-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(dir)
+		*runtime = filepath.Join(dir, "snowglobe-vm")
+		if err := t.ExtractVM(*runtime); err != nil {
+			return err
+		}
+	}
+	s, err := bundle.Write(site, *runtime, *out)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s: %.1f MB (runtime %.1f MB, the site and %d guest files %.1f MB)\n"+
+		"Run it anywhere it was built for, with no Docker:  ./%s   (echo '...' | ./%s, --detached, -p ...)\n",
+		*out, float64(s.Runtime+s.Site)/(1<<20), float64(s.Runtime)/(1<<20), s.Blobs, float64(s.Site)/(1<<20),
+		filepath.Base(*out), filepath.Base(*out))
 	return nil
 }
 
