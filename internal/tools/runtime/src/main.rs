@@ -12,7 +12,9 @@
 //! `exec` and `attach` talk to.
 
 mod b64;
+mod driver;
 mod job;
+mod log;
 mod machine;
 mod profile;
 mod run;
@@ -36,6 +38,7 @@ fn usage() -> ExitCode {
   snowglobe-vm run <site dir> [--blobs DIR] [--detached] [--socket PATH] [--forward PORT:GUEST ...]
                    [--tunnel [HOST:]PORT=URL ...] [--allow-private] [--record-reads FILE]
                    [--workspace DIR --cmd COMMAND [--env K=V ...] [--env-file JSON] [--timeout SECS]]
+                   [--max-runtime SECS] [--stop-file PATH ...] [--log-dir DIR]
                    [--serve SOCKET --jobs-root DIR [--max-jobs N]]   (jobs forked from one restore)
                    [--server SOCKET --workspace DIR --cmd COMMAND ...]  (a job for --serve)
   (a bundle takes run's flags itself: ./site --workspace DIR --cmd COMMAND)
@@ -53,7 +56,7 @@ pub struct Args {
 }
 
 impl Args {
-    fn parse(args: &[String], with_value: &[&str]) -> Result<Args, String> {
+    pub fn parse(args: &[String], with_value: &[&str]) -> Result<Args, String> {
         let mut a = Args {
             positional: Vec::new(),
             flags: Vec::new(),
@@ -88,7 +91,7 @@ impl Args {
     }
 }
 
-const RUN_FLAGS: &[&str] = &["blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "server"];
+pub const RUN_FLAGS: &[&str] = &["max-runtime", "stop-file", "log-dir", "blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "server"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

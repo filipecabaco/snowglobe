@@ -22,12 +22,15 @@ import (
 // its log.
 
 type nativeState struct {
-	Pid     int       `json:"pid"`
-	Site    string    `json:"site"`
-	VM      string    `json:"vm"`
-	Socket  string    `json:"socket"`
-	Log     string    `json:"log"`
-	Started time.Time `json:"started"`
+	Pid    int    `json:"pid"`
+	Site   string `json:"site"`
+	VM     string `json:"vm"`
+	Socket string `json:"socket"`
+	Log    string `json:"log"`
+	// Logs is its durable log directory; StopFile, created, stops it gracefully
+	Logs     string    `json:"logs,omitempty"`
+	StopFile string    `json:"stop_file,omitempty"`
+	Started  time.Time `json:"started"`
 }
 
 func instancesDir() (string, error) {
@@ -89,6 +92,22 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 		}
 		args = append(args, "--blobs", blobs)
 	}
+	// Driven from outside: a time limit, a stop file, durable logs (a named instance keeps them
+	// where they outlive it)
+	logs := o.LogDir
+	if logs == "" && o.Name != "" {
+		var err error
+		if logs, err = LogsDir(o.Name); err != nil {
+			return err
+		}
+	}
+	driven := o
+	driven.LogDir = logs
+	_, vmDriver, err := driverArgs(driven, false)
+	if err != nil {
+		return err
+	}
+	args = append(args, vmDriver...)
 
 	if !o.Detach {
 		// Its own control socket, so that runs side by side don't share one
@@ -105,6 +124,10 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 			}
 			defer os.RemoveAll(d)
 			dir, sock = d, filepath.Join(d, "sock")
+			// snowglobe stop creates it: the run stops itself, killing its job and logging why
+			stop := filepath.Join(d, "stop")
+			os.Remove(stop)
+			args = append(args, "--stop-file", stop)
 		}
 		cmd := exec.Command(vm, append(args, "--socket", sock)...)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -113,7 +136,8 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 		}
 		// A named run: exec, attach and stop find it while it runs
 		if dir != "" {
-			if err := writeState(dir, nativeState{Pid: cmd.Process.Pid, Site: site, VM: vm, Socket: sock, Started: time.Now()}); err != nil {
+			if err := writeState(dir, nativeState{Pid: cmd.Process.Pid, Site: site, VM: vm, Socket: sock, Started: time.Now(),
+				Logs: logs, StopFile: filepath.Join(dir, "stop")}); err != nil {
 				return err
 			}
 		}
@@ -131,6 +155,9 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 		return err
 	}
 	sock := filepath.Join(dir, "sock")
+	stop := filepath.Join(dir, "stop")
+	os.Remove(stop)
+	args = append(args, "--stop-file", stop)
 	logPath := filepath.Join(dir, "log")
 	log, err := os.Create(logPath)
 	if err != nil {
@@ -144,7 +171,8 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	if err := writeState(dir, nativeState{Pid: cmd.Process.Pid, Site: site, VM: vm, Socket: sock, Log: logPath, Started: time.Now()}); err != nil {
+	if err := writeState(dir, nativeState{Pid: cmd.Process.Pid, Site: site, VM: vm, Socket: sock, Log: logPath, Started: time.Now(),
+		Logs: logs, StopFile: stop}); err != nil {
 		return err
 	}
 	// Wait until it has restored (or failed)
@@ -161,8 +189,8 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 		case <-time.After(100 * time.Millisecond):
 		}
 		if line := firstLine(logPath, "restored "); line != "" {
-			fmt.Fprintf(os.Stderr, "%s: %s\n  snowglobe exec %s '<command>'\n  snowglobe attach %s\n  snowglobe stop %s\n",
-				o.Name, line, o.Name, o.Name, o.Name)
+			fmt.Fprintf(os.Stderr, "%s: %s\n  snowglobe exec %s '<command>'\n  snowglobe attach %s\n  snowglobe stop %s\n  logs: %s\n",
+				o.Name, line, o.Name, o.Name, o.Name, logs)
 			return nil
 		}
 	}
@@ -226,19 +254,34 @@ func attachNative(st *nativeState) error {
 	return exitStatus(cmd.Run())
 }
 
-// stopNative ends a native instance: SIGTERM, then SIGKILL if it hasn't gone after 5 s.
+// stopNative ends a native instance: its stop file first, so that it kills the job running in the
+// guest, saves and logs why it stopped; then SIGTERM if it hasn't gone within stopGrace, then
+// SIGKILL if it hasn't gone 5 s after that.
 func stopNative(st *nativeState, dir string) error {
 	defer os.RemoveAll(dir)
+	if !alive(st.Pid) {
+		return nil
+	}
+	if st.StopFile != "" && os.WriteFile(st.StopFile, nil, 0o600) == nil && gone(st.Pid, stopGrace) {
+		return nil
+	}
 	if err := syscall.Kill(st.Pid, syscall.SIGTERM); err != nil {
 		return nil // gone already
 	}
-	for range 50 {
-		if !alive(st.Pid) {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
+	if gone(st.Pid, 5*time.Second) {
+		return nil
 	}
 	return syscall.Kill(st.Pid, syscall.SIGKILL)
+}
+
+// gone waits up to d for pid to exit.
+func gone(pid int, d time.Duration) bool {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if !alive(pid) {
+			return true
+		}
+	}
+	return !alive(pid)
 }
 
 // listNative prints the native instances that are running (and forgets those that aren't).

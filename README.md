@@ -234,7 +234,7 @@ $ snowglobe run dist/python --name box --detach --runtime native
 $ snowglobe sh box 'python3 -c "print(6*7)"'          # output, and its exit status as ours
 42
 $ snowglobe sh box --json 'ls /nope'
-{"exit":1,"output":"ls: /nope: No such file or directory\n","timed_out":false}
+{"exit":1,"killed":false,"output":"ls: /nope: No such file or directory\n","timed_out":false}
 $ snowglobe cp ./project box:/root/project            # files and directories, either way
 $ snowglobe cp box:/root/project/out ./out
 ```
@@ -251,6 +251,98 @@ $ claude mcp add sandbox -- snowglobe mcp https://filipecabaco.github.io/snowglo
 Each command runs with the app's environment (a login PATH, `/etc/profile`, the image's `ENV`) in
 a fresh working directory; files elsewhere persist for the instance's life. What the guest
 sends back through `cp` can't write outside the destination (symlinks included).
+
+## Driving it from a program
+
+A program that runs sandboxes for others (a job runner, an agent harness, CI) needs a run that
+ends when told to, never outlives its budget, leaves no stray processes, and keeps a record. A
+run (a terminal session, a pipe, a detached instance driven with `sh` and `exec`, or a bundle's
+job) takes, on either runtime:
+
+| Flag | What it does | Exit status |
+|------|--------------|-------------|
+| `--max-runtime 30m` | ends the run after this long, whatever it is doing (Go duration or seconds) | 124 |
+| `--stop-file PATH` | ends the run once PATH exists: create it from anywhere, no socket or signal needed | 143 |
+| `--log-dir DIR` | durable logs, below | |
+
+Either way the job running in the guest is killed first (all of it, as a timeout kills it), the
+JIT profile is saved, and a `stop` event saying why goes to the log before the process exits.
+`snowglobe stop` stops a native instance the same way, through its own stop file, before falling
+back to SIGTERM and then SIGKILL.
+
+```console
+$ snowglobe run dist/python --name box --detach --runtime native --max-runtime 1h --stop-file /run/box.stop
+$ snowglobe sh box --timeout 30 'python3 train.py'     # 124 if it takes longer; nothing it started survives
+$ touch /run/box.stop                                     # the driver is done: the instance stops itself
+```
+
+**Durable logs.** With `--log-dir`, the run appends as things happen, so the record survives a
+crash of the run itself; each file is rotated at 8 MiB, keeping three old ones (`x.log.1` …):
+
+- `console.log`: the app's terminal, byte for byte
+- `serial.log`: the guest's serial line: the kernel's own messages (an OOM kill, a panic) and the
+  job shell
+- `events.jsonl`: one JSON object a line, each synced to disk: `start` (site, sandbox, limits),
+  `restored`, `job_start` (the command, the names of its environment variables but never their
+  values, the timeout), `job_end` (status, `timed_out`, `cancelled`, `killed`, `ms`, the first
+  64 KiB of output), `stop` (`reason`: `stop-file`, `max-runtime`, `guest-stopped` or `end`;
+  `exit`)
+
+```json
+{"cmd":"python3 train.py","env":[],"event":"job_start","files":0,"job":"9f0c…","t":1793470101.2,"timeout":30.0}
+{"cancelled":false,"event":"job_end","killed":true,"ms":31207,"output":"epoch 1…","status":null,"t":1793470132.4,"timed_out":true,…}
+{"event":"stop","exit":143,"reason":"stop-file","t":1793470160.9}
+```
+
+A named native instance logs to `snowglobe/logs/<name>` in your cache directory unless
+`--log-dir` says otherwise, and its logs stay after it stops. In Docker the directory is mounted
+into the container (and the stop file's directory, read-only). Each run's exit statuses, events
+and kills are checked end to end in CI, natively and in Docker (`cmd/snowglobe/e2e_test.go`).
+
+**Kills reach everything a job started.** A job's command runs in a session of its own in the
+guest (`setsid`; a process group of its own where there is none). When it runs out of time, the
+instance stops, or `--max-runtime` comes, the host types ctrl-c on the serial line; the job's
+launcher, in the foreground there, traps it and sends TERM to the session and the process group,
+then KILL after 3 s to whatever is left, including what ignores TERM, what runs in the background,
+and what runs in shells of its own. The launcher then reports that it killed them (`killed`), and
+the shell is free for the next job. What escapes: a process that makes a session of its own (a
+daemon that `setsid`s) is out of reach, as it would be of a process-group kill anywhere. A job
+that *ends* may leave something running in the background on purpose (a server); it lives until
+the instance stops. The app on the terminal (`exec`) is never touched by a job's kill.
+
+### Isolation: the browser, native and Docker
+
+The same snapshot runs in three places, and the first wall is the same in all of them: the guest
+is an emulated arm64 machine (armless) whose only ways out are its terminal, its 9p filesystem
+(read from the site, written to memory) and, if the site was built with `--network fetch`, the
+web relay. Guest code never runs as host code, and nothing it does can name a host file, process
+or socket. Around the emulator:
+
+| | Browser (a page) | CLI, native (`--runtime native`, a bundle) | CLI, Docker (`--runtime docker`, the default) |
+|---|---|---|---|
+| Emulator runs as | WebAssembly in the page's renderer | `snowglobe-vm`, as your user | `snowglobe-vm` in a container, as nobody |
+| Around it | the browser's sandbox (a renderer process with no file or process access) | the process confines itself, with no privileges: Linux no_new_privs, Landlock and seccomp; macOS Seatbelt | the container: read-only root, all capabilities dropped, no-new-privileges, memory and pid limits |
+| Host files | none; saves go to browser storage or a folder you pick | reads the site; writes its JIT cache, socket, logs and a job's workspace; nothing else | the site, read-only; the log directory and the stop file's directory, if given |
+| New processes | none possible | refused (seccomp, Seatbelt) | inside the container only |
+| Network (`--network fetch`) | the page's `fetch()` and `WebSocket`: CORS and the browser's rules | out the way your machine goes (and its proxy); private addresses off unless `--allow-private` | the same, from the container (`--network none` without one) |
+| Ends when | the tab closes | `--max-runtime`, `--stop-file`, `snowglobe stop` | the same, or `docker rm` |
+| Durable logs | no (a tab has nowhere to put them) | `--log-dir` | `--log-dir`, mounted in |
+| Needs | a browser | nothing (Linux or macOS) | Docker |
+
+What each guards against, if the emulator itself had a hole someone in the guest could use: in
+the browser, they would land inside the renderer's sandbox with the page's origin. Natively, they
+would land in a process that can't start programs, can't read or write files beyond the list
+above, can't trace or signal others, and has no network if the site has none. That is strongest on
+Linux with Landlock (kernel 5.13 or later); the run says which parts it got, and
+`SNOWGLOBE_SANDBOX=strict` refuses to run without all of them. In Docker, they would also be in a
+container with a read-only root and no capabilities: the extra wall for hosts where the native
+sandbox is partial (an old kernel without Landlock). Each guest is its own process (or its own
+fork, with `--serve`), so runs share no memory, and the machine bounds what a guest can take: its
+memory is fixed at build time and its CPUs are threads of the run.
+
+What none of them do: hide a site's contents from whoever runs it (the snapshot is theirs to
+read), or make network access safe beyond the rules above. A guest with a network reaches what the
+host could reach at public addresses, so give it one only when the work needs it.
 
 ## Building without Docker
 
@@ -395,7 +487,7 @@ console, its files (read from the bundle, written to memory) and the network rel
 emulator itself, the process confines itself before it starts a thread, with no privileges:
 
 - Linux: no_new_privs; Landlock, so it reads only the site (nothing at all from a bundle, which
-  is mapped already) and writes only its JIT profile cache and control socket, listens only on
+  is mapped already) and writes only its JIT profile cache, control socket and logs, listens only on
   the ports it forwards, opens no TCP connection without a network, and signals nothing outside
   itself; a seccomp filter that refuses new programs and processes, ptrace, mounts, namespaces,
   BPF, perf, io_uring, keyrings and kernel modules.

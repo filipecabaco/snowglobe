@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/filipecabaco/snowglobe/internal/docker"
 	"github.com/filipecabaco/snowglobe/internal/native"
@@ -41,6 +42,13 @@ type Options struct {
 	// Runtime is "docker" (the default: a container from the tools image) or "native"
 	// (snowglobe-vm here, sandboxing itself, no Docker). Without Docker, runs are native
 	Runtime string
+	// MaxRuntime ends the run after this long (exit 124); 0: no limit
+	MaxRuntime time.Duration
+	// StopFile ends the run once this file exists (exit 143)
+	StopFile string
+	// LogDir keeps durable logs: console.log, serial.log, events.jsonl. A named native instance
+	// keeps them in LogsDir(name) unless this says otherwise
+	LogDir string
 }
 
 // Port is one forwarded port.
@@ -163,6 +171,12 @@ func Run(o Options, version string) error {
 		args = append(args, net...)
 	}
 	command := append([]string{tools.VM, "run", "/site"}, tools.TunnelArgs(tunnels, o.AllowPrivate)...)
+	dockerDriver, vmDriver, err := driverArgs(o, true)
+	if err != nil {
+		return err
+	}
+	args = append(args, dockerDriver...)
+	command = append(command, vmDriver...)
 	if o.RecordReads != "" {
 		// The container runs as nobody: it writes to a file made here, open to it
 		record, err := filepath.Abs(o.RecordReads)
@@ -226,7 +240,8 @@ func Run(o Options, version string) error {
 	if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		args = append(args, "--tty")
 	}
-	return docker.Attached(append(append(args, t.Tag()), command...)...)
+	// The run's exit status as ours (124: --max-runtime, 143: --stop-file); docker prints its own errors
+	return exitStatus(docker.Attached(append(append(args, t.Tag()), command...)...))
 }
 
 // Exec types one command into a running instance and prints what it printed.
@@ -237,7 +252,7 @@ func Exec(name string, command []string) error {
 	if !inContainer(name) {
 		return fmt.Errorf("no instance called %s (snowglobe ps lists them)", name)
 	}
-	return docker.Attached(append([]string{"exec", "--interactive", name, tools.VM, "exec"}, command...)...)
+	return exitStatus(docker.Attached(append([]string{"exec", "--interactive", name, tools.VM, "exec"}, command...)...))
 }
 
 // Attach joins a running instance's session; ctrl-] detaches.
@@ -252,7 +267,7 @@ func Attach(name string) error {
 	if isTerminal(os.Stdin) {
 		args = append(args, "--tty")
 	}
-	return docker.Attached(append(args, name, tools.VM, "attach")...)
+	return exitStatus(docker.Attached(append(args, name, tools.VM, "attach")...))
 }
 
 // Stop throws an instance away.
