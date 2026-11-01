@@ -1,7 +1,6 @@
 //! The machine a site runs on, and what it is doing (for "is it quiet yet?").
 
 use std::collections::{BTreeSet, HashSet};
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -9,6 +8,8 @@ use armless::dev::{DeviceConfig, Event};
 use armless::native::{Egress, HostOptions, NativeHost, Tunnel};
 use armless::platform::{Clock, NativePlatform};
 use armless::vm::{Config, Vm};
+
+use crate::site::Site;
 
 /// The guest's kernel command line: the root filesystem is the 9p device.
 pub const CMDLINE: &str = "rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose \
@@ -22,7 +23,7 @@ pub struct Spec {
     pub network: String,
 }
 
-pub fn new_vm(spec: &Spec, system: &Path) -> Result<(Vm<NativePlatform>, Arc<Clock>), String> {
+pub fn new_vm(spec: &Spec, site: &Site) -> Result<(Vm<NativePlatform>, Arc<Clock>), String> {
     let config = Config {
         memory_size: spec.memory_mb << 20,
         cpus: spec.cpus,
@@ -42,13 +43,11 @@ pub fn new_vm(spec: &Spec, system: &Path) -> Result<(Vm<NativePlatform>, Arc<Clo
             cpu.enable_native_jit();
         }
     }
-    let json = std::fs::read(system.join("filesystem.json")).map_err(|e| format!("filesystem.json: {e}"))?;
-    vm.board.load_filesystem(&json)?;
+    vm.board.load_filesystem(&site.need("system/filesystem.json")?)?;
     // With a network, the guest's HTTPS ends in the machine's web relay, with certificates from
     // the CA made for this site (which the guest trusts); its requests then go out from here
     if spec.network == "fetch" {
-        let tls = std::fs::read(system.join("tls.json")).map_err(|e| format!("tls.json: {e}"))?;
-        vm.board.set_tls(&tls)?;
+        vm.board.set_tls(&site.need("system/tls.json")?)?;
     }
     Ok((vm, clock))
 }
@@ -238,14 +237,15 @@ impl Net {
     }
 }
 
-/// The host side of the machine: blobs from `blobs`, the network if the site has one.
-pub fn host(board: &Arc<armless::Board>, blobs: PathBuf, network: &str, net: Net, activity: &Arc<Activity>) -> NativeHost {
+/// The host side of the machine: the site's blobs, the network if the site has one.
+pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, activity: &Arc<Activity>) -> NativeHost {
     *activity.tunnels.lock().unwrap() = net.tunnels.clone();
     let a = activity.clone();
     NativeHost::spawn(
         board.clone(),
         HostOptions {
-            blobs: Some(blobs),
+            blobs: None,
+            blob_source: Some(site.blobs()),
             network: network == "fetch",
             // Direct, or through the proxy the environment names: sandboxes that only let HTTPS
             // out through a (TLS-intercepting) proxy work too

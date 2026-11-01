@@ -23,6 +23,10 @@ use armless::Board;
 use serde_json::json;
 
 use crate::machine::{self, Activity, Spec};
+use crate::job;
+use crate::profile;
+use crate::sandbox;
+use crate::site::Site;
 use crate::{term, text, Args, SOCKET};
 
 const DETACH_KEY: u8 = 0x1d; // ctrl-]
@@ -31,7 +35,9 @@ const DETACH_KEY: u8 = 0x1d; // ctrl-]
 const QUIET: Duration = Duration::from_millis(1200);
 const COMMAND_CAP: Duration = Duration::from_secs(300);
 /// Once the prompt is back, how long the app must stay quiet for the command to count as done
-const PROMPT_SETTLE: Duration = Duration::from_millis(250);
+const PROMPT_SETTLE: Duration = Duration::from_millis(80);
+/// How often a command's end is looked for, besides whenever the app prints
+const POLL: Duration = Duration::from_millis(20);
 
 /// How long a command that should end at a prompt may stay silent before it counts as done anyway
 const QUIET_AWAITING_PROMPT: Duration = Duration::from_secs(10);
@@ -70,9 +76,19 @@ impl Session {
         // With a prompt to wait for, silence alone (sleep, a slow request) isn't the end
         let quiet = if shape.is_empty() { QUIET } else { QUIET_AWAITING_PROMPT };
         let mut load = machine::Load::new(&self.runner);
+        // The CPUs' load is sampled every 100 ms (counting instructions stops every CPU briefly)
+        let mut busy = false;
+        let mut sampled = Instant::now();
         loop {
-            std::thread::sleep(Duration::from_millis(100));
-            let busy = load.busy(&self.runner);
+            {
+                // Woken by output (the prompt coming back), else every POLL
+                let screen = self.activity.screen.lock().unwrap();
+                let _ = self.activity.screen_cv.wait_timeout(screen, POLL).unwrap();
+            }
+            if sampled.elapsed() >= Duration::from_millis(100) {
+                busy = load.busy(&self.runner);
+                sampled = Instant::now();
+            }
             if begun.elapsed() >= COMMAND_CAP {
                 break;
             }
@@ -171,10 +187,18 @@ impl Session {
     }
 }
 
-pub fn main(args: &Args) -> Result<u8, String> {
-    let site = PathBuf::from(args.positional.first().ok_or("run needs a site directory")?);
+/// `run <site dir>`, or (`bundled`) the site this executable carries.
+pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
+    let site = match bundled {
+        Some(site) => site,
+        None => {
+            let dir = PathBuf::from(args.positional.first().ok_or("run needs a site directory")?);
+            // A pooled site keeps its blobs in a store shared with its neighbours (--blobs)
+            Site::dir(&dir, args.get("blobs").map(std::path::Path::new))?
+        },
+    };
     let info: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(site.join("run.json")).map_err(|_| format!("{} isn't a built snowglobe site", site.display()))?,
+        &site.file("run.json").ok_or_else(|| format!("{} isn't a built snowglobe site", site.describe()))?,
     )
     .map_err(|e| format!("run.json: {e}"))?;
     let spec = Spec {
@@ -183,22 +207,84 @@ pub fn main(args: &Args) -> Result<u8, String> {
         network: info["network"].as_str().unwrap_or("none").to_string(),
     };
     let title = info["title"].as_str().unwrap_or("snowglobe").to_string();
-    let system = site.join("system");
-    // A pooled site keeps its blobs in a store shared with its neighbours
-    let blobs = if system.join("filesystem").is_dir() {
-        system.join("filesystem")
-    } else {
-        PathBuf::from(args.get("blobs").ok_or("the site has no system/filesystem: pass --blobs")?)
+    let socket = args.get("socket").unwrap_or(SOCKET).to_string();
+
+    let env_file: Vec<(String, String)> = match args.get("env-file") {
+        Some(p) => {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p).map_err(|e| format!("{p}: {e}"))?)
+                .map_err(|e| format!("{p}: {e}"))?;
+            v.as_object()
+                .ok_or_else(|| format!("{p}: not a JSON object"))?
+                .iter()
+                .map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                .collect::<Option<_>>()
+                .ok_or_else(|| format!("{p}: values must be strings"))?
+        },
+        None => Vec::new(),
+    };
+
+    // Confine this process before anything starts a thread: what follows reads the site (mapped
+    // already, if bundled), makes the control socket, listens on the forwarded ports and keeps the
+    // JIT profile; nothing else
+    let sandboxed = {
+        let mut write: Vec<PathBuf> = profile::cache_path(&site).and_then(|p| sandbox::parent_of(&p)).into_iter().collect();
+        // A job's workspace: its files go in, out/ comes back
+        if let Some(ws) = args.get("workspace") {
+            write.push(PathBuf::from(ws));
+        }
+        if let Some(p) = args.get("record-reads") {
+            write.extend(sandbox::parent_of(std::path::Path::new(p)));
+        }
+        let bind = args
+            .all("forward")
+            .iter()
+            .filter_map(|f| f.rsplit(':').nth(1)?.parse().ok())
+            .collect();
+        sandbox::apply(&sandbox::Policy {
+            read: site.read_paths(),
+            write,
+            socket_dir: sandbox::parent_of(std::path::Path::new(&socket)),
+            bind,
+            network: spec.network == "fetch",
+        })?
     };
 
     let started = Instant::now();
-    let (vm, clock) = machine::new_vm(&spec, &system)?;
+    // A run compiles its profile's code on top of what it gets hot: room for both, or the JIT
+    // fills up and starts over mid-run (ARMLESS_JIT_CODE_MB still says otherwise)
+    if std::env::var_os("ARMLESS_JIT_CODE_MB").is_none() {
+        std::env::set_var("ARMLESS_JIT_CODE_MB", "64");
+    }
+    let (vm, clock) = machine::new_vm(&spec, &site)?;
     let board = vm.board.clone();
     let mut runner = Runner::new(vm, clock, false);
-    let state = std::fs::File::open(system.join("state.bin.zst")).map_err(|e| format!("state.bin.zst: {e}"))?;
-    let mut reader = armless::zstd::reader(std::io::BufReader::with_capacity(1 << 20, state)).map_err(|e| e.to_string())?;
+    let state = site.need("system/state.bin.zst")?;
+    let mut reader = armless::zstd::reader(&state[..]).map_err(|e| e.to_string())?;
     runner.load_state_from(&mut reader)?;
     drop(reader);
+    let timing = std::env::var_os("SNOWGLOBE_TIMING").is_some();
+    if timing {
+        eprintln!("timing: {sandboxed}");
+        eprintln!("timing: restored in {:.0} ms", started.elapsed().as_secs_f64() * 1e3);
+    }
+    // Code that earlier runs of this snapshot compiled (and the build, booting it) is compiled
+    // now, while the app waits for its first command, instead of interpreted until it gets hot.
+    // The profile learns from every run, so it follows what runs actually do.
+    // ARMLESS_JIT_PREWARM=off skips it
+    let learned = if std::env::var("ARMLESS_JIT_PREWARM").map_or(true, |v| v != "off") {
+        let learned = profile::Learned::open(&site);
+        let queued = runner.jit_prewarm(&learned.prewarm());
+        if timing {
+            eprintln!(
+                "timing: {} profiled pages, {queued} queued by {:.0} ms",
+                learned.pages(),
+                started.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        Some(Arc::new(learned))
+    } else {
+        None
+    };
 
     let activity = Activity::new(false);
     // Every file the guest fetches from the restore on, written out as it grows (a detached run
@@ -221,21 +307,66 @@ pub fn main(args: &Args) -> Result<u8, String> {
         });
     }
     let net = machine::Net::from_args(args, Some(&info["tunnels"]))?;
-    let host = Arc::new(machine::host(&board, blobs, &spec.network, net, &activity));
+    let host = Arc::new(machine::host(&board, &site, &spec.network, net, &activity));
     runner.start();
     let runner = Arc::new(runner);
+    if let Some(learned) = &learned {
+        learned.keep_learning(runner.clone());
+    }
 
     let session = Arc::new(Session {
         board: board.clone(),
         runner: runner.clone(),
         prompt: Mutex::new(None),
         activity: activity.clone(),
-        persisted: std::fs::read(system.join("console.bin")).unwrap_or_default(),
+        persisted: site.file("system/console.bin").map(|c| c.into_owned()).unwrap_or_default(),
         exec_lock: Mutex::new(()),
     });
 
+    // A job: the workspace in, the command run, out/ back, then the end (--workspace)
+    if let Some(ws) = args.get("workspace") {
+        let command = args.get("cmd").ok_or("--workspace needs --cmd COMMAND")?.to_string();
+        let mut env = args
+            .all("env")
+            .iter()
+            .map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+            .collect::<Option<Vec<_>>>()
+            .ok_or("--env takes NAME=VALUE")?;
+        // Variables from a file (a JSON object of strings): secrets, which a command line would
+        // show to everyone on the machine. Read before the sandbox takes the file away
+        env.extend(env_file);
+        let timeout = Duration::from_secs_f64(args.get("timeout").map_or(Ok(300.0), str::parse).map_err(|_| "--timeout: seconds")?);
+        let job = job::Job { workspace: PathBuf::from(ws), command, env, timeout };
+        let begun = Instant::now();
+        let done = job::run(&board, &activity, &job)?;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(&done.output);
+        let _ = out.flush();
+        if timing {
+            eprintln!(
+                "timing: job {:?} in {:.0} ms ({} files to out/), {:.0} ms in all",
+                done.status,
+                begun.elapsed().as_secs_f64() * 1e3,
+                done.out,
+                started.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        if timing {
+            jit_stats(&runner);
+        }
+        if let Some(learned) = &learned {
+            learned.learn(&runner);
+        }
+        return Ok(match done.status {
+            Some(s) => s.clamp(0, 255) as u8,
+            None => {
+                eprintln!("snowglobe: the job ran out of time ({}s)", job.timeout.as_secs_f64());
+                124
+            },
+        });
+    }
+
     // The control socket: attach and exec from other sessions
-    let socket = args.get("socket").unwrap_or(SOCKET).to_string();
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket).map_err(|e| format!("{socket}: {e}"))?;
     {
@@ -271,7 +402,7 @@ pub fn main(args: &Args) -> Result<u8, String> {
 
     let secs = started.elapsed().as_secs_f64();
     if args.has("detached") {
-        println!("restored {title} in {secs:.1}s");
+        println!("restored {title} in {secs:.1}s ({sandboxed})");
         let _ = std::io::stdout().flush();
         let stopped = runner.wait(None);
         eprintln!("snowglobe: the guest stopped ({stopped:?})");
@@ -279,7 +410,7 @@ pub fn main(args: &Args) -> Result<u8, String> {
     }
 
     if term::is_tty(0) && term::is_tty(1) {
-        eprint!("\x1b[2m{title}: restored in {secs:.1}s · ctrl-] quits\x1b[0m\r\n");
+        eprint!("\x1b[2m{title}: restored in {secs:.1}s · {sandboxed} · ctrl-] quits\x1b[0m\r\n");
         term::raw();
         let mut out = std::io::stdout();
         let _ = out.write_all(&session.screen());
@@ -307,8 +438,13 @@ pub fn main(args: &Args) -> Result<u8, String> {
         }
         // The guest powering off ends the session
         {
+            let runner = runner.clone();
+            let learned = learned.clone();
             std::thread::spawn(move || {
                 runner.wait(None);
+                if let Some(learned) = &learned {
+                    learned.learn(&runner);
+                }
                 term::restore();
                 std::process::exit(0);
             });
@@ -323,6 +459,9 @@ pub fn main(args: &Args) -> Result<u8, String> {
             board.console_input(&buf[..n]);
         }
         term::restore();
+        if let Some(learned) = &learned {
+            learned.learn(&runner);
+        }
         return Ok(0);
     }
 
@@ -330,9 +469,21 @@ pub fn main(args: &Args) -> Result<u8, String> {
     let mut out = std::io::stdout();
     for line in std::io::stdin().lock().lines() {
         let line = line.map_err(|e| e.to_string())?;
+        let begun = Instant::now();
         let output = session.exec(&line);
+        if timing {
+            // Until the command's last output, not until exec judged it done
+            let last = activity.last_console.lock().unwrap().unwrap_or(begun);
+            eprintln!("timing: {:>6.0} ms  {line}", last.saturating_duration_since(begun).as_secs_f64() * 1e3);
+        }
         let _ = out.write_all(&text::plain(&output));
         let _ = out.flush();
+    }
+    if let Some(learned) = &learned {
+        learned.learn(&runner);
+    }
+    if timing {
+        jit_stats(&runner);
     }
     Ok(0)
 }
@@ -461,4 +612,40 @@ pub fn client_attach(socket: &str) -> Result<u8, String> {
     }
     term::restore();
     Ok(0)
+}
+
+/// What the JIT did (SNOWGLOBE_TIMING): how much ran compiled, and how much fell back to the
+/// interpreter from inside compiled code.
+fn jit_stats(runner: &Runner) {
+    let (flushes, compiled, invalidated, bytes, (n, ns), insns, block_insns, helpers) = runner.with_cpu(0, |c| {
+        (
+            c.jit.flushes,
+            c.jit.compiled,
+            c.jit.page_invalidations,
+            c.native_jit_code_bytes(),
+            c.native_jit_stats(),
+            c.insn_count,
+            c.jit.block_insns,
+            c.jit.helper_interps,
+        )
+    });
+    eprintln!(
+        "timing: jit {compiled} modules ({n} compiled in {:.0} ms), {invalidated} page invalidations, {flushes} flushes, {} KB code",
+        ns as f64 / 1e6,
+        bytes >> 10
+    );
+    let _ = block_insns;
+    eprintln!(
+        "timing: {:.0}M instructions, {:.1}M of them handed to the interpreter by compiled code",
+        insns as f64 / 1e6,
+        helpers as f64 / 1e6
+    );
+    let hist = runner.with_cpu(0, |c| c.jit.helper_hist.clone());
+    if let Some(h) = hist {
+        let mut top: Vec<_> = h.into_iter().collect();
+        top.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        for (pattern, (n, sample)) in top.into_iter().take(30) {
+            eprintln!("timing: helper {pattern:08x} {:>8.2}M  e.g. {sample:08x}", n as f64 / 1e6);
+        }
+    }
 }

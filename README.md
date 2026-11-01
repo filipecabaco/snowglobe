@@ -287,6 +287,65 @@ Piped stdin is typed in one line at a time, each waiting until the app goes quie
 only what the command printed (no echo, no prompt) and plain text when its output isn't a
 terminal, which suits scripts and agents. Each instance starts fresh from the snapshot.
 
+### One executable, no Docker
+
+`snowglobe bundle` makes a built site a single executable: snowglobe-vm with the site appended.
+Started, it maps itself, restores the snapshot from memory (nothing is extracted) and runs the
+app as `snowglobe run` would, with the same flags, `exec` and `attach`. There is no Docker, no
+hypervisor and no KVM, so it runs on a laptop, in CI and inside someone else's container:
+
+```console
+$ snowglobe build examples/python --sandbox --out dist/python
+$ snowglobe bundle dist/python -o python                # Linux, this machine's architecture
+$ echo 'sum(i*i for i in range(10))' | ./python
+285
+$ ./python --detached --socket /tmp/py.sock &
+$ ./python exec --socket /tmp/py.sock 'import os; os.uname().machine'
+'aarch64'
+```
+
+**Jobs.** A bundle whose app is a shell also runs one-shot jobs, the shape of a job runner's
+run: `--workspace DIR` is written into a fresh machine, `--cmd` runs there, and what it printed,
+its exit status and its `out/` come back (`--env`, `--env-file` for secrets, `--timeout`).
+[`examples/toolkit`](examples/toolkit) is poppler, tesseract, vips, ffmpeg, jq and sqlite in one
+bundle, with a workflow that chains jobs; Exclave runs its toolkits on bundles like it on nodes
+without KVM.
+
+```console
+$ ./toolkit --workspace job --cmd 'sh main.sh' --env 'EXCLAVE_ASSIGNS={"n":42}'
+```
+
+A bundle is Linux on this machine's architecture (snowglobe-vm from the tools image) by default;
+`--target darwin` makes one for macOS on Apple silicon (this release's snowglobe-vm, fetched
+once), and `--runtime` (or `SNOWGLOBE_VM`) takes any snowglobe-vm you built.
+
+**Sandboxed from inside.** The guest is an emulated machine with no way to the host but its
+console, its files (read from the bundle, written to memory) and the network relay. Around the
+emulator itself, the process confines itself before it starts a thread, with no privileges:
+
+- Linux: no_new_privs; Landlock, so it reads only the site (nothing at all from a bundle, which
+  is mapped already) and writes only its JIT profile cache and control socket, listens only on
+  the ports it forwards, opens no TCP connection without a network, and signals nothing outside
+  itself; a seccomp filter that refuses new programs and processes, ptrace, mounts, namespaces,
+  BPF, perf, io_uring, keyrings and kernel modules.
+- macOS: a Seatbelt profile: no programs or processes, no writes but the cache and the socket,
+  no reads of the home directory, no network without one.
+
+The run says what it got (`sandboxed: no_new_privs, landlock v6 (fs, tcp, signals), seccomp`).
+`SNOWGLOBE_SANDBOX=strict` refuses to run without all of it, `=off` skips it, and
+`snowglobe-vm sandbox-check` tries what a run must not be able to do and reports each.
+
+**It learns what runs do.** A restore starts with no compiled code, so a site's first commands
+are interpreted until they get hot. Each run records the code pages it ran (with a hash of each,
+so a page that holds something else next time is skipped) into a profile kept per snapshot in
+`~/.cache/snowglobe/jit/` (`SNOWGLOBE_CACHE`), and the next run compiles those at once, behind
+what it needs right away: whatever the runs do, not a list of commands chosen at build time.
+`ARMLESS_JIT_PREWARM=off` turns it off.
+
+`--sandbox` builds for this: the guest keeps its file cache in the snapshot instead of dropping
+it (a page would download it; a bundle has it already), and exercises, if any, run before the
+snapshot, so what they loaded is loaded.
+
 ### Supabase, and packages from Alpine
 
 Two examples go further:

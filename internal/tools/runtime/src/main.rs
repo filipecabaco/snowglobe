@@ -11,8 +11,12 @@
 //! site headlessly and connects its app console to the terminal, a pipe, or the control socket
 //! `exec` and `attach` talk to.
 
+mod job;
 mod machine;
+mod profile;
 mod run;
+mod sandbox;
+mod site;
 mod snapshot;
 mod term;
 mod text;
@@ -29,6 +33,8 @@ fn usage() -> ExitCode {
                         [--tunnel [HOST:]PORT=URL ...] [--allow-private]
   snowglobe-vm run <site dir> [--blobs DIR] [--detached] [--socket PATH] [--forward PORT:GUEST ...]
                    [--tunnel [HOST:]PORT=URL ...] [--allow-private] [--record-reads FILE]
+                   [--workspace DIR --cmd COMMAND [--env K=V ...] [--env-file JSON] [--timeout SECS]]
+  (a bundle takes run's flags itself: ./site --workspace DIR --cmd COMMAND)
   snowglobe-vm exec [--socket PATH] <command>
   snowglobe-vm attach [--socket PATH]"
     );
@@ -78,15 +84,24 @@ impl Args {
     }
 }
 
+const RUN_FLAGS: &[&str] = &["blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout"];
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // A bundle runs the site it carries: its arguments are run's (exec and attach still work)
+    if let Some(site) = site::Site::this_bundle() {
+        if !matches!(args.first().map(String::as_str), Some("exec" | "attach")) {
+            return finish(Args::parse(&args, RUN_FLAGS).and_then(|a| run::main(&a, Some(site))));
+        }
+    }
     let Some((command, rest)) = args.split_first() else {
         return usage();
     };
     let result = match command.as_str() {
         "snapshot" => Args::parse(rest, &["memory", "cpus", "build-cpus", "network", "ready", "exercise", "cols", "rows", "tunnel"])
             .and_then(|a| snapshot::main(&a)),
-        "run" => Args::parse(rest, &["blobs", "socket", "forward", "tunnel", "record-reads"]).and_then(|a| run::main(&a)),
+        "run" => Args::parse(rest, RUN_FLAGS).and_then(|a| run::main(&a, None)),
+        "sandbox-check" => sandbox::check(),
         "exec" => {
             // Everything after the flags is the command, as typed
             let (socket, words) = match rest.first().map(String::as_str) {
@@ -100,6 +115,10 @@ fn main() -> ExitCode {
         "-h" | "--help" | "help" => return usage(),
         _ => return usage(),
     };
+    finish(result)
+}
+
+fn finish(result: Result<u8, String>) -> ExitCode {
     match result {
         Ok(code) => ExitCode::from(code),
         Err(e) => {

@@ -55,6 +55,9 @@ type Options struct {
 	// NoChunks keeps every guest file in one blob, however large: the filesystem format armless
 	// 0.2.x reads. By default files of 2 MiB and more are stored in content-defined chunks.
 	NoChunks bool
+	// Sandbox snapshots for running natively (snowglobe run, a bundle) rather than in a page:
+	// the guest keeps its file cache, and exercises run before the snapshot instead of after
+	Sandbox bool
 }
 
 // Settings are the resolved values a build runs with.
@@ -171,7 +174,7 @@ func Run(o Options, version string) error {
 		if err != nil {
 			return err
 		}
-		return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs)
+		return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)
 	}); err != nil {
 		return err
 	}
