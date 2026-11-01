@@ -12,6 +12,7 @@ import (
 	goruntime "runtime"
 	"runtime/debug"
 
+	"github.com/filipecabaco/snowglobe/internal/boot"
 	"github.com/filipecabaco/snowglobe/internal/build"
 	"github.com/filipecabaco/snowglobe/internal/bundle"
 	"github.com/filipecabaco/snowglobe/internal/instance"
@@ -112,6 +113,10 @@ Build flags:
   --build-cpus N  CPUs to boot and warm up on before the snapshot (default: the larger of --cpus
                   and 4); the extra ones go offline first, so build time doesn't depend on --cpus.
                   Programs that size thread pools at start (the BEAM's schedulers) keep N
+  --builder B     docker (default) or native: no Docker at all, from an image reference
+                  (pulled from its registry) or an image archive (docker save, OCI layout); the
+                  boot layer is written rather than built and snowglobe-vm snapshots here
+                  (SNOWGLOBE_BUILDER sets the default)
   --sandbox       snapshot for running natively (run, bundle) rather than in a page: the guest
                   keeps its file cache, and exercises (optional) run before the snapshot
   --no-chunks     store every guest file in one blob, however large (default: files of 2 MiB
@@ -182,6 +187,11 @@ func main() {
 	case "ps":
 		err = instance.List()
 	case "tools":
+		if len(os.Args) == 4 && os.Args[2] == "kernel" {
+			// The kernel archive builds without Docker add (a release asset), built with Docker
+			err = boot.BuildKernel(os.Args[3])
+			break
+		}
 		// Build (or find) the tools image and print its tag, e.g. to build it once in CI
 		var t *tools.Image
 		if t, err = tools.Build(version); err == nil {
@@ -223,6 +233,7 @@ func runBuild(args []string) error {
 	fs.BoolVar(&o.AllowPrivate, "allow-private", false, "")
 	fs.IntVar(&o.CPUs, "cpus", 0, "")
 	fs.BoolVar(&o.Sandbox, "sandbox", false, "")
+	fs.StringVar(&o.Builder, "builder", os.Getenv("SNOWGLOBE_BUILDER"), "")
 	fs.IntVar(&o.BuildCPUs, "build-cpus", 0, "")
 	fs.BoolVar(&o.NoChunks, "no-chunks", false, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }

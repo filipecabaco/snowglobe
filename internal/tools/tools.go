@@ -4,10 +4,13 @@
 package tools
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -104,6 +107,122 @@ func (i *Image) CopySite(out string) error {
 	return os.WriteFile(file, patched, 0o644)
 }
 
+// FetchSite writes what CopySite copies out of the image (armless's browser runtime and xterm.js)
+// into out without Docker: downloaded from where the tools image's Dockerfile gets them, checked
+// against the checksums it pins, and kept in the user cache.
+func FetchSite(out string) error {
+	df, err := context.ReadFile("Dockerfile")
+	if err != nil {
+		return err
+	}
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return err
+	}
+	sources := map[string]string{} // file name -> local copy
+	// Instructions, with their continuation lines joined
+	joined := strings.ReplaceAll(string(df), "\\\n", " ")
+	for _, line := range strings.Split(joined, "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "ADD --checksum=sha256:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) < 2 {
+			continue
+		}
+		sum, url := fields[0], fields[1]
+		name := url[strings.LastIndex(url, "/")+1:]
+		local := filepath.Join(cache, "snowglobe", "site", sum[:16]+"-"+name)
+		if _, err := os.Stat(local); err != nil {
+			if err := native.Download(url, local); err != nil {
+				return err
+			}
+		}
+		data, err := os.ReadFile(local)
+		if err != nil {
+			return err
+		}
+		if got := sha256.Sum256(data); hex.EncodeToString(got[:]) != sum {
+			os.Remove(local)
+			return fmt.Errorf("%s: checksum mismatch", url)
+		}
+		sources[name] = local
+	}
+	// Where each archive member goes, as the Dockerfile copies them
+	want := map[string]map[string]string{
+		"armless-web.tar.gz": {"armless-web/armless.js": "armless/armless.js", "armless-web/armless.wasm": "armless/armless.wasm",
+			"armless-web/armless-smp.wasm": "armless/armless-smp.wasm", "armless-web/LICENSE": "armless/LICENSE"},
+		"xterm-6.0.0.tgz":      {"package/lib/xterm.js": "xterm/xterm.js", "package/css/xterm.css": "xterm/xterm.css"},
+		"addon-fit-0.11.0.tgz": {"package/lib/addon-fit.js": "xterm/addon-fit.js"},
+	}
+	for archive, members := range want {
+		local, ok := sources[archive]
+		if !ok {
+			return fmt.Errorf("the tools Dockerfile doesn't fetch %s any more: update FetchSite", archive)
+		}
+		if err := extractMembers(local, members, out); err != nil {
+			return fmt.Errorf("%s: %w", archive, err)
+		}
+	}
+	file := filepath.Join(out, "armless", "armless.js")
+	source, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	patched, err := snapshotMemoryHeadroom(source)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(file, patched, 0o644)
+}
+
+func extractMembers(archive string, members map[string]string, out string) error {
+	f, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	tr := tar.NewReader(gz)
+	found := 0
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		dest, ok := members[strings.TrimPrefix(h.Name, "./")]
+		if !ok {
+			continue
+		}
+		p := filepath.Join(out, filepath.FromSlash(dest))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		w, err := os.Create(p)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(w, tr)
+		w.Close()
+		if err != nil {
+			return err
+		}
+		found++
+	}
+	if found != len(members) {
+		return fmt.Errorf("found %d of its %d files", found, len(members))
+	}
+	return nil
+}
+
 // armless (v0.2.6 to v0.3.0) reserves only RAM+1 GiB for SMP. A live snapshot also allocates serialized
 // filesystem metadata and a growing RAM buffer; Supabase can exceed that limit during capture.
 // Raise the maximum, not the initial allocation, while retaining wasm32's 4 GiB hard ceiling.
@@ -155,7 +274,19 @@ func NativeSource(version string) *native.Image {
 // After the snapshot it types each exercise command into the app and records what it reads.
 func (i *Image) Snapshot(out string, memoryMB int, ready string, exercises []string, network string,
 	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox bool) error {
-	args := []string{VM, "snapshot", "/out/system",
+	args := append([]string{VM}, SnapshotArgs("/out/system", memoryMB, ready, exercises, network, tunnels, allowPrivate, cpus, buildCPUs, sandbox)...)
+	var extra []string
+	if network != "none" {
+		extra = NetworkArgs()
+	}
+	return i.run(out, extra, args...)
+}
+
+// SnapshotArgs are snowglobe-vm's arguments to boot the site's system directory and snapshot it,
+// in the tools container or natively.
+func SnapshotArgs(system string, memoryMB int, ready string, exercises []string, network string,
+	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox bool) []string {
+	args := []string{"snapshot", system,
 		"--memory", fmt.Sprint(memoryMB), "--network", network,
 		"--cpus", fmt.Sprint(cpus), "--build-cpus", fmt.Sprint(buildCPUs),
 		"--cols", fmt.Sprint(ConsoleCols), "--rows", fmt.Sprint(ConsoleRows)}
@@ -168,12 +299,7 @@ func (i *Image) Snapshot(out string, memoryMB int, ready string, exercises []str
 	for _, e := range exercises {
 		args = append(args, "--exercise", e)
 	}
-	args = append(args, TunnelArgs(tunnels, allowPrivate)...)
-	var extra []string
-	if network != "none" {
-		extra = NetworkArgs()
-	}
-	return i.run(out, extra, args...)
+	return append(args, TunnelArgs(tunnels, allowPrivate)...)
 }
 
 // run executes a command in the tools image with out mounted at /out, as the current user so

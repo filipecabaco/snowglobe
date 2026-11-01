@@ -98,6 +98,35 @@ func Release(version, goos, goarch string) (string, error) {
 	return dest, Extract(resp.Body, name+"/snowglobe-vm", dest)
 }
 
+// Download fetches url to dest (atomically).
+func Download(url, dest string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: %s", url, resp.Status)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	tmp := dest + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dest)
+}
+
 // Extract writes the tarball member `member` to dest (executable).
 func Extract(r io.Reader, member, dest string) error {
 	gz, err := gzip.NewReader(r)
