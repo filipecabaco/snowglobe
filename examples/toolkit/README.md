@@ -18,9 +18,12 @@ $ ls job/out
 when
 ```
 
-Every job restores the machine from its snapshot (~200 ms), so nothing carries over from one
-job to the next. `--env-file FILE` (a JSON object) passes secrets without putting them on a
-command line, `--timeout SECS` bounds the job (exit 124), and the exit status is the command's.
+Every job restores the machine from its snapshot (an empty job takes ~0.3 s), so nothing carries
+over from one job to the next. `--env-file FILE` (a JSON object) passes secrets without putting
+them on a command line, `--timeout SECS` bounds the job (exit 124) and kills everything it
+started, and the exit status is the command's. For a driver, `--max-runtime` and `--stop-file` end
+a run from outside and `--log-dir` keeps a durable record of it (see the main README's "Driving it
+from a program").
 
 To run many jobs, serve them: the snapshot is restored once and each job is a fork of it.
 
@@ -43,7 +46,7 @@ media (ffmpeg, vips)
 ```console
 $ elixir examples/toolkit/workflow.exs ./toolkit
 ...
-▸ report  455 ms · exit 0 · 1 files out
+▸ report  473 ms · exit 0 · 1 files out
     ╭────────────┬──────────┬─────────╮
     │   vendor   │ invoices │  total  │
     ╞════════════╪══════════╪═════════╡
@@ -52,27 +55,27 @@ $ elixir examples/toolkit/workflow.exs ./toolkit
     ╰────────────┴──────────┴─────────╯
 
 Step          time      exit  out/
-fixtures     14950 ms      0     3
-rasterize     1716 ms      0     3
-ocr ×3        6009 ms      0     3
-extract        886 ms      0     1
-report         459 ms      0     1
-media         4934 ms      0     2
+fixtures     14729 ms      0     3
+rasterize     1623 ms      0     3
+ocr ×3        5448 ms      0     3
+extract        913 ms      0     1
+report         473 ms      0     1
+media         5044 ms      0     2
 
-6 sandboxed jobs in 24038 ms (two branches at once)
+6 sandboxed jobs in 23204 ms (two branches at once)
 ```
 
 ## What a job costs
 
-Measured on an Apple M-series host, the Linux numbers in an unprivileged container (`--user
-1000 --cap-drop ALL --network none`, Docker's default seccomp profile):
+Measured on an Apple M-series host, on Linux in an unprivileged container (`--user 1000
+--cap-drop ALL --network none`, Docker's default seccomp profile), the median of three runs:
 
-| Job | Wall time | Peak memory (Linux) |
-|-----|----------:|--------------------:|
-| restore, nothing run | ~0.2 s | 112 MB |
-| a few shell lines with jq | 0.38 s | |
-| jq + sqlite report | 0.45 s | 140 MB |
-| tesseract, one page | 5.8 s | 386 MB |
+| Job | Wall time | Peak memory |
+|-----|----------:|------------:|
+| restore, nothing run | 0.30 s | 118 MB |
+| a few shell lines with jq | 0.42 s | 122 MB |
+| jq + sqlite report | 0.47 s | 131 MB |
+| tesseract, one page | 5.2 s | 345 MB |
 
 Served (`--serve`), on Linux:
 
@@ -92,6 +95,8 @@ conversions) is dominated by the restore. Heavy vector and floating-point code i
 native: the same tesseract page takes 0.13 s natively. `ARMLESS_JIT_HELPER_STATS=1
 SNOWGLOBE_TIMING=1` shows where it goes: which instructions compiled code still hands back to
 armless's interpreter, by opcode. For tesseract these were its int8 dot product (`smull`,
-`saddlp`, `addp`, `uzp1`) and SIMD&FP loads and stores, ~630M of 733M; armless's JIT translates
-those now (the page went from 14.4 s to 5.8 s). What is left is scalar floating point (`fmul`,
-`fsub`, `fcmpe`, `scvtf`, `fmadd`: ~100M), which needs float types in the JIT first.
+`saddlp`, `addp`, `uzp1`) and SIMD&FP loads and stores, ~630M of 733M, then scalar floating point
+(`fmul`, `fsub`, `fcmpe`, `scvtf`, `fmadd`: ~100M). armless's JIT translates all of them now (the
+page went from 14.4 s to 5.8 s, then 5.2 s with armless 0.5.0); what still reaches the
+interpreter is 12.5M of the page's 3.9 billion instructions, mostly `dc zva` (memset zeroing a
+cache line at a time).

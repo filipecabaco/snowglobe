@@ -22,11 +22,14 @@ snowglobe pool sites              # several sites under one host share a single 
 > This is an experiment. Everything runs on an emulated 64-bit ARM CPU (translated to WebAssembly as
 > it runs), so expect it to be slower than native. A site can have up to 8 CPUs (`--cpus`), which
 > helps programs that use them (the Elixir demo runs CPU-bound tasks about 4× faster on 4); the
-> demos use 2, to stay light on phones.
+> demos that use more than one (Elixir + Postgres, Java, Supabase) use 2, to stay light on phones.
 
 ## What you need
 
-- **Docker.** That's all the host needs: the snapshot step runs in a build container.
+- **Docker, or nothing.** With Docker, a build runs in a build container and builds a Dockerfile.
+  Without it, `--builder native` builds from an image in a registry or a saved archive
+  ([Building without Docker](#building-without-docker)), and `snowglobe run --runtime native`, a
+  bundle and `snowglobe mcp` run sites with no Docker either. Docker stays the default.
 - **An arm64 Alpine image**: `FROM alpine` (multi-arch; snowglobe builds it for arm64) or
   `FROM arm64v8/alpine`. Alpine is the distro snowglobe knows how to make bootable. On an x86
   host, Docker needs QEMU's binfmt handlers to build arm64 images (Docker Desktop has them; on
@@ -42,7 +45,9 @@ go install github.com/filipecabaco/snowglobe/cmd/snowglobe@latest
 The first build fetches the tools image (the machine that boots and snapshots your image) from
 `ghcr.io/filipecabaco/snowglobe-tools`. For a version that hasn't been released yet, it is
 compiled locally instead, which takes a few minutes once. Set `SNOWGLOBE_TOOLS_BUILD=1` to
-always compile it locally.
+always compile it locally. Without Docker, the first native build or run fetches the release's
+`snowglobe-vm` for your system instead (and a native build, the prebuilt kernel), once, into your
+cache; `SNOWGLOBE_VM` names one you built (`cargo build --release` in `internal/tools/runtime`).
 
 ## Your image, in a tab
 
@@ -381,8 +386,9 @@ with no Docker: this release's for your system (fetched once into your cache), o
 keep their state under your cache directory either way (`snowglobe ps` lists both).
 
 Natively, armless compiles hot guest code to host code (its native JIT), when booting and
-snapshotting a site at build time as well as when running one: about 2–3× faster on CPU-bound work
-than its interpreter. `ARMLESS_JIT=off` keeps the interpreter. A host that can't run generated code
+snapshotting a site at build time as well as when running one: about 3× faster on CPU-bound work
+than its interpreter (a tesseract page: 21 s interpreted, 6 s compiled, with NEON and floating
+point compiled too). `ARMLESS_JIT=off` keeps the interpreter. A host that can't run generated code
 stays interpreted on its own.
 
 With a network, the guest goes out the way your machine does. The same web relay makes its HTTP(S)
@@ -456,7 +462,9 @@ $ ./python exec --socket /tmp/py.sock 'import os; os.uname().machine'
 
 **Jobs.** A bundle whose app is a shell also runs one-shot jobs, the shape of a job runner's
 run: `--workspace DIR` is written into a fresh machine, `--cmd` runs there, and what it printed,
-its exit status and its `out/` come back (`--env`, `--env-file` for secrets, `--timeout`).
+its exit status and its `out/` come back (`--env`, `--env-file` for secrets, `--timeout`, which
+kills the command and everything it started; `--max-runtime`, `--stop-file` and `--log-dir` as in
+[Driving it from a program](#driving-it-from-a-program)).
 [`examples/toolkit`](examples/toolkit) is poppler, tesseract, vips, ffmpeg, jq and sqlite in one
 bundle, with a workflow that chains jobs; Exclave runs its toolkits on bundles like it on nodes
 without KVM.
@@ -540,7 +548,18 @@ grace@example.com: 0 note(s)
 ## Development checks
 
 Run `go test ./...`, `node --test internal/site/sessions.test.cjs` and `node --test
-bench/lib.test.mjs bench/server.test.mjs` (Node 22+; no npm packages needed), or `mise run test`. To exercise real IndexedDB transactions, Web Locks and filesystem
+bench/lib.test.mjs bench/server.test.mjs` (Node 22+; no npm packages needed), or `mise run test`.
+`snowglobe-vm` has its own tests: `cargo test` in `internal/tools/runtime` (the job launcher's run
+on a pty and killed with ctrl-c on Linux only; CI runs them under dash and BusyBox ash). The
+end-to-end suite drives the CLI against a built site, natively and in Docker (jobs, kills,
+timeouts, `--max-runtime`, `--stop-file`, the logs, MCP, bundles):
+
+```sh
+SNOWGLOBE_E2E_SITE=dist/curl go test ./cmd/snowglobe -run TestE2E -v
+```
+
+(`SNOWGLOBE_E2E_DOCKER=0` skips the Docker runs; `SNOWGLOBE_VM` names a snowglobe-vm where there is
+no release for this system.) CI runs it against the curl site. To exercise real IndexedDB transactions, Web Locks and filesystem
 writable streams, serve the repository on localhost and open
 `internal/site/sessions.browser.html` in a visible tab; its results are displayed on the page.
 The automatic-saving check requires the tab to remain visible, just like the demos. Full session
@@ -617,13 +636,13 @@ bytes). What the demos show:
 
 | Demo | Boot | First commands | Never read | What dominates |
 |------|-----:|---------------:|-----------:|----------------|
-| Elixir + Postgres | 23.8 MB | 0 | 30.6 MB | a release in embedded mode loads every module at startup, and Postgres reads its catalog as it starts |
-| Python + Rich | 8.3 MB | 0.1 MB | 43.5 MB | the startup file imports Rich, so its modules are boot reads |
-| TypeScript + Zod | 25.6 MB | 3.8 MB | 29.1 MB | the `node` binary, then tsx/esbuild and Zod's modules on first use |
-| Go + Bubble Tea | 5.4 MB | 0 | 25.1 MB | one static binary, read at boot |
-| Rust + clap | 4.0 MB | 0.4 MB | 25.1 MB | `jtab` is read on first use; the shell is all that boots |
-| Java + Gson | 48.2 MB | 0 | 115.4 MB | the JDK's `lib/modules` image, opened at boot |
-| curl + jq | 4.1 MB | 2.3 MB | 24.9 MB | `curl`, its TLS and `jq` load on the first request |
+| Elixir + Postgres | 23.2 MB | 0 | 31.4 MB | a release in embedded mode loads every module at startup, and Postgres reads its catalog as it starts |
+| Python + Rich | 8.4 MB | 0.1 MB | 43.5 MB | the startup file imports Rich, so its modules are boot reads |
+| TypeScript + Zod | 25.0 MB | 4.4 MB | 29.1 MB | the `node` binary, then tsx/esbuild and Zod's modules on first use |
+| Go + Bubble Tea | 5.5 MB | 0 | 25.1 MB | one static binary, read at boot |
+| Rust + clap | 4.2 MB | 0.4 MB | 25.1 MB | `jtab` is read on first use; the shell is all that boots |
+| Java + Gson | 31.0 MB | 0 | 136.5 MB | the JDK's `lib/modules` image, opened at boot (only the chunks it reads) |
+| curl + jq | 4.2 MB | 2.3 MB | 24.9 MB | `curl`, its TLS and `jq` load on the first request |
 
 **Warming from outside traffic.** Exercises are commands typed into the console. For an app that
 is used over the network (an API under its own test suite, say), record what a run reads instead,
@@ -646,8 +665,9 @@ a single static binary, Java's module image) is captured by boot reads alone.
 ## Several sites, one host
 
 `snowglobe pool <dir>` lets every site under a directory share one blob store. Blobs are named by
-content hash (a large file's chunks too), so sites built on the same base (kernel, Alpine, the boot layer) share many: the six
-language demos go from 715 MB to 544 MB, and a visitor's second demo reuses what their browser cached.
+content hash (a large file's chunks too), so sites built on the same base (kernel, Alpine, the boot layer) share many: the live site's
+eleven builds (the ten demos and a one-CPU build for a card) hold 34,171 files, 14,788 of them
+unique, and pooling saves 581 MB. A visitor's second demo reuses what their browser cached.
 
 ## How it works
 
@@ -660,14 +680,19 @@ flowchart LR
 ```
 
 1. **Boot layer.** snowglobe adds a kernel, an initramfs that mounts the root filesystem over 9p,
-   OpenRC, and a terminal that runs your command, on top of your image.
-2. **Filesystem.** `docker export` streams straight into snowglobe, which writes a 9p filesystem
+   OpenRC, and a terminal that runs your command, on top of your image. Without Docker
+   (`--builder native`), the kernel comes prebuilt and BusyBox's `init` and `getty` take OpenRC's
+   place, written as files on top of the image's flattened layers.
+2. **Filesystem.** `docker export` (or, without Docker, the image's layers flattened as a container's
+   filesystem would be) streams straight into snowglobe, which writes a 9p filesystem
    (v86's format, which armless reads): a JSON tree plus one zstd-compressed blob per unique file,
    fetched by the browser on demand. Files of 2 MiB and more are split into content-defined chunks
    (cut as armless's own image tools cut them), so a read fetches only the chunks it covers and
    sites share identical chunks even when the files around them differ; `--no-chunks` turns it off.
-3. **Snapshot.** The guest boots headless in armless (natively, in the build container) until your
-   app is ready, and the whole machine state is saved. Visitors restore it instead of booting Linux.
+3. **Snapshot.** The guest boots headless in armless (`snowglobe-vm`, natively: in the build
+   container, or on your machine without Docker) until your app is ready, and the whole machine
+   state is saved. Visitors restore it instead of booting Linux; `snowglobe run`, a bundle and
+   `snowglobe mcp` restore the same snapshot outside a browser.
 4. **Warm pack.** The files the guest read while booting and while being exercised are bundled
    into one `warm.pack` the page downloads in the background (see above).
 
@@ -690,13 +715,23 @@ GitHub release. A version that is tagged already releases nothing; pushing a tag
 releases it as before.
 
 ```
-cmd/snowglobe/        the CLI
+cmd/snowglobe/        the CLI (and its end-to-end tests)
+internal/build/       a build: image → boot layer → 9p filesystem → snapshot → site
 internal/rootfs/      tar stream → 9p filesystem + warm pack
-internal/boot/        the boot layer added on top of your image
+internal/boot/        the boot layer added on top of your image (Docker's, and the one written
+                      without Docker)
+internal/oci/         images without Docker: registries, docker save and OCI layouts, layers flattened
 internal/tools/       build container: snowglobe-vm (runtime/, Rust on armless) + armless.js and
                       xterm.js (pinned)
+internal/native/      finding snowglobe-vm for running natively
+internal/instance/    run, exec, attach, ps, stop, sh, cp: in a container or natively
+internal/bundle/      a site and snowglobe-vm in one executable
+internal/mcp/         the MCP server
 internal/site/        the page
 internal/pool/        shared blob store for several sites
+internal/pwa/         installable sites
+internal/pack/, internal/remote/
+                      one-tarball sites, and sites run from a URL
 bench/                end-to-end benchmarks of built sites (Playwright)
 examples/             one Dockerfile per demo language
 site/                 the demo index page
