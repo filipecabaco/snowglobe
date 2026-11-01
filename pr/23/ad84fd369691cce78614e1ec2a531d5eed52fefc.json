@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "sha": "ad84fd369691cce78614e1ec2a531d5eed52fefc",
-  "created_at": "2026-11-01T11:58:09.666Z",
+  "created_at": "2026-11-01T12:05:28.074Z",
   "sites": {
     "typescript": {
       "schema": 1,
@@ -2224,6 +2224,420 @@
               "median": 323,
               "min": 322,
               "max": 326,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "postgres": {
+      "schema": 1,
+      "site": "postgres",
+      "title": "PostgreSQL in the browser",
+      "cpus": 1,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261101113653-55035a6ba26a",
+      "built_at": "2026-11-01T12:01:38Z",
+      "measured_at": "2026-11-01T12:05:11.675Z",
+      "env": {
+        "sha": "55035a6ba26af3d4e554cd659b66655adcc3e7e2",
+        "ref": "refs/pull/23/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 643,
+              "running_ms": 678,
+              "first_output_ms": 708,
+              "requests": 18,
+              "bytes": 49701370,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2761392
+            },
+            {
+              "ready_ms": 586,
+              "running_ms": 621,
+              "first_output_ms": 651,
+              "requests": 18,
+              "bytes": 49701370,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2794456
+            },
+            {
+              "ready_ms": 639,
+              "running_ms": 672,
+              "first_output_ms": 702,
+              "requests": 17,
+              "bytes": 32724356,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2780248
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 639,
+              "min": 586,
+              "max": 643,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 672,
+              "min": 621,
+              "max": 678,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 702,
+              "min": 651,
+              "max": 708,
+              "n": 3
+            },
+            "requests": {
+              "median": 18,
+              "min": 17,
+              "max": 18,
+              "n": 3
+            },
+            "bytes": {
+              "median": 49701370,
+              "min": 32724356,
+              "max": 49701370,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2780248,
+              "min": 2761392,
+              "max": 2794456,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 631,
+              "running_ms": 660,
+              "first_output_ms": 691,
+              "requests": 3,
+              "bytes": 30779835,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3048992
+            },
+            {
+              "ready_ms": 627,
+              "running_ms": 658,
+              "first_output_ms": 692,
+              "requests": 3,
+              "bytes": 30779835,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 2810144
+            },
+            {
+              "ready_ms": 620,
+              "running_ms": 651,
+              "first_output_ms": 686,
+              "requests": 3,
+              "bytes": 30779835,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3010484
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 627,
+              "min": 620,
+              "max": 631,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 658,
+              "min": 651,
+              "max": 660,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 691,
+              "min": 686,
+              "max": 692,
+              "n": 3
+            },
+            "requests": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 3
+            },
+            "bytes": {
+              "median": 30779835,
+              "min": 30779835,
+              "max": 30779835,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3010484,
+              "min": 2810144,
+              "max": 3048992,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 17624,
+              "running_ms": 17654,
+              "first_output_ms": 17683,
+              "requests": 17,
+              "bytes": 32724356,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 3200176
+            },
+            {
+              "ready_ms": 17597,
+              "running_ms": 17626,
+              "first_output_ms": 17655,
+              "requests": 17,
+              "bytes": 32724356,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 3202456
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 17610.5,
+              "min": 17597,
+              "max": 17624,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 17640,
+              "min": 17626,
+              "max": 17654,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 17669,
+              "min": 17655,
+              "max": 17683,
+              "n": 2
+            },
+            "requests": {
+              "median": 17,
+              "min": 17,
+              "max": 17,
+              "n": 2
+            },
+            "bytes": {
+              "median": 32724356,
+              "min": 32724356,
+              "max": 32724356,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 3201316,
+              "min": 3200176,
+              "max": 3202456,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 1566,
+              "commands": [
+                {
+                  "command": "SELECT * FROM planets ORDER BY moons DESC LIMIT 3;",
+                  "ms": 419,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT kind, count(*), sum(moons) FROM planets GROUP BY kind;",
+                  "ms": 198,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT n, n * n AS square FROM generate_series(1, 5) AS n;",
+                  "ms": 86,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT name, moons, rank() OVER (ORDER BY moons DESC) FROM planets LIMIT 5;",
+                  "ms": 67,
+                  "done": "prompt"
+                },
+                {
+                  "command": "\\dt+",
+                  "ms": 796,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 1775,
+              "commands": [
+                {
+                  "command": "SELECT * FROM planets ORDER BY moons DESC LIMIT 3;",
+                  "ms": 466,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT kind, count(*), sum(moons) FROM planets GROUP BY kind;",
+                  "ms": 221,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT n, n * n AS square FROM generate_series(1, 5) AS n;",
+                  "ms": 96,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT name, moons, rank() OVER (ORDER BY moons DESC) FROM planets LIMIT 5;",
+                  "ms": 74,
+                  "done": "prompt"
+                },
+                {
+                  "command": "\\dt+",
+                  "ms": 918,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 1516,
+              "commands": [
+                {
+                  "command": "SELECT * FROM planets ORDER BY moons DESC LIMIT 3;",
+                  "ms": 419,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT kind, count(*), sum(moons) FROM planets GROUP BY kind;",
+                  "ms": 193,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT n, n * n AS square FROM generate_series(1, 5) AS n;",
+                  "ms": 83,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT name, moons, rank() OVER (ORDER BY moons DESC) FROM planets LIMIT 5;",
+                  "ms": 66,
+                  "done": "prompt"
+                },
+                {
+                  "command": "\\dt+",
+                  "ms": 755,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 1566,
+              "min": 1516,
+              "max": 1775,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "SELECT * FROM planets ORDER BY moons DESC LIMIT 3;",
+              "median": 419,
+              "min": 419,
+              "max": 466,
+              "n": 3
+            },
+            {
+              "command": "SELECT kind, count(*), sum(moons) FROM planets GROUP BY kind;",
+              "median": 198,
+              "min": 193,
+              "max": 221,
+              "n": 3
+            },
+            {
+              "command": "SELECT n, n * n AS square FROM generate_series(1, 5) AS n;",
+              "median": 86,
+              "min": 83,
+              "max": 96,
+              "n": 3
+            },
+            {
+              "command": "SELECT name, moons, rank() OVER (ORDER BY moons DESC) FROM planets LIMIT 5;",
+              "median": 67,
+              "min": 66,
+              "max": 74,
+              "n": 3
+            },
+            {
+              "command": "\\dt+",
+              "median": 796,
+              "min": 755,
+              "max": 918,
               "n": 3
             }
           ]
