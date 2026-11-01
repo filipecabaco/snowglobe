@@ -38,3 +38,16 @@ func TestTunnelArgs(t *testing.T) {
 		t.Errorf("nothing to pass: got %q", got)
 	}
 }
+
+func TestFetchSiteKnowsWhatTheDockerfileFetches(t *testing.T) {
+	df, err := context.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.ReplaceAll(string(df), "\\\n", " ")
+	for _, want := range []string{"armless-web.tar.gz", "xterm-6.0.0.tgz", "addon-fit-0.11.0.tgz"} {
+		if !strings.Contains(joined, "/"+want+" ") {
+			t.Errorf("the tools Dockerfile doesn't ADD %s: FetchSite's member map needs updating", want)
+		}
+	}
+}

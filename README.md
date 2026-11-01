@@ -223,6 +223,27 @@ demo on several CPUs gets a one-CPU build for its card: `supabase-1cpu` in `DEMO
 `examples/supabase` built with `--cpus 1` (any `<example>-<n>cpu` works), and the card's `player`
 in `assets/cards.json` names it.
 
+## Building without Docker
+
+`snowglobe build --builder native` (or `SNOWGLOBE_BUILDER=native`) builds with no Docker at all,
+from an image reference (pulled from its registry: Docker Hub, GHCR or any registry serving public
+images) or an image archive (`docker save`, or an OCI layout, from buildah, kaniko or anything
+else). Docker stays the default, and is what builds a Dockerfile.
+
+```console
+$ snowglobe build python:3.13-alpine --builder native --ready '>>> '
+$ docker save my-app:latest -o my-app.tar     # on a machine with a builder
+$ snowglobe build my-app.tar --builder native  # anywhere else
+```
+
+Nothing runs at build time. The image's layers are flattened as a container's filesystem would
+be; the kernel, its initramfs and modules come prebuilt (a release asset, fetched once); and
+instead of the OpenRC and agetty that the Docker build installs, the guest boots with BusyBox's
+`init`, `getty` and `udhcpc`, which every Alpine image has, configured by files snowglobe writes.
+`snowglobe-vm` then boots and snapshots it here. The site is the same kind of site either way,
+for a page or for `snowglobe run`. A build without Docker and with no release to fetch the kernel
+from builds it once with Docker, or takes `SNOWGLOBE_BOOT=archive.tar.gz`.
+
 ## Running a site headlessly
 
 A built site also runs without a browser: the same snapshot, restored by armless natively

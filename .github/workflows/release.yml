@@ -159,6 +159,15 @@ jobs:
             tar -czf "release/$name.tar.gz" "$name"
           done
 
+      # The kernel archive builds without Docker add (snowglobe build --builder native): linux-virt,
+      # its 9p initramfs and modules, built for arm64 (under QEMU here)
+      - name: Kernel archive for builds without Docker
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          go build -o snowglobe-kernel ./cmd/snowglobe
+          ./snowglobe-kernel tools kernel "release/snowglobe-boot_${TAG#v}_arm64.tar.gz"
+          tar -tzf "release/snowglobe-boot_${TAG#v}_arm64.tar.gz" | grep -qx boot/vmlinuz-virt
+
       # Docker Desktop is the only host requirement on macOS; Windows isn't tested, so not shipped
       - name: Build the binaries
         run: |
