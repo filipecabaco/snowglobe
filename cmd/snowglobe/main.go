@@ -8,11 +8,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/filipecabaco/snowglobe/internal/boot"
 	"github.com/filipecabaco/snowglobe/internal/build"
@@ -59,14 +62,18 @@ Usage:
                                                      image's), macOS on Apple silicon (this
                                                      release's), or the snowglobe-vm --runtime
                                                      (or SNOWGLOBE_VM) names
-  snowglobe sh <name> [--json] <command>            run a command on a native instance's shell
+  snowglobe sh <name> [--json] [--timeout S] <cmd>  run a command on a native instance's shell
                                                      (whatever its app is): its output and exit
-                                                     status, or {"exit", "output"} with --json
+                                                     status, or {"exit", "output"} with --json.
+                                                     Out of time (300 s), it and everything it
+                                                     started are killed (exit 124)
   snowglobe cp <src> <dst>                           copy files or directories in or out of a
                                                      native instance: name:/path on one side
   snowglobe mcp <dir | url> [--name N] [--keep]      serve a site to an agent over MCP (stdio): an
                                                      isolated Linux machine with run_command,
-                                                     write_file and read_file tools; no Docker
+                                                     write_file and read_file tools; no Docker.
+                     [--log-dir DIR]                 Logs to the cache's snowglobe/logs/mcp
+                                                     (or <name> with --name) unless --log-dir
   snowglobe warm <dir> <reads.json ...>              add the files runs recorded (run
                                                      --record-reads) to the site's warm pack
   snowglobe run [dir | url] [--name N] [--detach]    run a built site, sandboxed: in a container
@@ -87,10 +94,19 @@ Usage:
                                                      --tunnel [HOST:]PORT=URL replaces the site's
                                                      tunnels (a local proxy, say); --allow-private
                                                      lets the guest reach this machine's services
+                                                     --max-runtime 30m ends the run after that long
+                                                     (exit 124), --stop-file PATH once PATH exists
+                                                     (exit 143): the job running in the guest is
+                                                     killed, its whole process session; --log-dir
+                                                     DIR keeps console.log, serial.log and
+                                                     events.jsonl (jobs, how the run ended). A named
+                                                     native instance logs to the cache's
+                                                     snowglobe/logs/<name>, kept after it stops
   snowglobe exec <name> <command>                    type a command into a running instance and
                                                      print what it printed
   snowglobe attach <name>                            join a running instance (ctrl-] detaches)
-  snowglobe stop <name>                              throw a running instance away
+  snowglobe stop <name>                              throw a running instance away (native: it
+                                                     kills its job and logs why it stopped first)
   snowglobe ps                                       list running instances
   snowglobe tools                                    build the tools image (or find it) and print its tag
   snowglobe version
@@ -404,6 +420,9 @@ func runRun(args []string) error {
 	fs.StringVar(&o.RecordReads, "record-reads", "", "")
 	fs.StringVar(&o.TunnelToken, "tunnel-token", "", "")
 	fs.StringVar(&o.Runtime, "runtime", os.Getenv("SNOWGLOBE_RUNTIME"), "")
+	fs.Func("max-runtime", "", func(v string) (err error) { o.MaxRuntime, err = parseDuration(v); return err })
+	fs.StringVar(&o.StopFile, "stop-file", "", "")
+	fs.StringVar(&o.LogDir, "log-dir", "", "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)
@@ -453,6 +472,21 @@ func runPool(args []string) error {
 	return nil
 }
 
+// parseDuration reads a Go duration ("90s", "1h30m") or plain seconds ("90", "2.5")
+func parseDuration(v string) (time.Duration, error) {
+	if secs, err := strconv.ParseFloat(v, 64); err == nil {
+		if secs <= 0 || math.IsInf(secs, 0) || math.IsNaN(secs) {
+			return 0, fmt.Errorf("%s: more than 0", v)
+		}
+		return time.Duration(secs * float64(time.Second)), nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s: a duration (90s, 5m) or seconds", v)
+	}
+	return d, nil
+}
+
 // parse lets flags come before or after positional arguments; the flag package alone stops at
 // the first positional one
 func parse(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -491,6 +525,7 @@ func runMCP(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	name := fs.String("name", "", "")
 	keep := fs.Bool("keep", false, "")
+	logDir := fs.String("log-dir", "", "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	positional, err := parse(fs, args)
 	if err != nil {
@@ -502,6 +537,14 @@ func runMCP(args []string) error {
 	site := positional[0]
 	if *name == "" {
 		*name = fmt.Sprintf("mcp-%d", os.Getpid())
+		// Sessions of their own all log to one place (rotated), not a directory each
+		if *logDir == "" {
+			dir, err := instance.LogsDir("mcp")
+			if err != nil {
+				return err
+			}
+			*logDir = dir
+		}
 	}
 	switch {
 	case remote.IsURL(site):
@@ -516,7 +559,7 @@ func runMCP(args []string) error {
 	started := false
 	if err := instance.Shell(*name, "true", false, 30); err != nil {
 		// Not running yet: start it, natively (stdout stays the protocol's)
-		if err := instance.Run(instance.Options{Site: site, Name: *name, Detach: true, Runtime: "native"}, version); err != nil {
+		if err := instance.Run(instance.Options{Site: site, Name: *name, Detach: true, Runtime: "native", LogDir: *logDir}, version); err != nil {
 			return err
 		}
 		started = true

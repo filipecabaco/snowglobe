@@ -24,6 +24,8 @@ use serde_json::json;
 
 use crate::machine::{self, Activity, Spec};
 use crate::job;
+use crate::driver;
+use crate::log;
 use crate::profile;
 use crate::sandbox;
 use crate::site::Site;
@@ -237,11 +239,15 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         None => Vec::new(),
     };
 
+    let controls = driver::Controls::from_args(args)?;
+    let log_dir = args.get("log-dir").map(std::path::absolute).transpose().map_err(|e| format!("--log-dir: {e}"))?;
+
     // Confine this process before anything starts a thread: what follows reads the site (mapped
-    // already, if bundled), makes the control socket, listens on the forwarded ports and keeps the
-    // JIT profile; nothing else
+    // already, if bundled), makes the control socket, listens on the forwarded ports, keeps the
+    // JIT profile and the logs, and looks for the stop files; nothing else
     let sandboxed = {
         let mut write: Vec<PathBuf> = profile::cache_path(&site).and_then(|p| sandbox::parent_of(&p)).into_iter().collect();
+        write.extend(log_dir.clone());
         // A job's workspace: its files go in, out/ comes back
         if let Some(ws) = args.get("workspace") {
             write.push(PathBuf::from(ws));
@@ -255,7 +261,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
             .filter_map(|f| f.rsplit(':').nth(1)?.parse().ok())
             .collect();
         sandbox::apply(&sandbox::Policy {
-            read: site.read_paths(),
+            read: [site.read_paths(), controls.read_paths()].concat(),
             write,
             socket_dir: sandbox::parent_of(std::path::Path::new(&socket)),
             bind,
@@ -264,6 +270,20 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     };
 
     let started = Instant::now();
+    if let Some(dir) = &log_dir {
+        log::install(log::Logs::open(dir)?).event(
+            "start",
+            json!({
+                "site": site.describe(),
+                "pid": std::process::id(),
+                "sandbox": sandboxed,
+                "max_runtime": controls.max_runtime.map(|d| d.as_secs_f64()),
+                "stop_files": controls.stop_files,
+            }),
+        );
+    }
+    // From here on, the run ends when its driver says so, whatever it is doing
+    driver::watch(controls, started);
     // A run compiles its profile's code on top of what it gets hot: room for both, or the JIT
     // fills up and starts over mid-run (ARMLESS_JIT_CODE_MB still says otherwise)
     if std::env::var_os("ARMLESS_JIT_CODE_MB").is_none() {
@@ -326,7 +346,11 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     let runner = Arc::new(runner);
     if let Some(learned) = &learned {
         learned.keep_learning(runner.clone());
+        // A stop saves what the run learned too
+        let (learned, runner) = (learned.clone(), runner.clone());
+        driver::on_stop(Box::new(move || learned.learn(&runner)));
     }
+    log::event("restored", json!({ "ms": started.elapsed().as_millis() as u64 }));
 
     let session = Arc::new(Session {
         board: board.clone(),
@@ -371,13 +395,16 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         if let Some(learned) = &learned {
             learned.learn(&runner);
         }
-        return Ok(match done.status {
+        let code = match done.status {
             Some(s) => s.clamp(0, 255) as u8,
             None => {
-                eprintln!("snowglobe: the job ran out of time ({}s)", w.timeout.as_secs_f64());
+                if !done.cancelled {
+                    eprintln!("snowglobe: the job ran out of time ({}s)", w.timeout.as_secs_f64());
+                }
                 124
             },
-        });
+        };
+        return Ok(driver::end("end", code));
     }
 
     // The control socket: attach and exec from other sessions
@@ -420,7 +447,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         let _ = std::io::stdout().flush();
         let stopped = runner.wait(None);
         eprintln!("snowglobe: the guest stopped ({stopped:?})");
-        return Ok(0);
+        return Ok(driver::end("guest-stopped", 0));
     }
 
     if term::is_tty(0) && term::is_tty(1) {
@@ -460,7 +487,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
                     learned.learn(&runner);
                 }
                 term::restore();
-                std::process::exit(0);
+                std::process::exit(driver::end("guest-stopped", 0) as i32);
             });
         }
         let mut stdin = std::io::stdin();
@@ -476,7 +503,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         if let Some(learned) = &learned {
             learned.learn(&runner);
         }
-        return Ok(0);
+        return Ok(driver::end("end", 0));
     }
 
     // Piped: each line is a command; print what it printed, then end after the last one
@@ -499,7 +526,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     if timing {
         jit_stats(&runner);
     }
-    Ok(0)
+    Ok(driver::end("end", 0))
 }
 
 /// One control-socket client.

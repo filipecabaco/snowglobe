@@ -37,7 +37,7 @@ var tools = []map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":         map[string]any{"type": "string", "description": "The command line"},
-				"timeout_seconds": map[string]any{"type": "number", "description": "Give up after this long (default 300)"},
+				"timeout_seconds": map[string]any{"type": "number", "description": "Kill it, and everything it started, after this long (default 300)"},
 			},
 			"required": []string{"command"},
 		},
@@ -145,7 +145,15 @@ func (s *Server) call(name string, args map[string]any) (string, bool) {
 			return err.Error(), true
 		}
 		if res.Status == nil {
-			return string(res.Output) + "\n[timed out]", true
+			// The agent can run its next command: what this one started is gone
+			how := "timed out"
+			if res.Cancelled {
+				how = "stopped"
+			}
+			if res.Killed {
+				how += "; everything it started was killed"
+			}
+			return string(res.Output) + "\n[" + how + "]", true
 		}
 		return fmt.Sprintf("%s\n[exit %d]", strings.TrimRight(string(res.Output), "\n"), *res.Status), *res.Status != 0
 	case "write_file":

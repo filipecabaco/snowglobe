@@ -166,7 +166,7 @@ fn child(
 
     let (done, out) = job::run_workspace(board, &activity, &job)?;
     let mut w = conn;
-    let header = json!({ "status": done.status, "out": out });
+    let header = json!({ "status": done.status, "out": out, "timed_out": done.timed_out, "killed": done.killed, "ms": done.ms });
     w.write_all(format!("{header}\n").as_bytes()).map_err(|e| e.to_string())?;
     w.write_all(&done.output).map_err(|e| e.to_string())?;
     let _ = w.flush();

@@ -156,9 +156,15 @@ impl Activity {
                 self.screen_cv.notify_all();
                 self.touch();
                 *self.last_console.lock().unwrap() = Some(Instant::now());
+                if let Some(l) = crate::log::get() {
+                    l.console(b);
+                }
                 self.watchers.lock().unwrap().retain_mut(|w| w(b));
             },
             Event::Serial(b) => {
+                if let Some(l) = crate::log::get() {
+                    l.serial(b);
+                }
                 if self.echo_serial {
                     use std::io::Write;
                     let mut out = std::io::stdout();

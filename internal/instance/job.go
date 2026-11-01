@@ -28,12 +28,17 @@ type JobRequest struct {
 	Timeout float64           `json:"timeout"`
 }
 
-// JobResult is what a job left: its exit status (nil: out of time), output and out/.
+// JobResult is what a job left: its exit status (nil: out of time, or the instance stopped), output
+// and out/. Out of time or stopped, Killed says the guest killed everything the command started.
 type JobResult struct {
-	Status *int              `json:"status"`
-	Output []byte            `json:"output"`
-	Out    map[string][]byte `json:"out"`
-	Error  string            `json:"error"`
+	Status    *int              `json:"status"`
+	Output    []byte            `json:"output"`
+	Out       map[string][]byte `json:"out"`
+	TimedOut  bool              `json:"timed_out"`
+	Cancelled bool              `json:"cancelled"`
+	Killed    bool              `json:"killed"`
+	Ms        int64             `json:"ms"`
+	Error     string            `json:"error"`
 }
 
 // Job runs a job on the native instance called name.
@@ -63,6 +68,9 @@ func Job(name string, req JobRequest) (*JobResult, error) {
 	}
 	conn.SetReadDeadline(time.Now().Add(time.Duration(req.Timeout+30) * time.Second))
 	line, err := bufio.NewReaderSize(conn, 1<<20).ReadBytes('\n')
+	if errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%s stopped while the job ran (its logs say why)", name)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: no answer: %w", name, err)
 	}
@@ -83,12 +91,15 @@ func Shell(name, command string, asJSON bool, timeout float64) error {
 	if err != nil {
 		return err
 	}
-	code := 124
+	code := ExitMaxRuntime // out of time, as timeout(1) says it
+	if res.Cancelled {
+		code = ExitStopped
+	}
 	if res.Status != nil {
 		code = *res.Status
 	}
 	if asJSON {
-		out, _ := json.Marshal(map[string]any{"exit": code, "timed_out": res.Status == nil, "output": string(res.Output)})
+		out, _ := json.Marshal(map[string]any{"exit": code, "timed_out": res.TimedOut, "killed": res.Killed, "output": string(res.Output)})
 		fmt.Println(string(out))
 	} else {
 		os.Stdout.Write(res.Output)

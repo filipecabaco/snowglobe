@@ -71,6 +71,37 @@ jobs:
       - name: Test
         run: mise run test
 
+  # snowglobe-vm's own tests, on the shells guests have: dash (Debian) and BusyBox ash (Alpine).
+  # They include the job launcher run on a pty and killed with ctrl-c, as a guest's serial shell is
+  runtime:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["rust:1.99", "rust:1.99-alpine3.22"]
+    name: runtime (${{ matrix.image }})
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/cargo-cache
+          key: runtime-test-${{ matrix.image }}-${{ hashFiles('internal/tools/runtime/Cargo.lock') }}
+
+      - name: Test snowglobe-vm
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          mkdir -p ~/cargo-cache/registry ~/cargo-cache/git ~/cargo-cache/target
+          docker run --rm -v "$PWD/internal/tools/runtime:/src:ro" \
+            -v ~/cargo-cache/registry:/usr/local/cargo/registry -v ~/cargo-cache/git:/usr/local/cargo/git \
+            -v ~/cargo-cache/target:/target -e CARGO_TARGET_DIR=/target -e CARGO_NET_GIT_FETCH_WITH_CLI=true \
+            -w /src "$IMAGE" sh -c '
+              if command -v apk >/dev/null; then apk add -q --no-cache musl-dev git; fi
+              cargo test --locked'
+          sudo chown -R "$(id -u)" ~/cargo-cache
+
   # The tools image (snowglobe-vm, compiled from Rust, and the page runtime) is built once and
   # loaded by every site job; it's cached until its sources change
   tools:
@@ -235,6 +266,15 @@ jobs:
           out=$( (sleep 2; printf 'echo attached-$((40+2))\n'; sleep 3; printf '\035') | ./snowglobe attach smoke)
           echo "$out" | grep -q attached-42 || { echo "::error title=attach::$out"; exit 1; }
           ./snowglobe ps | grep -q smoke
+
+      # Driving the sandbox from a program, end to end, natively and in Docker: jobs (sh, cp, MCP,
+      # a bundle's), everything a job started killed when it runs out of time or the instance
+      # stops, --max-runtime, --stop-file, snowglobe stop, and the durable logs saying so
+      - name: Check driving curl end to end
+        if: matrix.site.name == 'curl'
+        env:
+          SNOWGLOBE_E2E_SITE: dist/curl
+        run: go test ./cmd/snowglobe -run TestE2E -v -timeout 25m
 
       # Cold, warm and 4G visits in Chromium and the exercise commands timed (bench/run.mjs), on
       # a copy made an installable app as the live demos are. Fails only if the harness does;
