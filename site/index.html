@@ -311,8 +311,9 @@
 
         <section class="section" aria-labelledby="cli-title" id="make-your-own">
           <h2 id="cli-title">Make your own</h2>
-          <p>Every run on this page came out of one command. snowglobe is a single Go binary; Docker is all
-            else it needs, and the result is a folder of static files you can host anywhere.</p>
+          <p>Every run on this page came out of one command. snowglobe is a single Go binary. It builds with
+            Docker, or with no Docker at all from an image in a registry or a saved archive, and the result is
+            a folder of static files you can host anywhere.</p>
 
           <div class="steps">
             <div class="step">
@@ -333,6 +334,7 @@ RUN apk add --no-cache python3 &amp;&amp; \
 COPY startup.py /root/startup.py
 ENV LANG=C.UTF-8 PATH=/opt/venv/bin:$PATH \
     PYTHONSTARTUP=/root/startup.py
+WORKDIR /root
 CMD ["python3"]
 LABEL snowglobe.title="Python + Rich in the browser" \
       snowglobe.ready="&gt;&gt;&gt; " \
@@ -343,8 +345,9 @@ LABEL snowglobe.title="Python + Rich in the browser" \
               <h3>Build</h3>
               <div>
                 <p>It adds a kernel and a 9p boot layer, converts the image, boots it headless until the ready
-                  text appears, snapshots it, then types the exercises and measures what they read. An excerpt of
-                  the real log from this site's build:</p>
+                  text appears, snapshots it, then types the exercises and measures what they read. With
+                  <code>--builder native</code> it needs no Docker: it pulls the image from its registry (or reads a
+                  saved archive) and boots it here. An excerpt of the real log from this site's build:</p>
 <pre>$ snowglobe build examples/python --out dist/python
 
 ==&gt; Resolve source image
@@ -354,17 +357,18 @@ LABEL snowglobe.title="Python + Rich in the browser" \
     network: none
 ==&gt; Add boot layer
 ==&gt; Convert to a 9p filesystem
-    5600 entries, 107 MB uncompressed, 4437 unique files
+    5984 entries, 157 MB uncompressed, 4842 unique files
+==&gt; Assemble page
 ==&gt; Boot and snapshot
-App ready on hvc0 after 19.966s
-Saved /out/system/state.bin.zst (13 MB)
-Exercising: t = Table("language", "year")… (0 files, 3.3s)
-Exercising: Syntax("def fib(n):…", "python") (4 files, 3.5s)
+App ready on hvc0 after 46.8s
+Saved /out/system/state.bin.zst (14 MB)
+Exercising: t = Table("language", "year")… (0 files, 3.8s)
+Exercising: Syntax("def fib(n):…", "python") (3 files, 5.2s)
 ==&gt; Write warm pack
-    warm.pack: 415 files, 8.7 MB
-    read while booting       409 files   8.5 MB
+    warm.pack: 410 files, 8.5 MB
+    read while booting       404 files   8.4 MB
     first read by: Syntax…     3 files   0.0 MB
-    never read              4018 files  36.9 MB
+    never read              4055 files  43.5 MB
 
 dist/python is ready to deploy.</pre>
               </div>
@@ -387,10 +391,12 @@ $ snowglobe pool dist</pre>
             <div class="step">
               <h3>Run</h3>
               <div>
-                <p>The same site runs without a browser, in a sandboxed container: a session in your terminal, lines piped
-                  in as commands, or a long-lived instance that scripts and agents drive with <code>exec</code>. It runs from
-                  a folder, from a site's URL (try <code>snowglobe run https://filipecabaco.github.io/snowglobe/python/</code>),
-                  or from one tarball on a CDN.</p>
+                <p>The same site runs without a browser: in a sandboxed container, or natively with no Docker, where
+                  the emulator sandboxes itself (Landlock and seccomp on Linux, Seatbelt on macOS). A session in your
+                  terminal, lines piped in as commands, or a long-lived instance that scripts drive with
+                  <code>exec</code>. It runs from a folder, from a site's URL (try
+                  <code>snowglobe run https://filipecabaco.github.io/snowglobe/python/</code>), or from one tarball on a
+                  CDN, and <code>bundle</code> makes it a single executable.</p>
 <pre><span class="dim"># a session in your terminal; ctrl-] quits</span>
 $ snowglobe run dist/python
 <span class="dim"># from where it's hosted: a site's URL, or one tarball</span>
@@ -399,7 +405,27 @@ $ snowglobe run https://cdn.example.com/python.tar.gz
 <span class="dim"># one instance, driven command by command</span>
 $ snowglobe run dist/python --name py --detach
 $ snowglobe exec py 'sum(range(10))'
+45
+<span class="dim"># no Docker: one file, the emulator and the site</span>
+$ snowglobe bundle dist/python -o python
+$ echo 'sum(range(10))' | ./python
 45</pre>
+              </div>
+            </div>
+            <div class="step">
+              <h3>Sandbox</h3>
+              <div>
+                <p>A run is also a sandbox for agents, job runners and CI, on machines without KVM. Jobs run on the
+                  guest's own shell beside the app: files in, a command, its output, exit status and files back. A job
+                  out of time is killed with everything it started; a run ends at <code>--max-runtime</code> or when its
+                  <code>--stop-file</code> appears, and <code>--log-dir</code> keeps a durable record of every job.</p>
+<pre><span class="dim"># a shell job, whatever the app is</span>
+$ snowglobe run dist/python --name box --detach --runtime native
+$ snowglobe sh box --timeout 30 'python3 -c "print(6*7)"'
+42
+$ snowglobe cp ./data box:/root/data
+<span class="dim"># an isolated Linux machine for an agent, over MCP</span>
+$ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
               </div>
             </div>
           </div>
@@ -414,11 +440,16 @@ $ snowglobe exec py 'sum(range(10))'
                 <tr><td>pwa &lt;site&gt;</td><td class="wrap-cell">make it an installable app that works offline once it has run; <code>--name</code> and <code>--short-name</code> override the title</td></tr>
                 <tr><td>pool &lt;dir&gt;</td><td class="wrap-cell">let every site under a directory share one blob store, for hosting several together</td></tr>
                 <tr><td>pack &lt;site&gt; [-o file]</td><td class="wrap-cell">write a site as one tarball (.tar.gz or .tar.zst) to publish on a CDN</td></tr>
-                <tr><td>run [site | url]</td><td class="wrap-cell">run a site without a browser, in a sandboxed container: a session in a terminal, or piped lines typed in as commands. Takes a folder, a tarball, or a URL to either; <code>--detach --name N</code> keeps it running, and <code>-p 8000:8000</code> forwards a port into a guest built with a network</td></tr>
+                <tr><td>run [site | url]</td><td class="wrap-cell">run a site without a browser, in a sandboxed container or natively (<code>--runtime native</code>, no Docker): a session in a terminal, or piped lines typed in as commands. Takes a folder, a tarball, or a URL to either; <code>--detach --name N</code> keeps it running, <code>-p 8000:8000</code> forwards a port into a guest built with a network, and <code>--max-runtime</code>, <code>--stop-file</code> and <code>--log-dir</code> let a program drive it</td></tr>
+                <tr><td>bundle &lt;site&gt; [-o file]</td><td class="wrap-cell">make a site one executable, the emulator and the site together, that runs it with no Docker or hypervisor and takes one-shot jobs (<code>--workspace</code>, <code>--cmd</code>)</td></tr>
                 <tr><td>exec &lt;name&gt; &lt;command&gt;</td><td class="wrap-cell">type a command into a running instance and print only its output</td></tr>
                 <tr><td>attach &lt;name&gt;</td><td class="wrap-cell">join a running instance's session; ctrl-] detaches and leaves it running</td></tr>
+                <tr><td>sh &lt;name&gt; &lt;command&gt;</td><td class="wrap-cell">run a shell command on a native instance, whatever its app is: its output and exit status (<code>--json</code>); out of time, it and everything it started are killed</td></tr>
+                <tr><td>cp &lt;src&gt; &lt;dst&gt;</td><td class="wrap-cell">copy files or directories in or out of a native instance, <code>name:/path</code> on one side</td></tr>
+                <tr><td>mcp &lt;site | url&gt;</td><td class="wrap-cell">serve a site to an agent over MCP (stdio): an isolated Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code></td></tr>
+                <tr><td>warm &lt;site&gt; &lt;reads.json&gt;</td><td class="wrap-cell">add the files a run recorded (<code>run --record-reads</code>) to the site's preloaded files</td></tr>
                 <tr><td>ps</td><td class="wrap-cell">list running instances</td></tr>
-                <tr><td>stop &lt;name&gt;</td><td class="wrap-cell">throw a running instance away</td></tr>
+                <tr><td>stop &lt;name&gt;</td><td class="wrap-cell">throw a running instance away (natively, it kills its job and logs why first)</td></tr>
               </tbody>
             </table>
           </div>
@@ -435,6 +466,10 @@ $ snowglobe exec py 'sum(range(10))'
                 <tr><td>--title TEXT</td><td>snowglobe.title</td><td class="wrap-cell">the page title</td></tr>
                 <tr><td>--warm REGEX</td><td>snowglobe.warm</td><td class="wrap-cell">extra guest paths to preload</td></tr>
                 <tr><td>--network fetch</td><td>snowglobe.network</td><td class="wrap-cell">give the guest a network: HTTP(S) and WebSockets leave as the visitor's own browser requests, so CORS applies; none by default</td></tr>
+                <tr><td>--tunnel [HOST:]PORT=URL</td><td>snowglobe.tunnels</td><td class="wrap-cell">carry the guest's other TCP (a database, Redis) to that port over a WebSocket to URL; <code>--tunnel-token URL</code> fetches a fresh token per connection, so no credential ships with the site</td></tr>
+                <tr><td>--cpus N</td><td>snowglobe.cpus</td><td class="wrap-cell">guest CPUs, 1 to 8, each in a Web Worker; 1 by default</td></tr>
+                <tr><td>--builder native</td><td></td><td class="wrap-cell">build with no Docker, from an image reference or a saved archive</td></tr>
+                <tr><td>--sandbox</td><td></td><td class="wrap-cell">keep the guest's file cache in the snapshot instead of dropping it: for bundles and native runs, which carry the files anyway</td></tr>
                 <tr><td>--out DIR</td><td></td><td class="wrap-cell">where the site is written, dist by default</td></tr>
               </tbody>
             </table>

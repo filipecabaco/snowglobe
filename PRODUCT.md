@@ -22,7 +22,9 @@ People who might package their own project with snowglobe are secondary; the rep
 snowglobe is a Go CLI that packages a Docker image (arm64 Alpine) into a static website that runs
 it in the browser: real Linux on a 64-bit ARM CPU emulated in WebAssembly (armless), restored from a
 snapshot taken once the app was ready. The demo page showcases ten such runs, one per language, a shell of ordinary tools and the Supabase stack,
-each a small project with a real dependency.
+each a small project with a real dependency. The same sites also run outside a browser (in a
+container, natively with no Docker, or as one executable) as sandboxes that agents, job runners
+and CI drive; that is the repo's story more than the page's, which shows it in "Make your own".
 
 ## Positioning
 
@@ -35,7 +37,7 @@ shell, not a subset runtime: the real program built from a Dockerfile.
 
 - Demos open in their own browser windows; the index page presents them and the runs.
 - Each demo build emits measured data: `warm-report.json` (files read by phase) and the snapshot.
-- Demos: Elixir IEx (plain IEx from Alpine packages), PostgreSQL (psql against a Postgres 18 server), Elixir + Postgres (Ecto/Postgrex, PostgreSQL 18 in the guest), Python + Rich, TypeScript + Zod (tsx), Go + Bubble Tea
+- Demos: Supabase (the CLI's native stack and a notes app on it), Elixir IEx (plain IEx from Alpine packages), PostgreSQL (psql against a Postgres 18 server), Elixir + Postgres (Ecto/Postgrex, PostgreSQL 18 in the guest), Python + Rich, TypeScript + Zod (tsx), Go + Bubble Tea
   (Game of Life), Rust + clap (jtab), Java + Gson (jshell, OpenJDK 21), curl + jq (a shell, network on).
 - Repository: https://github.com/filipecabaco/snowglobe. Site: https://filipecabaco.github.io/snowglobe/
 

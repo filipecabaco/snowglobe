@@ -140,7 +140,7 @@ components:
 
 **Creative North Star: "The Measured Spec Sheet"**
 
-snowglobe's demo page is a modern Swiss spec sheet for six sandboxed machines. White paper, near-black ink, one signal orange-red. Switzer sits large and tight on a strict two-zone grid (an 8-column main column of runs, a 4-column rail holding the live "Your runs" ledger). The numbers the build measured, like snapshot size, ready time, preloaded and on-demand bytes, are set at headline scale. They are the decoration. Nothing else is.
+snowglobe's demo page is a modern Swiss spec sheet for ten sandboxed machines. White paper, near-black ink, one signal orange-red. Switzer sits large and tight on a strict two-zone grid (an 8-column main column of runs, a 4-column rail holding the live "Your runs" ledger). The numbers the build measured, like snapshot size, ready time, preloaded and on-demand bytes, are set at headline scale. They are the decoration. Nothing else is.
 
 The page is quiet until something runs. Each run's terminal is a crisp black inset panel. At rest it shows the transcript recorded at build time, and "Run here" swaps in the live machine in the same footprint. Signal colour appears only on the run control and on live state: the pulsing ledger dot, the restore progress bar, and the masthead dot, which lights up only while a run is live. Structure comes from hairlines. Full-ink 1px rules open each major block, and pale 1px rules divide rows.
 
@@ -231,8 +231,8 @@ Corners are nearly square. Panels and code blocks use a 6px radius. Every button
 ### Buttons
 Pill controls with confident fills and a single colour change on hover.
 - **Shape:** full pill (999px), 44px tall, 0 18px padding, Switzer 550 at 15px.
-- **Run (primary):** Signal Vermilion fill and border with white text. There is one per run, plus the hero's "Run Python + Rich here".
-- **Outline (secondary):** transparent with a 1px ink border and ink text. Used for "New window" (with a trailing 14px arrow icon) and "See all six runs".
+- **Run (primary):** Signal Vermilion fill and border with white text: "Run here", one per run.
+- **Outline (secondary):** transparent with a 1px ink border and ink text. Used for "New window" (with a trailing 14px arrow icon) and the live bar's "Stop".
 - **Hover:** both variants fill with ink and switch to white text, with a 0.2s `cubic-bezier(.2,.8,.2,1)` colour transition.
 - **Pressed:** a running "Run here" becomes "Stop" with `aria-pressed="true"` and an ink fill.
 

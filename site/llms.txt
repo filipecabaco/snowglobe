@@ -3,36 +3,70 @@
 > snowglobe is a Go CLI that turns a Docker image into a static website that runs it in the
 > browser: real Linux on a 64-bit ARM CPU emulated in WebAssembly (armless), restored from a
 > snapshot taken once the app was ready. The output is a folder of static files (GitHub Pages
-> works); no server runs the program. Guests must be arm64 Alpine images (FROM alpine, built for
-> arm64, or FROM arm64v8/alpine). Docker is the only requirement.
+> works); no server runs the program. The same site also runs headlessly from the command line,
+> in a container or natively with no Docker (the emulator sandboxes itself), as a single
+> executable, and as a sandbox that agents and job runners drive, on machines without KVM.
+> Guests must be arm64 Alpine images (FROM alpine, built for arm64, or FROM arm64v8/alpine).
 
-Live demos: https://filipecabaco.github.io/snowglobe/ (Elixir IEx, PostgreSQL, Elixir + Postgres,
-Python + Rich, TypeScript + Zod, Go + Bubble Tea, Rust + clap, Java + Gson, curl + jq, Supabase).
-Source and README: https://github.com/filipecabaco/snowglobe
+Live demos: https://filipecabaco.github.io/snowglobe/ (Supabase, Elixir IEx, PostgreSQL,
+Elixir + Postgres, Python + Rich, TypeScript + Zod, Go + Bubble Tea, Rust + clap, Java + Gson,
+curl + jq). Source and README: https://github.com/filipecabaco/snowglobe
+
+Install: a release binary (Linux or macOS, amd64 or arm64) from
+https://github.com/filipecabaco/snowglobe/releases, or
+`go install github.com/filipecabaco/snowglobe/cmd/snowglobe@latest`.
 
 ## Commands
 
-- `snowglobe build <dir with a Dockerfile | image ref> [flags]` builds the site into `--out` (default `dist`).
+- `snowglobe build <dir with a Dockerfile | image ref | image archive> [flags]` builds the site
+  into `--out` (default `dist`). With Docker by default; `--builder native` (or
+  `SNOWGLOBE_BUILDER=native`) needs no Docker: it pulls the image from its registry (Docker Hub,
+  GHCR, any registry serving public images) or reads a `docker save` / OCI layout archive.
 - `snowglobe serve [dir] [--port N]` previews a built site on localhost.
 - `snowglobe pool <dir>` makes every site under a directory share one content-addressed blob store.
 - `snowglobe pwa <site> [--name N] [--short-name N]` makes a built site an installable Progressive
-  Web App: manifest, icons, and a service worker that keeps it working offline once it has run.
-  Run it after `pool`. Every demo on the live site is installable.
+  Web App that works offline once it has run. Run it after `pool`.
 - `snowglobe pack <site> [-o site.tar.gz]` writes a site as one self-contained tarball (.tar.gz or
   .tar.zst, pooled blobs included) to publish on a CDN.
-- `snowglobe run [site] [--name N] [--detach]` restores a built site headlessly in a sandboxed
-  container (unprivileged, read-only, memory-capped, offline unless built with a network). In a
-  terminal it is an interactive session (ctrl-] quits); with stdin piped, each line is typed in as a
-  command and the output printed as plain text. The site can be a directory, a tarball, a tarball
-  URL, or a deployed site's URL (e.g. https://filipecabaco.github.io/snowglobe/python/): it is
-  fetched into a local cache first and revalidated on later runs. `-p HOST:GUEST` (repeatable)
-  forwards a host port to a guest port, bound to 127.0.0.1 unless given as IP:HOST:GUEST; it needs
-  a site built with `--network fetch`.
-- `snowglobe exec <name> <command>` types one command into a detached instance and prints only what
-  it printed (plain text when piped): the way for scripts and agents to drive a REPL.
-- `snowglobe attach <name>` joins a detached instance (ctrl-] detaches); `snowglobe ps` lists them;
-  `snowglobe stop <name>` throws one away.
-- `snowglobe version`
+- `snowglobe run [site] [--name N] [--detach] [--runtime docker|native]` restores a built site
+  headlessly. `docker` (the default) is a sandboxed container (unprivileged, read-only,
+  memory-capped, offline unless built with a network); `native` (or `SNOWGLOBE_RUNTIME=native`, and
+  whenever there is no Docker) runs snowglobe-vm here, which sandboxes itself: no_new_privs,
+  Landlock and seccomp on Linux, Seatbelt on macOS. In a terminal it is an interactive session
+  (ctrl-] quits); with stdin piped, each line is typed in as a command and the output printed as
+  plain text. The site can be a directory, a tarball, a tarball URL, or a deployed site's URL
+  (e.g. https://filipecabaco.github.io/snowglobe/python/), fetched into a local cache first.
+  - `-p HOST:GUEST` (repeatable) forwards a host port to a guest port (127.0.0.1 unless
+    IP:HOST:GUEST); needs a site built with `--network fetch`.
+  - `--max-runtime DURATION` ends the run after that long (exit 124); `--stop-file PATH` ends it
+    once PATH exists (exit 143). Either way the job running in the guest is killed first.
+  - `--log-dir DIR` keeps durable logs: `console.log` (the app's terminal), `serial.log` (kernel
+    messages, the job shell) and `events.jsonl` (start, restored, job_start, job_end, stop; one
+    JSON object a line). Named native instances log to the user cache's `snowglobe/logs/<name>`.
+  - `--tunnel [HOST:]PORT=URL`, `--tunnel-token URL`, `--allow-private`, `--record-reads FILE`.
+- `snowglobe exec <name> <command>` types one command into a running instance's app and prints
+  only what it printed (plain text when piped): the way to drive a REPL.
+- `snowglobe sh <name> [--json] [--timeout SECS] <command>` runs a shell command on a native
+  instance's serial root shell, whatever its app is, with the app's environment: its output and
+  exit status (`{"exit", "output", "timed_out", "killed"}` with `--json`). Out of time (default
+  300 s), the command and everything it started are killed (exit 124).
+- `snowglobe cp <src> <dst>` copies files or directories in or out of a native instance
+  (`name:/path` on one side).
+- `snowglobe mcp <site | url> [--name N] [--keep] [--log-dir DIR]` serves a site to an agent as an
+  MCP server over stdio: an isolated Linux machine with `run_command` (with `timeout_seconds`),
+  `write_file` and `read_file`. No Docker, KVM or privileges. Example:
+  `claude mcp add sandbox -- snowglobe mcp https://filipecabaco.github.io/snowglobe/python/`
+- `snowglobe bundle <site | url> [-o FILE] [--target linux|darwin] [--runtime snowglobe-vm]`
+  makes a site one executable (snowglobe-vm with the site appended) that takes `run`'s flags, plus
+  one-shot jobs: `--workspace DIR --cmd COMMAND [--env K=V] [--env-file JSON] [--timeout SECS]`
+  writes DIR into a fresh machine, runs the command, and returns its output, exit status and
+  `out/`. `--serve SOCKET --jobs-root DIR` restores once and forks per job; `--server SOCKET` is
+  its client.
+- `snowglobe attach <name>` joins a running instance (ctrl-] detaches); `snowglobe ps` lists them;
+  `snowglobe stop <name>` stops one (natively: through its stop file, killing its job and logging
+  why).
+- `snowglobe warm <site> <reads.json ...>` adds the files runs recorded to the site's warm pack.
+- `snowglobe tools` builds or finds the tools image; `snowglobe version`.
 
 ## Build flags (and the image labels they override)
 
@@ -40,10 +74,16 @@ Source and README: https://github.com/filipecabaco/snowglobe
 - `--ready TEXT` / `snowglobe.ready`: snapshot once this text appears on the console (default: after 5 s of quiet).
 - `--title TEXT` / `snowglobe.title`: the page title.
 - `--memory MB` / `snowglobe.memory`: guest RAM (default 512).
+- `--cpus N` / `snowglobe.cpus`: guest CPUs, 1 to 8 (default 1); each runs in a Web Worker.
 - `--exercise CMD` (repeatable) / `snowglobe.exercise` (JSON array): commands typed after the snapshot; the files they read are preloaded.
 - `--warm REGEX` / `snowglobe.warm`: extra guest paths to preload.
 - `--network fetch` / `snowglobe.network`: give the guest a network (default `none`).
-- `--cpus N` / `snowglobe.cpus`: guest CPUs, 1 to 8 (default 1); each runs in a Web Worker.
+- `--tunnel [HOST:]PORT=URL` (repeatable) / `snowglobe.tunnels`: carry other TCP over a WebSocket.
+- `--tunnel-token URL` / `snowglobe.tunnel-token`: a fresh token per tunnel connection, put where the URL says `{token}`.
+- `--allow-private`: let the build's snapshot reach loopback and private addresses.
+- `--builder docker|native`: build with Docker (default) or with none.
+- `--sandbox`: keep the guest's file cache in the snapshot, for bundles and native runs.
+- `--no-chunks`: don't split large files into content-defined chunks.
 
 Example Dockerfile labels:
 
@@ -58,9 +98,19 @@ Every request leaves as the visitor's own browser request; there is no proxy ser
 - HTTPS (port 443): the machine terminates TLS 1.3 itself (armless's web relay) with a per-build CA
   that only the guest trusts, then the request is replayed with fetch("https://...").
 - WebSockets (ws://, wss://): the guest's upgrade opens a browser WebSocket; messages pass through.
-- In `snowglobe run`, the same requests leave from the container (through HTTPS_PROXY/HTTP_PROXY if
-  set); other TCP connections are made directly; private addresses are refused.
-- Limits: CORS applies (servers without it answer 502), no raw TCP or UDP.
+- Other TCP: only to destinations the site tunnels (`--tunnel`), over a WebSocket.
+- In `snowglobe run`, the same requests leave from the host or the container (through
+  HTTPS_PROXY/HTTP_PROXY if set); other TCP connections are made directly; private addresses are
+  refused unless `--allow-private`.
+- Limits in the browser: CORS applies (servers without it answer 502), no raw TCP or UDP.
+
+## Isolation
+
+The guest is an emulated machine whose only ways out are its terminal, its 9p filesystem (read
+from the site, written to memory) and, with a network, the web relay. Around the emulator: in the
+browser, the page's sandbox; natively, the process's own sandbox (no new programs or processes,
+no files beyond the site, its cache, socket, logs and a job's workspace); in Docker, the container
+as well. `SNOWGLOBE_SANDBOX=strict` refuses to run without the whole native sandbox.
 
 ## What a built site contains
 
