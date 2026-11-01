@@ -315,6 +315,19 @@ without KVM.
 $ ./toolkit --workspace job --cmd 'sh main.sh' --env 'EXCLAVE_ASSIGNS={"n":42}'
 ```
 
+**Serving jobs.** `--serve SOCKET --jobs-root DIR` restores the snapshot once and answers each
+job with a fork of it: the job shares the restored machine copy-on-write, gets fresh randomness
+of its own, and nothing it does reaches the next one. `--server SOCKET` with a job's flags is the
+client, a drop-in for the one-shot form. On Linux the server holds ~92 MB and a job ~13 MB of its
+own; an empty job answers in ~0.1 s (one-shot: ~0.3 s) and ten at once in ~0.3 s. The server
+takes the part of the sandbox a fork inherits (no_new_privs, Landlock), and each job adds the
+rest before it starts a thread (`snowglobe-vm sandbox-check --forked` shows both halves).
+
+```console
+$ ./toolkit --serve /run/toolkit.sock --jobs-root /var/lib/jobs &
+$ ./toolkit --server /run/toolkit.sock --workspace /var/lib/jobs/1 --cmd 'sh main.sh'
+```
+
 A bundle is Linux on this machine's architecture (snowglobe-vm from the tools image) by default;
 `--target darwin` makes one for macOS on Apple silicon (this release's snowglobe-vm, fetched
 once), and `--runtime` (or `SNOWGLOBE_VM`) takes any snowglobe-vm you built.

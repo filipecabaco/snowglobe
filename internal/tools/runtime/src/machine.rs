@@ -24,6 +24,17 @@ pub struct Spec {
 }
 
 pub fn new_vm(spec: &Spec, site: &Site) -> Result<(Vm<NativePlatform>, Arc<Clock>), String> {
+    new_vm_jit(spec, site, true)
+}
+
+/// Whether the JIT is on (ARMLESS_JIT=off keeps the interpreter anyway).
+pub fn jit_wanted() -> bool {
+    std::env::var("ARMLESS_JIT").map_or(true, |v| v != "off")
+}
+
+/// `new_vm`, with the JIT left off when `jit` is false: its compiler threads would not survive a
+/// fork (`serve` turns it on in each child, `enable_jit`).
+pub fn new_vm_jit(spec: &Spec, site: &Site, jit: bool) -> Result<(Vm<NativePlatform>, Arc<Clock>), String> {
     let config = Config {
         memory_size: spec.memory_mb << 20,
         cpus: spec.cpus,
@@ -38,7 +49,7 @@ pub fn new_vm(spec: &Spec, site: &Site) -> Result<(Vm<NativePlatform>, Arc<Clock
     // Hot guest code is compiled to host code (armless's native JIT): booting, exercising and
     // running a site spend most of their time in emulated code. ARMLESS_JIT=off keeps the
     // interpreter; where the host can't run generated code the CPU stays interpreted anyway.
-    if std::env::var("ARMLESS_JIT").map_or(true, |v| v != "off") {
+    if jit && jit_wanted() {
         for cpu in vm.cpus.iter_mut().filter(|c| !c.jit.enabled) {
             cpu.enable_native_jit();
         }
@@ -280,5 +291,18 @@ impl Load {
         self.last = now;
         self.at = Instant::now();
         rate > BUSY_RATE
+    }
+}
+
+/// Turn the JIT on for every CPU of a machine not running yet (after `new_vm_jit(.., false)`).
+pub fn enable_jit(runner: &armless::runner::Runner, cpus: usize) {
+    if jit_wanted() {
+        for i in 0..cpus {
+            runner.with_cpu(i, |c| {
+                if !c.jit.enabled {
+                    c.enable_native_jit();
+                }
+            });
+        }
     }
 }

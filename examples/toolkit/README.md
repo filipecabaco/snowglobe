@@ -22,6 +22,13 @@ Every job restores the machine from its snapshot (~200 ms), so nothing carries o
 job to the next. `--env-file FILE` (a JSON object) passes secrets without putting them on a
 command line, `--timeout SECS` bounds the job (exit 124), and the exit status is the command's.
 
+To run many jobs, serve them: the snapshot is restored once and each job is a fork of it.
+
+```console
+$ ./toolkit --serve /tmp/toolkit.sock --jobs-root "$PWD" &
+$ ./toolkit --server /tmp/toolkit.sock --workspace job --cmd 'sh main.sh'
+```
+
 ## A workflow
 
 [`workflow.exs`](workflow.exs) chains jobs the way Exclave chains runs: each step's files are
@@ -67,8 +74,18 @@ Measured on an Apple M-series host, the Linux numbers in an unprivileged contain
 | jq + sqlite report | 0.45 s | 140 MB |
 | tesseract, one page | 5.8 s | 386 MB |
 
-A job's memory is what its guest touches, not the machine's size (768 MB here), so a small
-VPS runs dozens of light jobs at once.
+Served (`--serve`), on Linux:
+
+| | |
+|-|-:|
+| the server, restored once | 92 MB |
+| a running job, of its own (the rest shared with the server) | 13 MB |
+| an empty job | 0.10 s |
+| the jq + sqlite report | 0.26 s |
+| ten empty jobs at once | 0.27 s |
+
+A job's memory is what its guest touches, not the machine's size (768 MB here): one-shot, a
+small VPS runs dozens of light jobs at once; served, hundreds.
 
 The CPU is emulated, and that is the trade. Glue (shell, jq, sqlite, python scripts, file
 conversions) is dominated by the restore. Heavy vector and floating-point code is slower than

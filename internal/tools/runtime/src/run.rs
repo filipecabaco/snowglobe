@@ -187,16 +187,8 @@ impl Session {
     }
 }
 
-/// `run <site dir>`, or (`bundled`) the site this executable carries.
-pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
-    let site = match bundled {
-        Some(site) => site,
-        None => {
-            let dir = PathBuf::from(args.positional.first().ok_or("run needs a site directory")?);
-            // A pooled site keeps its blobs in a store shared with its neighbours (--blobs)
-            Site::dir(&dir, args.get("blobs").map(std::path::Path::new))?
-        },
-    };
+/// A site's run.json, the machine it describes, and its title.
+pub fn site_spec(site: &Site) -> Result<(serde_json::Value, Spec, String), String> {
     let info: serde_json::Value = serde_json::from_slice(
         &site.file("run.json").ok_or_else(|| format!("{} isn't a built snowglobe site", site.describe()))?,
     )
@@ -207,6 +199,28 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         network: info["network"].as_str().unwrap_or("none").to_string(),
     };
     let title = info["title"].as_str().unwrap_or("snowglobe").to_string();
+    Ok((info, spec, title))
+}
+
+/// `run <site dir>`, or (`bundled`) the site this executable carries.
+pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
+    // A job for a serving process: no machine here
+    if let Some(socket) = args.get("server") {
+        return crate::serve::client(args, socket);
+    }
+    let site = match bundled {
+        Some(site) => site,
+        None => {
+            let dir = PathBuf::from(args.positional.first().ok_or("run needs a site directory")?);
+            // A pooled site keeps its blobs in a store shared with its neighbours (--blobs)
+            Site::dir(&dir, args.get("blobs").map(std::path::Path::new))?
+        },
+    };
+    // Jobs from one restore, each a fork of it
+    if let Some(socket) = args.get("serve") {
+        return crate::serve::main(args, site, socket);
+    }
+    let (info, spec, title) = site_spec(&site)?;
     let socket = args.get("socket").unwrap_or(SOCKET).to_string();
 
     let env_file: Vec<(String, String)> = match args.get("env-file") {

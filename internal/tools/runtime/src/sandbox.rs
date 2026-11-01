@@ -33,8 +33,22 @@ pub struct Policy {
     pub network: bool,
 }
 
+/// Which part of the sandbox to apply: all of it (a run), or split around fork (`serve`): the
+/// parent takes what its children inherit and still lets it fork (no_new_privs, Landlock); each
+/// child adds what forbids new processes (seccomp, Seatbelt) before it starts a thread.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    Whole,
+    Parent,
+    Child,
+}
+
 /// Apply the policy. Returns what is in force, for the run's banner.
 pub fn apply(p: &Policy) -> Result<String, String> {
+    apply_stage(p, Stage::Whole)
+}
+
+pub fn apply_stage(p: &Policy, stage: Stage) -> Result<String, String> {
     let mode = std::env::var("SNOWGLOBE_SANDBOX").unwrap_or_default();
     if mode == "off" {
         return Ok("not sandboxed (SNOWGLOBE_SANDBOX=off)".into());
@@ -42,7 +56,7 @@ pub fn apply(p: &Policy) -> Result<String, String> {
     for d in &p.write {
         let _ = std::fs::create_dir_all(d);
     }
-    let (applied, missing) = imp::apply(p);
+    let (applied, missing) = imp::apply(p, stage);
     if mode == "strict" && !missing.is_empty() {
         return Err(format!("sandbox: {} unavailable (SNOWGLOBE_SANDBOX=strict)", missing.join(", ")));
     }
@@ -87,24 +101,28 @@ mod imp {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
-    pub fn apply(p: &Policy) -> (Vec<String>, Vec<String>) {
+    pub fn apply(p: &Policy, stage: Stage) -> (Vec<String>, Vec<String>) {
         let mut applied = Vec::new();
         let mut missing = Vec::new();
-        // SAFETY: plain prctl; needed for both Landlock and seccomp without privileges
-        if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } == 0 {
-            applied.push("no_new_privs".to_string());
-        } else {
-            missing.push("no_new_privs".to_string());
+        if stage != Stage::Child {
+            // SAFETY: plain prctl; needed for both Landlock and seccomp without privileges
+            if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } == 0 {
+                applied.push("no_new_privs".to_string());
+            } else {
+                missing.push("no_new_privs".to_string());
+            }
+            match landlock(p) {
+                Ok(what) => applied.push(what),
+                Err(e) => missing.push(format!("landlock ({e})")),
+            }
+            rlimits();
         }
-        match landlock(p) {
-            Ok(what) => applied.push(what),
-            Err(e) => missing.push(format!("landlock ({e})")),
+        if stage != Stage::Parent {
+            match seccomp() {
+                Ok(()) => applied.push("seccomp".to_string()),
+                Err(e) => missing.push(format!("seccomp ({e})")),
+            }
         }
-        match seccomp() {
-            Ok(()) => applied.push("seccomp".to_string()),
-            Err(e) => missing.push(format!("seccomp ({e})")),
-        }
-        rlimits();
         (applied, missing)
     }
 
@@ -421,7 +439,11 @@ mod imp {
         format!("\"{}\"", p.display().to_string().replace('\\', "\\\\").replace('"', "\\\""))
     }
 
-    pub fn apply(p: &Policy) -> (Vec<String>, Vec<String>) {
+    pub fn apply(p: &Policy, stage: Stage) -> (Vec<String>, Vec<String>) {
+        // Seatbelt forbids forking, so a parent leaves it to each child
+        if stage == Stage::Parent {
+            return (vec!["seatbelt per job".into()], vec![]);
+        }
         let subpaths = |v: &[PathBuf]| v.iter().map(|d| format!("(subpath {})", quoted(d))).collect::<Vec<_>>().join(" ");
         let mut writable = p.write.clone();
         writable.extend(p.socket_dir.iter().cloned());
@@ -479,7 +501,7 @@ mod imp {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod imp {
     use super::*;
-    pub fn apply(_: &Policy) -> (Vec<String>, Vec<String>) {
+    pub fn apply(_: &Policy, _: Stage) -> (Vec<String>, Vec<String>) {
         (vec![], vec!["a sandbox for this system".into()])
     }
 }
@@ -491,17 +513,41 @@ pub fn parent_of(p: &Path) -> Option<PathBuf> {
 
 /// `snowglobe-vm sandbox-check`: sandbox this process as a run without a network would be, then
 /// try what it must not be able to do. Exits non-zero if any of it worked.
-pub fn check() -> Result<u8, String> {
+///
+/// `--forked` checks the split a serving process uses: the parent's stage, a fork, then the
+/// child's stage, and the attempts made in the child.
+pub fn check(forked: bool) -> Result<u8, String> {
     let scratch = std::env::temp_dir().join(format!("snowglobe-sandbox-check-{}", std::process::id()));
     let allowed = scratch.join("cache");
-    let state = apply(&Policy {
-        read: vec![],
-        write: vec![allowed.clone()],
-        socket_dir: None,
-        bind: vec![],
-        network: false,
-    })?;
-    println!("{state}");
+    let policy = Policy { read: vec![], write: vec![allowed.clone()], socket_dir: None, bind: vec![], network: false };
+    if forked {
+        println!("parent: {}", apply_stage(&policy, Stage::Parent)?);
+        // SAFETY: single-threaded here; the child runs the checks and exits
+        match unsafe { libc::fork() } {
+            0 => {
+                let code = apply_stage(&policy, Stage::Child).map_or(2, |s| {
+                    println!("child: {s}");
+                    attempts(&scratch, &allowed)
+                });
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                // SAFETY: leave the child without unwinding into the parent's code
+                unsafe { libc::_exit(code as i32) };
+            },
+            -1 => return Err(format!("fork: {}", std::io::Error::last_os_error())),
+            pid => {
+                let mut status = 0;
+                // SAFETY: waiting for our own child
+                unsafe { libc::waitpid(pid, &mut status, 0) };
+                return Ok(if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) as u8 } else { 1 });
+            },
+        }
+    }
+    println!("{}", apply(&policy)?);
+    Ok(attempts(&scratch, &allowed))
+}
+
+/// What a sandboxed run must not be able to do, tried; 0 if none of it worked.
+fn attempts(scratch: &Path, allowed: &Path) -> u8 {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/root".into());
     let mut escaped = 0;
     let mut try_it = |what: &str, worked: bool| {
@@ -520,5 +566,9 @@ pub fn check() -> Result<u8, String> {
     println!("  {} write the cache (must work)", if ok { "ok" } else { "FAILED" });
     let threads = std::thread::spawn(|| 1).join().is_ok();
     println!("  {} start a thread (must work)", if threads { "ok" } else { "FAILED" });
-    Ok(if escaped == 0 && ok && threads { 0 } else { 1 })
+    if escaped == 0 && ok && threads {
+        0
+    } else {
+        1
+    }
 }

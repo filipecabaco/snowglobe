@@ -16,6 +16,7 @@ mod machine;
 mod profile;
 mod run;
 mod sandbox;
+mod serve;
 mod site;
 mod snapshot;
 mod term;
@@ -34,6 +35,8 @@ fn usage() -> ExitCode {
   snowglobe-vm run <site dir> [--blobs DIR] [--detached] [--socket PATH] [--forward PORT:GUEST ...]
                    [--tunnel [HOST:]PORT=URL ...] [--allow-private] [--record-reads FILE]
                    [--workspace DIR --cmd COMMAND [--env K=V ...] [--env-file JSON] [--timeout SECS]]
+                   [--serve SOCKET --jobs-root DIR [--max-jobs N]]   (jobs forked from one restore)
+                   [--server SOCKET --workspace DIR --cmd COMMAND ...]  (a job for --serve)
   (a bundle takes run's flags itself: ./site --workspace DIR --cmd COMMAND)
   snowglobe-vm exec [--socket PATH] <command>
   snowglobe-vm attach [--socket PATH]"
@@ -84,7 +87,7 @@ impl Args {
     }
 }
 
-const RUN_FLAGS: &[&str] = &["blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout"];
+const RUN_FLAGS: &[&str] = &["blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "server"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -101,7 +104,7 @@ fn main() -> ExitCode {
         "snapshot" => Args::parse(rest, &["memory", "cpus", "build-cpus", "network", "ready", "exercise", "cols", "rows", "tunnel"])
             .and_then(|a| snapshot::main(&a)),
         "run" => Args::parse(rest, RUN_FLAGS).and_then(|a| run::main(&a, None)),
-        "sandbox-check" => sandbox::check(),
+        "sandbox-check" => sandbox::check(rest.iter().any(|a| a == "--forked")),
         "exec" => {
             // Everything after the flags is the command, as typed
             let (socket, words) = match rest.first().map(String::as_str) {
