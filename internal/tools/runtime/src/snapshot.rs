@@ -31,6 +31,11 @@ use crate::text;
 use crate::Args;
 
 const TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// A boot that has printed, fetched and computed nothing for this long, before its app is ready,
+/// has stalled (SNOWGLOBE_BOOT_STALL_SECS says otherwise): its CPUs' state is printed and it ends
+/// with BOOT_STALLED, which the build answers by booting once more.
+const STALL: Duration = Duration::from_secs(5 * 60);
+pub const BOOT_STALLED: u8 = 75;
 /// Without --ready, the app counts as ready once its console has been quiet this long.
 const QUIET: Duration = Duration::from_secs(5);
 /// An exercise command is done once the guest has neither printed nor fetched a file for this
@@ -94,12 +99,37 @@ pub fn main(args: &Args) -> Result<u8, String> {
     // Up: a root shell on the serial port, and the app on the console
     let mut boot_seconds = 0.0;
     let mut app_ready = false;
+    let stall_after = std::env::var("SNOWGLOBE_BOOT_STALL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .map_or(STALL, Duration::from_secs);
+    let mut stall = Stall::new(stall_after, Instant::now());
+    let mut load = machine::Load::new(&runner);
+    let mut sampled = Instant::now();
     loop {
         if let Some(s) = runner.stopped() {
             return Err(format!("the guest stopped while booting: {s:?}"));
         }
         if started.elapsed() > TIMEOUT {
+            dump_cpus(&runner, build_cpus);
             return Err(format!("app not ready after {}s", TIMEOUT.as_secs()));
+        }
+        if !app_ready && sampled.elapsed() >= Duration::from_secs(1) {
+            sampled = Instant::now();
+            let output = activity.serial_total() + activity.screen.lock().unwrap().total();
+            let busy = load.busy(&runner);
+            if stall.observe(sampled, output, activity.idle_for(), busy) {
+                eprintln!(
+                    "\nsnowglobe-vm: the boot stalled: nothing printed, fetched or computed for {}s, \
+                     {:.0}s in. Its CPUs, 2 s apart:",
+                    stall_after.as_secs(),
+                    started.elapsed().as_secs_f64()
+                );
+                dump_cpus(&runner, build_cpus);
+                std::thread::sleep(Duration::from_secs(2));
+                dump_cpus(&runner, build_cpus);
+                return Ok(BOOT_STALLED);
+            }
         }
         if !app_ready {
             app_ready = match &ready {
@@ -209,6 +239,69 @@ fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
     e.finish().map_err(|e| e.to_string())
 }
 
+/// Whether a boot has stalled: no output, file fetch or network traffic, and no CPU busy, for
+/// `after`.
+pub struct Stall {
+    after: Duration,
+    output: usize,
+    since: Instant,
+}
+
+impl Stall {
+    pub fn new(after: Duration, now: Instant) -> Stall {
+        Stall { after, output: 0, since: now }
+    }
+
+    /// Look again at `now`: the output so far (bytes printed, all told), how long since a file
+    /// fetch or network traffic, and whether the CPUs were busy. True once it has stalled.
+    pub fn observe(&mut self, now: Instant, output: usize, quiet_for: Duration, busy: bool) -> bool {
+        let since_activity = now.checked_sub(quiet_for).unwrap_or(now);
+        if output != self.output || busy {
+            self.output = output;
+            self.since = now;
+        }
+        if since_activity > self.since {
+            self.since = since_activity;
+        }
+        now.duration_since(self.since) >= self.after
+    }
+}
+
+/// One line per CPU: where it is, its IRQ mask bit (DAIF.I), how far it has run, and when its
+/// timers fire (ms from now; "off" when disabled, "masked" when the timer's own output is masked).
+///
+/// Reading two dumps 2 s apart: a healthy idle guest has every CPU at the kernel's idle WFI with
+/// I=1 (arm64 Linux idles with IRQs masked; WFI still wakes), instruction counts creeping up as
+/// timer ticks are handled, and each `cntv` a few ms to seconds ahead. A lost wakeup shows a
+/// timer deadline far in the past with the count standing still; a guest stuck spinning (a
+/// deadlock in the kernel) shows its PC and count moving with nothing printed.
+pub fn describe_cpu(i: usize, c: &armless::cpu::SysRegs, pc: u64, lr: u64, el: u8, daif: u32, insns: u64, now: u64) -> String {
+    let timer = |ctl: u64, cval: u64| -> String {
+        if ctl & 1 == 0 {
+            return "off".into();
+        }
+        let ms = (cval as i128 - now as i128) as f64 / (armless::board::TIMER_FREQ_HZ as f64 / 1000.0);
+        format!("{ms:+.1}ms{}", if ctl & 2 != 0 { " masked" } else { "" })
+    };
+    format!(
+        "cpu{i}: pc={pc:#018x} lr={lr:#018x} el{el} I={} insns={insns} cntv={} cntp={}",
+        u8::from(daif & (1 << 7) != 0),
+        timer(c.cntv_ctl, c.cntv_cval),
+        timer(c.cntp_ctl, c.cntp_cval),
+    )
+}
+
+/// Every CPU's state, for a boot that stalled or timed out.
+fn dump_cpus(runner: &Runner, cpus: usize) {
+    for i in 0..cpus {
+        let line = runner.with_cpu(i, |c| {
+            let now = c.counter();
+            describe_cpu(i, &c.sys, c.pc, c.x[30], c.el, c.daif, c.insn_count, now)
+        });
+        eprintln!("{line}");
+    }
+}
+
 fn write_json(path: &std::path::Path, v: &serde_json::Value) -> Result<(), String> {
     std::fs::write(path, serde_json::to_vec(v).unwrap()).map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -254,5 +347,55 @@ fn exercise(
     }
     if !exercises.is_empty() {
         eprintln!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn secs(s: u64) -> Duration {
+        Duration::from_secs(s)
+    }
+
+    #[test]
+    fn a_boot_that_does_nothing_for_long_enough_has_stalled() {
+        let t0 = Instant::now();
+        let mut s = Stall::new(secs(300), t0);
+        // Printing, then nothing: stalled 300 s after the last output
+        assert!(!s.observe(t0 + secs(10), 500, secs(10), false));
+        assert!(!s.observe(t0 + secs(309), 500, secs(309), false));
+        assert!(s.observe(t0 + secs(310), 500, secs(310), false));
+    }
+
+    #[test]
+    fn output_fetches_traffic_and_busy_cpus_are_progress() {
+        let t0 = Instant::now();
+        let mut s = Stall::new(secs(300), t0);
+        // A file fetched or network traffic 100 s ago: 200 s quiet, not 400
+        assert!(!s.observe(t0 + secs(400), 0, secs(100), false));
+        // Computing silently (a JVM starting) is not a stall, however long
+        assert!(!s.observe(t0 + secs(1000), 0, secs(1000), true));
+        assert!(!s.observe(t0 + secs(1200), 0, secs(1200), false));
+        assert!(s.observe(t0 + secs(1300), 0, secs(1300), false));
+        // New output starts the count again
+        assert!(!s.observe(t0 + secs(1301), 1, secs(1301), false));
+    }
+
+    #[test]
+    fn a_cpu_line_says_where_it_is_and_when_its_timers_fire() {
+        let mut sys = armless::cpu::SysRegs::default();
+        let tick_ms = armless::board::TIMER_FREQ_HZ / 1000;
+        sys.cntv_ctl = 1; // on
+        sys.cntv_cval = 1_000_000 + 4 * tick_ms;
+        sys.cntp_ctl = 0b11; // on, masked
+        sys.cntp_cval = 1_000_000 - tick_ms;
+        let line = describe_cpu(2, &sys, 0xffff_8000_1234_5678, 0xffff_8000_0000_0010, 1, 0, 42, 1_000_000);
+        assert_eq!(
+            line,
+            "cpu2: pc=0xffff800012345678 lr=0xffff800000000010 el1 I=0 insns=42 cntv=+4.0ms cntp=-1.0ms masked"
+        );
+        sys.cntv_ctl = 0;
+        assert!(describe_cpu(0, &sys, 0, 0, 0, 1 << 7, 0, 0).contains("I=1 insns=0 cntv=off"));
     }
 }

@@ -140,6 +140,9 @@ func TestE2E(t *testing.T) {
 	t.Run("native max runtime", e.nativeMaxRuntime)
 	t.Run("mcp", e.mcp)
 	t.Run("bundle", e.bundle)
+	if os.Getenv("SNOWGLOBE_E2E_BUILD") == "1" {
+		t.Run("build stall", e.buildStall)
+	}
 	if os.Getenv("SNOWGLOBE_E2E_DOCKER") != "0" {
 		t.Run("docker max runtime", e.dockerMaxRuntime)
 		t.Run("docker stop file", e.dockerStopFile)
@@ -466,5 +469,32 @@ func (e *e2e) bundle(t *testing.T) {
 	if event(t, logs, "job_end", map[string]any{"cancelled": true, "killed": true}) == nil ||
 		event(t, logs, "stop", map[string]any{"reason": "max-runtime"}) == nil {
 		t.Errorf("events: %v", events(t, logs))
+	}
+}
+
+// A build whose app never gets ready and whose guest goes idle: the boot is found stalled (with
+// every CPU's state printed), booted once more, and the build fails saying so, in about a minute
+// rather than the 20 a boot may take. Builds examples/curl (SNOWGLOBE_BUILDER picks the builder).
+func (e *e2e) buildStall(t *testing.T) {
+	t.Setenv("SNOWGLOBE_BOOT_STALL_SECS", "20")
+	begun := time.Now()
+	out, code := e.run(t, nil, "build", filepath.Join("..", "..", "examples", "curl"),
+		"--ready", "TEXT-THE-APP-NEVER-PRINTS", "--out", filepath.Join(t.TempDir(), "site"))
+	if code == 0 {
+		t.Fatalf("a build that never got ready succeeded:\n%s", out)
+	}
+	if n := strings.Count(out, "the boot stalled: nothing printed"); n != 2 {
+		t.Errorf("stalled %d times, want 2 (once, then the retry)", n)
+	}
+	for _, want := range []string{"booting again", "the boot stalled twice", "cpu0: pc=0x"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in the build's output", want)
+		}
+	}
+	if took := time.Since(begun); took > 10*time.Minute {
+		t.Errorf("took %s", took)
+	}
+	if t.Failed() {
+		t.Logf("%s", out)
 	}
 }

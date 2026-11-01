@@ -249,13 +249,16 @@ func Run(o Options, version string) error {
 		if err != nil {
 			return err
 		}
-		if nativeBuild {
-			cmd := exec.Command(vm, tools.SnapshotArgs(filepath.Join(out, "system"), s.Memory, s.Ready, s.Exercise,
-				s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)...)
-			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-			return cmd.Run()
+		snapshot := func() error {
+			if nativeBuild {
+				cmd := exec.Command(vm, tools.SnapshotArgs(filepath.Join(out, "system"), s.Memory, s.Ready, s.Exercise,
+					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)...)
+				cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+				return cmd.Run()
+			}
+			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)
 		}
-		return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)
+		return retryStalled(snapshot, os.Stderr)
 	}); err != nil {
 		return err
 	}
@@ -601,4 +604,20 @@ func first(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// retryStalled runs a boot, and once more if it stalled (tools.ExitBootStalled): a rare stall
+// costs one more boot rather than the build, and the stalled one's CPU state stays in the log.
+func retryStalled(boot func() error, log io.Writer) error {
+	err := boot()
+	var x *exec.ExitError
+	if errors.As(err, &x) && x.ExitCode() == tools.ExitBootStalled {
+		fmt.Fprintln(log, "The boot stalled (its CPUs' state is above, for a bug report); booting again.")
+		err = boot()
+		if errors.As(err, &x) && x.ExitCode() == tools.ExitBootStalled {
+			return fmt.Errorf("the boot stalled twice: is the app waiting for something that never comes " +
+				"(--ready text it never prints, a network it can't reach)? Each stall's CPU state is above")
+		}
+	}
+	return err
 }

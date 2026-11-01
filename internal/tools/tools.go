@@ -282,6 +282,11 @@ func (i *Image) Snapshot(out string, memoryMB int, ready string, exercises []str
 	return i.run(out, extra, args...)
 }
 
+// ExitBootStalled is snowglobe-vm snapshot's exit status for a boot that stalled: nothing
+// printed, fetched or computed for minutes before the app was ready. It printed its CPUs' state;
+// booting again is worth one try.
+const ExitBootStalled = 75
+
 // SnapshotArgs are snowglobe-vm's arguments to boot the site's system directory and snapshot it,
 // in the tools container or natively.
 func SnapshotArgs(system string, memoryMB int, ready string, exercises []string, network string,
@@ -307,6 +312,9 @@ func SnapshotArgs(system string, memoryMB int, ready string, exercises []string,
 func (i *Image) run(out string, extra []string, command ...string) error {
 	args := []string{"run", "--rm", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", out + ":/out"}
+	if v := os.Getenv("SNOWGLOBE_BOOT_STALL_SECS"); v != "" {
+		args = append(args, "-e", "SNOWGLOBE_BOOT_STALL_SECS="+v)
+	}
 	args = append(append(append(args, JITArgs()...), extra...), i.tag)
 	return docker.Run(append(args, command...)...)
 }
