@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -49,5 +52,17 @@ func TestFetchSiteKnowsWhatTheDockerfileFetches(t *testing.T) {
 		if !strings.Contains(joined, "/"+want+" ") {
 			t.Errorf("the tools Dockerfile doesn't ADD %s: FetchSite's member map needs updating", want)
 		}
+	}
+}
+
+// The build retries a boot on snowglobe-vm's stall status: the two must agree.
+func TestExitBootStalledMatchesRuntime(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("runtime", "src", "snapshot.rs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("const BOOT_STALLED: u8 = %d;", ExitBootStalled)
+	if !strings.Contains(string(src), want) {
+		t.Fatalf("snapshot.rs has no %q: ExitBootStalled and BOOT_STALLED differ", want)
 	}
 }
