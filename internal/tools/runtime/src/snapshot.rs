@@ -42,6 +42,10 @@ const QUIET: Duration = Duration::from_secs(5);
 /// long (or after the cap): a runtime can go quiet while it loads modules.
 const EXERCISE_QUIET: Duration = Duration::from_millis(2500);
 const EXERCISE_CAP: Duration = Duration::from_secs(180);
+/// Sooner, once it has printed its app's prompt again (the screen's last line before it was
+/// typed) and been quiet this long: what a REPL or shell prints when a command is done. An app
+/// whose prompt changes (`iex(2)>`) waits for EXERCISE_QUIET.
+const PROMPT_QUIET: Duration = Duration::from_millis(300);
 /// The console size the app starts with, unless --cols/--rows say otherwise: fits an embedded
 /// panel or a small window. The page replays the snapshot's screen at this size, then resizes.
 const COLS: u16 = 90;
@@ -331,18 +335,26 @@ fn exercise(
         let boot_reads = activity.reads.lock().unwrap().take();
         *activity.reads.lock().unwrap() = Some(BTreeSet::new());
         let begun = Instant::now();
-        let from = activity.screen.lock().unwrap().total();
+        let (from, prompt) = {
+            let s = activity.screen.lock().unwrap();
+            (s.total(), prompt(&s.buf))
+        };
         eprint!("\nExercising: {command}");
         board.console_input(format!("{command}\r").as_bytes());
         activity.touch();
         // Done once it has printed nothing, fetched nothing and computed nothing for a while
         let mut load = machine::Load::new(runner);
         loop {
-            std::thread::sleep(Duration::from_millis(250));
+            std::thread::sleep(Duration::from_millis(100));
             if load.busy(runner) {
                 activity.touch();
             }
-            if !(activity.idle_for() < EXERCISE_QUIET || activity.connected()) || begun.elapsed() >= EXERCISE_CAP {
+            let idle = if activity.connected() { Duration::ZERO } else { activity.idle_for() };
+            let done = {
+                let s = activity.screen.lock().unwrap();
+                exercised(s.since(from), prompt.as_deref(), idle)
+            };
+            if done || begun.elapsed() >= EXERCISE_CAP {
                 break;
             }
         }
@@ -362,9 +374,49 @@ fn exercise(
     }
 }
 
+/// The app's prompt: the screen's last line, if it has one worth waiting for.
+fn prompt(screen: &[u8]) -> Option<Vec<u8>> {
+    let start = screen.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let line = &screen[start..];
+    let line = &line[line.iter().take_while(|&&b| b == b'\r').count()..];
+    let visible = line.iter().filter(|b| b.is_ascii_graphic()).count();
+    (visible > 0 && line.len() <= 256).then(|| line.to_vec())
+}
+
+/// Whether an exercise command is done: `output` printed since it was typed, `idle` how long
+/// the guest has printed, fetched and computed nothing (zero with a request open).
+fn exercised(output: &[u8], prompt: Option<&[u8]>, idle: Duration) -> bool {
+    let prompted = prompt.is_some_and(|p| output.len() > p.len() && output.ends_with(p));
+    idle >= EXERCISE_QUIET || (prompted && idle >= PROMPT_QUIET)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_prompt_is_the_screens_last_line() {
+        assert_eq!(prompt(b"motd\r\n~ $ "), Some(b"~ $ ".to_vec()));
+        assert_eq!(prompt(b"\x1b[2J\r\niex(1)> "), Some(b"iex(1)> ".to_vec()));
+        // A screen ending in a new line, or with nothing on its last one: no prompt to wait for
+        assert_eq!(prompt(b"loading\r\n"), None);
+        assert_eq!(prompt(b""), None);
+    }
+
+    #[test]
+    fn an_exercise_is_done_at_its_prompt_or_after_a_quiet_while() {
+        let p = Some(&b"~ $ "[..]);
+        let ms = Duration::from_millis;
+        // Back at the prompt, and quiet a moment
+        assert!(exercised(b"echo hi\r\nhi\r\n~ $ ", p, ms(300)));
+        assert!(!exercised(b"echo hi\r\nhi\r\n~ $ ", p, ms(100)));
+        // Not back at it (still running, or only the echo so far): the long quiet
+        assert!(!exercised(b"sleep 9; echo hi\r\n", p, ms(2000)));
+        assert!(exercised(b"sleep 9; echo hi\r\n", p, ms(2500)));
+        // A prompt that changes: the long quiet
+        assert!(!exercised(b"1 + 1\r\n2\r\niex(2)> ", Some(&b"iex(1)> "[..]), ms(1000)));
+        assert!(exercised(b"x", None, ms(2500)));
+    }
 
     fn secs(s: u64) -> Duration {
         Duration::from_secs(s)

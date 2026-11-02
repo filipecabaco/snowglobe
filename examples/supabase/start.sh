@@ -8,9 +8,9 @@ export SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=
 echo "Starting Supabase's native stack: Postgres, PostgREST and Auth (no Docker) ..."
 # --runtime native: plain processes, no Docker. --eager: every service is up before this returns
 # (they're in the snapshot) and none is stopped when idle, so a visitor never waits for a restart.
-# Postgres's first start (initdb, then the migrations) can outlast the CLI's 2 minute readiness wait
-# on a slow build machine, so the build waits longer; a start that still gives up is resumed.
-export SUPABASE_DB_HEALTH_TIMEOUT=15m
+# Postgres's first start was at image build time; this one only starts it again. A slow build
+# machine still gets a long readiness wait (SUPABASE_DB_HEALTH_TIMEOUT, set in the Dockerfile so
+# both starts agree), and a start that still gives up is resumed.
 for attempt in 1 2 3; do
   supabase stack start --runtime native --eager \
     -x realtime -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null 2>&1 |
