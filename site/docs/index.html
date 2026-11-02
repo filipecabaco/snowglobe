@@ -364,6 +364,12 @@ snowglobe cp box:/root/project/out ./out</pre>
             when it runs out of time or the instance stops, it gets TERM, then KILL after 3 s, including whatever it
             put in the background. A process that makes a session of its own (a daemon that <code>setsid</code>s) is
             out of reach, as it would be anywhere.</p>
+          <p><strong>A job's result is its own word.</strong> A job's exit status comes back on a line marked with a
+            one-time value the host types only to the job's launcher, so a job that merely prints a fake result isn't
+            believed. A job runs as root in the guest, though: one determined to can still read that value from the
+            launcher's memory and forge its own status, output and <code>out/</code> files. That reaches only its own
+            result. The host still enforces the time limit, and if a job leaves the guest's shell busy, later jobs
+            fail with "the guest's shell is not answering" rather than run inside it.</p>
         </section>
 
         <section id="security" aria-labelledby="security-title">

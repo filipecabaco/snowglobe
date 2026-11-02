@@ -188,6 +188,11 @@ mod testing {
         let board = vm.board.clone();
         (board, armless::runner::Runner::new(vm, clock, false))
     }
+
+    /// What has been typed into the machine's serial line since the last look.
+    pub fn typed(board: &armless::Board) -> String {
+        String::from_utf8_lossy(&board.devices.lock().uart.input.drain(..).collect::<Vec<u8>>()).into_owned()
+    }
 }
 
 #[cfg(test)]

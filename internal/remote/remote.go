@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/filipecabaco/snowglobe/internal/rootfs"
 	"github.com/klauspost/compress/zstd"
@@ -63,7 +64,7 @@ func Fetch(source string) (string, error) {
 		return "", err
 	}
 	if IsTarball(source) {
-		return dir, fetchTarball(source, dir)
+		return fetchTarball(source, dir)
 	}
 	return dir, mirror(source, dir)
 }
@@ -84,52 +85,148 @@ func Unpack(file string) (string, error) {
 	}
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", abs, info.Size(), info.ModTime().UnixNano())))
 	dir := filepath.Join(base, "snowglobe", "sites", hex.EncodeToString(sum[:8]))
-	if _, err := os.Stat(filepath.Join(dir, "run.json")); err == nil {
-		return dir, nil
+	if v, ok := current(dir); ok {
+		return v, nil
 	}
 	f, err := os.Open(abs)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	return dir, unpackInto(f, abs, dir)
+	return unpackInto(f, abs, dir)
 }
 
-// unpackInto extracts a tarball into dir, replacing what is there only once all of it is out: one
-// cut short must not leave a run.json that makes a part of a site look like all of it.
-func unpackInto(r io.Reader, name, dir string) error {
-	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.MkdirTemp(filepath.Dir(dir), ".unpack-")
+// ---- builds of a tarball, side by side ----
+//
+// A tarball's cache entry holds each build unpacked in a directory of its own, v-<id>, and a
+// symlink, current, to the newest. A process uses the build it got for as long as it runs,
+// holding a shared lock (flock) on v-<id>.lock: a refresh by another process makes a new build
+// current and removes only the builds it can lock exclusively, the ones nothing holds.
+
+// held are the builds this process uses: their locks, kept until it exits.
+var (
+	heldMu sync.Mutex
+	held   []*os.File
+)
+
+// Held are the locks on the builds this process uses, for a process it starts that outlives it
+// (a detached snowglobe-vm) to inherit.
+func Held() []*os.File {
+	heldMu.Lock()
+	defer heldMu.Unlock()
+	return append([]*os.File(nil), held...)
+}
+
+// hold takes a shared lock on the build v for this process; false if it has gone meanwhile.
+func hold(v string) bool {
+	f, err := os.Open(v + ".lock")
 	if err != nil {
-		return err
+		return false
+	}
+	// Blocks only while a refresh removes it, and then it is gone
+	if syscall.Flock(int(f.Fd()), syscall.LOCK_SH) != nil {
+		f.Close()
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(v, "run.json")); err != nil {
+		f.Close()
+		return false
+	}
+	heldMu.Lock()
+	held = append(held, f)
+	heldMu.Unlock()
+	return true
+}
+
+// current is the build of the tarball cached in dir that is current, held for this process.
+func current(dir string) (string, bool) {
+	for range 3 {
+		target, err := os.Readlink(filepath.Join(dir, "current"))
+		if err != nil {
+			return "", false
+		}
+		if v := filepath.Join(dir, target); hold(v) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// unpackInto extracts a tarball as a new build in dir, held for this process, and makes it
+// current once all of it is out: one cut short must not leave a run.json that makes a part of a
+// site look like all of it. Builds nothing holds go.
+func unpackInto(r io.Reader, name, dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.MkdirTemp(dir, ".unpack-")
+	if err != nil {
+		return "", err
 	}
 	defer os.RemoveAll(tmp)
 	// Readable as a site is: a container runs it as another user
 	if err := os.Chmod(tmp, 0o755); err != nil {
-		return err
+		return "", err
 	}
 	if err := extract(r, name, tmp); err != nil {
-		return err
+		return "", err
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		return err
+	// Its lock first, held: a refresh at the same time can't take the build once it is there
+	id := "v-" + strings.TrimPrefix(filepath.Base(tmp), ".unpack-")
+	v := filepath.Join(dir, id)
+	if err := os.WriteFile(v+".lock", nil, 0o644); err != nil {
+		return "", err
 	}
-	return os.Rename(tmp, dir)
+	if err := os.Rename(tmp, v); err != nil {
+		return "", err
+	}
+	if !hold(v) {
+		return "", fmt.Errorf("%s: the build unpacked went", name)
+	}
+	link := filepath.Join(dir, ".current-"+id)
+	if err := os.Symlink(id, link); err != nil {
+		return "", err
+	}
+	if err := os.Rename(link, filepath.Join(dir, "current")); err != nil {
+		os.Remove(link)
+		return "", err
+	}
+	removeUnused(dir)
+	return v, nil
+}
+
+// removeUnused removes the builds in dir that nothing holds, but the current one.
+func removeUnused(dir string) {
+	now, _ := os.Readlink(filepath.Join(dir, "current"))
+	builds, _ := filepath.Glob(filepath.Join(dir, "v-*"))
+	for _, v := range builds {
+		if strings.HasSuffix(v, ".lock") || filepath.Base(v) == now {
+			continue
+		}
+		f, err := os.OpenFile(v+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+		if err != nil {
+			continue
+		}
+		if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+			os.RemoveAll(v)
+			os.Remove(v + ".lock")
+		}
+		f.Close()
+	}
 }
 
 // ---- a tarball ----
 
-func fetchTarball(source, dir string) error {
+func fetchTarball(source, dir string) (string, error) {
 	// Revalidate with whichever validator the server gave: CDNs send an ETag, plain file servers
 	// often only Last-Modified
 	etagFile, modifiedFile := filepath.Join(dir, ".etag"), filepath.Join(dir, ".last-modified")
 	req, err := http.NewRequest("GET", source, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if _, err := os.Stat(filepath.Join(dir, "run.json")); err == nil {
+	cached, ok := current(dir)
+	if ok {
 		if etag, err := os.ReadFile(etagFile); err == nil {
 			req.Header.Set("If-None-Match", string(etag))
 		}
@@ -139,27 +236,30 @@ func fetchTarball(source, dir string) error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotModified {
+	if resp.StatusCode == http.StatusNotModified && ok {
 		fmt.Fprintf(os.Stderr, "using the cached copy of %s\n", source)
-		return nil
+		return cached, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: %s", source, resp.Status)
+		return "", fmt.Errorf("%s: %s", source, resp.Status)
 	}
 	fmt.Fprintf(os.Stderr, "downloading %s (%s)\n", source, size(resp.ContentLength))
-	if err := unpackInto(resp.Body, source, dir); err != nil {
-		return err
+	v, err := unpackInto(resp.Body, source, dir)
+	if err != nil {
+		return "", err
 	}
-	if etag := resp.Header.Get("ETag"); etag != "" {
-		os.WriteFile(etagFile, []byte(etag), 0o644)
+	// This build's validators, not an earlier one's
+	for file, value := range map[string]string{etagFile: resp.Header.Get("ETag"), modifiedFile: resp.Header.Get("Last-Modified")} {
+		if value == "" {
+			os.Remove(file)
+		} else {
+			writeBytes(file, []byte(value))
+		}
 	}
-	if modified := resp.Header.Get("Last-Modified"); modified != "" {
-		os.WriteFile(modifiedFile, []byte(modified), 0o644)
-	}
-	return nil
+	return v, nil
 }
 
 func extract(r io.Reader, name, dir string) error {

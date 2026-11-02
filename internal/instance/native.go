@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/filipecabaco/snowglobe/internal/remote"
 	"github.com/filipecabaco/snowglobe/internal/tools"
 	"github.com/filipecabaco/snowglobe/internal/tunnel"
 )
@@ -127,15 +128,19 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 		}
 		defer os.RemoveAll(filepath.Dir(sock))
 		dir := ""
+		var extra []*os.File
 		if o.Name != "" {
 			st, d, running := loadNative(o.Name)
 			if running {
 				return fmt.Errorf("%s is running already (pid %d)", o.Name, st.Pid)
 			}
-			if err := os.MkdirAll(d, 0o700); err != nil {
+			lock, err := claim(o.Name, d)
+			if err != nil {
 				return err
 			}
-			defer os.RemoveAll(d)
+			defer lock.Close()
+			defer os.RemoveAll(d) // before the lock goes: only its holder removes it
+			extra = []*os.File{lock}
 			dir = d
 			if sock, err = socketPath(d); err != nil {
 				return err
@@ -148,6 +153,7 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 		}
 		cmd := exec.Command(vm, append(args, "--socket", sock)...)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		cmd.ExtraFiles = extra // the name's lock, held while it runs
 		if err := cmd.Start(); err != nil {
 			return err
 		}
@@ -168,9 +174,12 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 	if running {
 		return fmt.Errorf("%s is running already (pid %d)", o.Name, st.Pid)
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	lock, err := claim(o.Name, dir)
+	if err != nil {
 		return err
 	}
+	// snowglobe-vm holds the lock from here on, as long as it runs; this copy goes with this command
+	defer lock.Close()
 	sock, err := socketPath(dir)
 	if err != nil {
 		return err
@@ -188,6 +197,8 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 	cmd.Stdout, cmd.Stderr = log, log
 	// Its own session: it outlives this command and the terminal it was started from
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// It outlives this command: it holds the name, and the build of a fetched site it runs from
+	cmd.ExtraFiles = append([]*os.File{lock}, remote.Held()...)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -223,6 +234,27 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 			return nil
 		}
 	}
+}
+
+// claim takes the instance directory dir for the run called name: an exclusive lock on its .lock,
+// held as long as the run (snowglobe-vm inherits it), so a second run of the name fails rather
+// than share the directory or remove it.
+func claim(name, dir string) (*os.File, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("instance %s is already running", name)
+		}
+		return nil, err
+	}
+	return f, nil
 }
 
 // restoreTimeout is how long a detached run gets to restore before it is given up on.
@@ -375,12 +407,18 @@ func listNative() (int, error) {
 	for _, e := range entries {
 		st, d, running := loadNative(e.Name())
 		if !running {
+			// Unless a run holds it: one starting, its state not written yet
+			lock, err := claim(e.Name(), d)
+			if err != nil {
+				continue
+			}
 			// Its socket too, if it was kept outside
 			var gone nativeState
 			if data, err := os.ReadFile(filepath.Join(d, "state.json")); err == nil && json.Unmarshal(data, &gone) == nil {
 				removeSocket(gone.Socket, d)
 			}
 			os.RemoveAll(d)
+			lock.Close()
 			continue
 		}
 		if n == 0 {
