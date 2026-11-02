@@ -363,10 +363,10 @@ $ snowglobe build my-app.tar --builder native  # anywhere else
 ```
 
 Nothing runs at build time. The image's layers are flattened as a container's filesystem would
-be; the kernel, its initramfs and modules come prebuilt (a release asset, fetched once); and
-instead of the OpenRC and agetty that the Docker build installs, the guest boots with BusyBox's
-`init`, `getty` and `udhcpc`, which every Alpine image has, configured by files snowglobe writes.
-`snowglobe-vm` then boots and snapshots it here. The site is the same kind of site either way,
+be; the kernel, its initramfs and modules come prebuilt (a release asset, fetched once); and the
+guest boots with BusyBox's `init`, `getty` and `udhcpc`, which every Alpine image has,
+configured by files snowglobe writes, just as a Docker build's does. `snowglobe-vm` then boots
+and snapshots it here. The site is the same kind of site either way,
 for a page or for `snowglobe run`. A build without Docker and with no release to fetch the kernel
 from builds it once with Docker, or takes `SNOWGLOBE_BOOT=archive.tar.gz`.
 
@@ -628,7 +628,9 @@ snowglobe fills it by **measuring**, not guessing:
   taken with the page cache dropped, so the app reads these again after a restore.
 - **Exercise reads:** after the snapshot is saved, snowglobe types each `--exercise` command into
   the app and records what it reads. The guest is then exactly where a visitor's tab starts, so
-  these are the files a visitor's first commands would otherwise wait for.
+  these are the files a visitor's first commands would otherwise wait for. A command is done
+  once the app prints its prompt again and is quiet for a moment, or, for an app whose prompt
+  changes (`iex(2)>`), once it has printed and fetched nothing for 2.5 s.
 - **Pattern:** anything matching `--warm`, for files no exercise touches.
 
 Each build prints a breakdown and writes `warm-report.json` (by phase and directory, in download
@@ -674,17 +676,19 @@ unique, and pooling saves 581 MB. A visitor's second demo reuses what their brow
 ```mermaid
 flowchart LR
     I[your image<br/>arm64 Alpine] --> B[+ boot layer<br/>kernel, 9p initramfs]
-    B -->|docker export| C[9p filesystem<br/>zstd blobs]
+    B -->|layers flattened| C[9p filesystem<br/>zstd blobs]
     C --> S[boot headless in armless<br/>snapshot when ready]
     S --> D[dist/<br/>static files]
 ```
 
 1. **Boot layer.** snowglobe adds a kernel, an initramfs that mounts the root filesystem over 9p,
-   OpenRC, and a terminal that runs your command, on top of your image. Without Docker
-   (`--builder native`), the kernel comes prebuilt and BusyBox's `init` and `getty` take OpenRC's
-   place, written as files on top of the image's flattened layers.
-2. **Filesystem.** `docker export` (or, without Docker, the image's layers flattened as a container's
-   filesystem would be) streams straight into snowglobe, which writes a 9p filesystem
+   and BusyBox's `init` and `getty` with a terminal that runs your command, on top of your image:
+   files written as layers on top of the image's own (Docker only builds the Dockerfile; nothing
+   runs in the image), with the kernel prebuilt. The guest boots with no service manager: the
+   app is ready seconds after the kernel starts. Services an image enables for OpenRC do not
+   start; start them from the command (as the Postgres and Elixir examples' start scripts do).
+2. **Filesystem.** The image's layers, flattened as a container's filesystem would be, stream
+   straight into snowglobe, which writes a 9p filesystem
    (v86's format, which armless reads): a JSON tree plus one zstd-compressed blob per unique file,
    fetched by the browser on demand. Files of 2 MiB and more are split into content-defined chunks
    (cut as armless's own image tools cut them), so a read fetches only the chunks it covers and

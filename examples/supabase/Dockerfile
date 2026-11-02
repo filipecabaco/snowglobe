@@ -42,6 +42,9 @@ RUN adduser -D -s /bin/bash supa
 USER supa
 WORKDIR /home/supa/app
 ENV SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1
+# The CLI saves this with the stack, and refuses a start asking for another: the first start (below)
+# and the guest's (start.sh) must agree. Long, for a slow build machine's emulated start
+ENV SUPABASE_DB_HEALTH_TIMEOUT=15m
 RUN supabase init --yes >/dev/null && \
     supabase stack prepare --runtime native --capability database --capability rest --capability auth && \
     # Postgres ships every extension Supabase offers; drop the big ones this demo never loads (none
@@ -61,6 +64,11 @@ RUN supabase init --yes >/dev/null && \
 # the stack starts.
 COPY --chown=supa app/notes.ts ./
 COPY --chown=supa app/supabase/migrations supabase/migrations
+# The stack's first start (initdb, then the migrations) here, at native speed, and stopped with its
+# data kept: the guest's boot only starts it again, rather than spending most of a minute
+# emulating initdb. bash is PID 1 so that it reaps the stopped services (BusyBox sh doesn't, and
+# the CLI won't call a stack stopped while its processes linger as zombies)
+RUN ["bash", "-c", "CI=1 supabase stack start --runtime native --eager -x realtime -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null && supabase stack stop </dev/null"]
 
 USER root
 COPY --chmod=755 start.sh /usr/local/bin/supabase-demo

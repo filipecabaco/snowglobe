@@ -330,6 +330,12 @@ func FromArchive(archive, dir string) (*Image, error) {
 		}
 		r = g
 	}
+	return FromTar(r, archive, dir)
+}
+
+// FromTar reads an image archive as a tar stream (archive names it in errors), e.g. `docker
+// save`'s output: unpacked into dir, which the layers read from.
+func FromTar(r io.Reader, archive, dir string) (*Image, error) {
 	tr := tar.NewReader(r)
 	for {
 		h, err := tr.Next()

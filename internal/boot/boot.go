@@ -3,47 +3,15 @@
 package boot
 
 import (
-	_ "embed"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-
-	"github.com/filipecabaco/snowglobe/internal/docker"
 )
-
-//go:embed boot.Dockerfile
-var dockerfile []byte
 
 // Console describes what the browser terminal runs.
 type Console struct {
 	Env     []string // KEY=value
 	Workdir string
 	Command string // a shell command line
-}
-
-// Build builds the boot layer on top of base for platform (linux/arm64) and tags it as tag.
-// network is "none" or "fetch"; "fetch" configures DHCP on the guest's NIC and trusts caPEM, the
-// CA the machine's web relay signs HTTPS certificates with.
-func Build(base, tag, platform string, console Console, network string, caPEM []byte) error {
-	context, err := os.MkdirTemp("", "snowglobe-boot-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(context)
-
-	if err := os.WriteFile(filepath.Join(context, "Dockerfile"), dockerfile, 0o644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(context, "snowglobe-console"), []byte(Script(console)), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(context, "snowglobe-ca.crt"), caPEM, 0o644); err != nil {
-		return err
-	}
-
-	return docker.Run("build", "--platform", platform, "--build-arg", "BASE="+base,
-		"--build-arg", "NETWORK="+network, "--tag", tag, context)
 }
 
 // Script is the shell script run on the browser terminal: the image's environment, working

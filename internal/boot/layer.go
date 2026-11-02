@@ -15,13 +15,14 @@ import (
 	"github.com/filipecabaco/snowglobe/internal/oci"
 )
 
-// The boot layer for builds without Docker (--builder native): nothing runs at build time.
+// The boot layer, for every build: nothing runs at build time (Docker, when there is one, only
+// builds the Dockerfile).
 //
 // The kernel, its initramfs (which mounts the root filesystem over 9p) and its modules come
-// prebuilt, as one archive (Kernel); everything else is files snowglobe writes (Files). Instead of
-// OpenRC and agetty, which the Docker-built layer installs, the guest starts with BusyBox's init,
-// getty and udhcpc, which every Alpine image has: an inittab, and a script doing what OpenRC's
-// boot services did (mounts, hostname, loopback, the network and its CA when the site has one).
+// prebuilt, as one archive (Kernel); everything else is files snowglobe writes (Files). The guest
+// starts with BusyBox's init, getty and udhcpc, which every Alpine image has: an inittab, and a
+// script doing what a service manager's boot services would (mounts, hostname, loopback, the
+// network and its CA when the site has one), in a fraction of OpenRC's time.
 
 //go:embed kernel.Dockerfile
 var kernelDockerfile []byte
@@ -29,7 +30,7 @@ var kernelDockerfile []byte
 // Files is the boot layer's files, for an image whose app runs as console describes.
 func Files(console Console, network string, caPEM []byte) []oci.File {
 	init := `#!/bin/sh
-# What OpenRC's boot services did for the Docker-built layer, with BusyBox alone
+# What a service manager's boot services would do, with BusyBox alone
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null

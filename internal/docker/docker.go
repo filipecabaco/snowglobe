@@ -3,7 +3,6 @@ package docker
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -45,7 +44,7 @@ func Output(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Stream runs docker and hands its stdout to consume, e.g. `docker export` into a tar reader.
+// Stream runs docker and hands its stdout to consume, e.g. `docker save` into a tar reader.
 func Stream(consume func(io.Reader) error, args ...string) error {
 	cmd := exec.Command("docker", args...)
 	cmd.Stderr = os.Stderr
@@ -65,7 +64,8 @@ func Stream(consume func(io.Reader) error, args ...string) error {
 	return consumeErr
 }
 
-// Image is the part of `docker image inspect` snowglobe needs.
+// Image is the part of an image's config snowglobe needs, as `docker save` and OCI layouts
+// store it.
 type Image struct {
 	Architecture string
 	Config       struct {
@@ -75,19 +75,6 @@ type Image struct {
 		Cmd        []string
 		Labels     map[string]string
 	}
-}
-
-// Inspect reads an image's metadata.
-func Inspect(ref string) (*Image, error) {
-	out, err := Output("image", "inspect", ref)
-	if err != nil {
-		return nil, err
-	}
-	var images []Image
-	if err := json.Unmarshal([]byte(out), &images); err != nil || len(images) == 0 {
-		return nil, fmt.Errorf("unexpected docker image inspect output for %s", ref)
-	}
-	return &images[0], nil
 }
 
 func wrap(err error, args []string) error {

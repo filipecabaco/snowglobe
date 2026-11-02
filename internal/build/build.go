@@ -27,7 +27,6 @@ import (
 
 const (
 	sourceTag = "snowglobe-source"
-	bootTag   = "snowglobe-boot"
 	marker    = ".snowglobe"
 	// Image labels that let a Dockerfile describe its own snowglobe settings
 	labelPrefix = "snowglobe."
@@ -121,6 +120,11 @@ func Run(o Options, version string) error {
 	var vm string
 	var source *oci.Image
 	var img *docker.Image
+	tmp, err := os.MkdirTemp("", "snowglobe-build-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
 	if nativeBuild {
 		if isDockerfileDir(o.Source) {
 			return fmt.Errorf("%s is a Dockerfile: --builder native takes an image reference or an image archive "+
@@ -135,11 +139,6 @@ func Run(o Options, version string) error {
 		}); err != nil {
 			return err
 		}
-		tmp, err := os.MkdirTemp("", "snowglobe-build-")
-		if err != nil {
-			return err
-		}
-		defer os.RemoveAll(tmp)
 		if err := step("Fetch source image", func() (err error) {
 			if st, e := os.Stat(o.Source); e == nil && !st.IsDir() {
 				source, err = oci.FromArchive(o.Source, filepath.Join(tmp, "archive"))
@@ -161,10 +160,18 @@ func Run(o Options, version string) error {
 		if err := step("Resolve source image", func() error { return resolveSource(o.Source, platform) }); err != nil {
 			return err
 		}
-		var err error
-		if img, err = docker.Inspect(sourceTag); err != nil {
+		// From here on as a native build does: the boot layer is files added to the image's
+		// layers, not an image built on it, so nothing runs in it and the guest boots with
+		// BusyBox's init rather than OpenRC
+		if err := step("Save source image", func() error {
+			return docker.Stream(func(r io.Reader) (err error) {
+				source, err = oci.FromTar(r, sourceTag, filepath.Join(tmp, "archive"))
+				return
+			}, "save", sourceTag)
+		}); err != nil {
 			return err
 		}
+		img = &source.Config
 	}
 	if img.Architecture != "arm64" {
 		return fmt.Errorf("%s is %s, not arm64: build it FROM a multi-arch or arm64 Alpine image (e.g. alpine or arm64v8/alpine)",
@@ -193,27 +200,20 @@ func Run(o Options, version string) error {
 		caPEM = ca.CertPEM
 	}
 	if err := step("Add boot layer", func() error {
-		if nativeBuild {
-			// Written, not built: the kernel archive, then BusyBox's init configured for the app
-			kernel, err := boot.Kernel(version)
-			if err != nil {
-				return err
-			}
-			source.Layers = append(source.Layers, oci.TarGzLayer(kernel), oci.FilesLayer(boot.Files(s.Console, s.Network, caPEM)))
-			return nil
+		// Written, not built: the kernel archive, then BusyBox's init configured for the app
+		kernel, err := boot.Kernel(version)
+		if err != nil {
+			return err
 		}
-		return boot.Build(sourceTag, bootTag, platform, s.Console, s.Network, caPEM)
+		source.Layers = append(source.Layers, oci.TarGzLayer(kernel), oci.FilesLayer(boot.Files(s.Console, s.Network, caPEM)))
+		return nil
 	}); err != nil {
 		return err
 	}
 
 	var fs *rootfs.Result
 	if err := step("Convert to a 9p filesystem", func() (err error) {
-		if nativeBuild {
-			fs, err = flattenRootfs(source, filepath.Join(out, "system"), o.NoChunks)
-		} else {
-			fs, err = exportRootfs(filepath.Join(out, "system"), platform, o.NoChunks)
-		}
+		fs, err = flattenRootfs(source, filepath.Join(out, "system"), o.NoChunks)
 		if err == nil {
 			fmt.Printf("    %d entries, %d MB uncompressed, %d unique files\n", fs.Entries, fs.TotalSize>>20, len(fs.Blobs))
 		}
@@ -513,7 +513,7 @@ func isDockerfileDir(source string) bool {
 }
 
 // flattenRootfs streams the image's flattened layers (the boot layer among them) straight into
-// the converter, as exportRootfs does `docker export`.
+// the converter.
 func flattenRootfs(img *oci.Image, systemDir string, noChunks bool) (*rootfs.Result, error) {
 	tmp, err := os.MkdirTemp("", "snowglobe-layers-")
 	if err != nil {
@@ -528,7 +528,7 @@ func flattenRootfs(img *oci.Image, systemDir string, noChunks bool) (*rootfs.Res
 }
 
 func resolveSource(source, platform string) error {
-	if _, err := os.Stat(filepath.Join(source, "Dockerfile")); err == nil {
+	if isDockerfileDir(source) {
 		return docker.Run("build", "--platform", platform, "--tag", sourceTag, source)
 	}
 	if err := docker.Run("pull", "--platform", platform, source); err != nil {
@@ -545,22 +545,6 @@ func pruneRuntime(out string, cpus int) error {
 		drop = "armless/armless.wasm"
 	}
 	return os.RemoveAll(filepath.Join(out, drop))
-}
-
-// exportRootfs streams `docker export` of the boot image straight into the converter.
-func exportRootfs(systemDir, platform string, noChunks bool) (*rootfs.Result, error) {
-	container, err := docker.Output("create", "--platform", platform, bootTag)
-	if err != nil {
-		return nil, err
-	}
-	defer docker.Output("rm", container)
-
-	var res *rootfs.Result
-	err = docker.Stream(func(r io.Reader) (err error) {
-		res, err = rootfs.Convert(r, systemDir, rootfs.Options{NoChunks: noChunks})
-		return
-	}, "export", container)
-	return res, err
 }
 
 // prepareOut only ever deletes a directory snowglobe created, never an arbitrary --out.

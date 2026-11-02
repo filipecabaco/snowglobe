@@ -140,14 +140,28 @@ jobs:
           go build -o snowglobe ./cmd/snowglobe
           docker save "$(./snowglobe tools)" | zstd -T0 -3 -o tools.tar.zst
 
+      # The kernel archive every build adds as a layer, built once here rather than by each site
+      # job that builds (SNOWGLOBE_BOOT points them at it); cached until its Dockerfile changes
+      - uses: actions/cache@v6
+        id: kernel
+        with:
+          path: snowglobe-boot.tar.gz
+          key: snowglobe-boot-${{ hashFiles('internal/boot/kernel.Dockerfile') }}
+
+      - name: Build the kernel archive
+        if: steps.kernel.outputs.cache-hit != 'true'
+        run: go run ./cmd/snowglobe tools kernel snowglobe-boot.tar.gz
+
       - uses: actions/upload-artifact@v7
         with:
           name: tools-image
-          path: tools.tar.zst
+          path: |
+            tools.tar.zst
+            snowglobe-boot.tar.gz
           retention-days: 1
 
-  # Each site is built (or restored: a site is cached until its example or snowglobe changes),
-  # then run headlessly and checked. Guests are arm64: arm64 runners build them natively.
+  # Each site is built (or restored: a site is cached until its example or snowglobe changes,
+  # tests aside), then run headlessly and checked. Guests are arm64: arm64 runners build them natively.
   site:
     needs: [setup, tools]
     runs-on: ubuntu-24.04-arm
@@ -181,7 +195,7 @@ jobs:
         id: cache
         with:
           path: dist/${{ matrix.site.name }}
-          key: site-${{ matrix.site.name }}-${{ hashFiles(format('examples/{0}/**', matrix.site.src), 'internal/**', 'cmd/**', 'go.mod', 'go.sum') }}
+          key: site-${{ matrix.site.name }}-${{ hashFiles(format('examples/{0}/**', matrix.site.src), 'internal/**', 'cmd/**', 'go.mod', 'go.sum', '!**/*_test.go', '!**/*.test.cjs') }}
 
       - uses: actions/download-artifact@v8
         with:
@@ -191,6 +205,7 @@ jobs:
         run: |
           zstd -dc tools.tar.zst | docker load && rm tools.tar.zst
           go build -o snowglobe ./cmd/snowglobe
+          echo "SNOWGLOBE_BOOT=$PWD/snowglobe-boot.tar.gz" >> "$GITHUB_ENV"
 
       # Anonymous Docker Hub pulls from shared runners hit its rate limit (429); pull through
       # Google's public mirror instead
