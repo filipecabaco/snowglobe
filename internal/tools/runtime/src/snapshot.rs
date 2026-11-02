@@ -32,10 +32,10 @@ use crate::Args;
 
 const TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// A boot that has printed, fetched and computed nothing for this long, before its app is ready,
-/// has stalled (SNOWGLOBE_BOOT_STALL_SECS says otherwise): its CPUs' state is printed and it ends
-/// with BOOT_STALLED, which the build answers by booting once more.
+/// has stalled (SNOWGLOBE_BOOT_STALL_SECS says otherwise; 0 turns it off): its CPUs' state is
+/// printed and it ends with BOOT_STALLED, which the build answers by booting once more.
 const STALL: Duration = Duration::from_secs(5 * 60);
-pub const BOOT_STALLED: u8 = 75;
+const BOOT_STALLED: u8 = 75;
 /// Without --ready, the app counts as ready once its console has been quiet this long.
 const QUIET: Duration = Duration::from_secs(5);
 /// An exercise command is done once the guest has neither printed nor fetched a file for this
@@ -99,11 +99,8 @@ pub fn main(args: &Args) -> Result<u8, String> {
     // Up: a root shell on the serial port, and the app on the console
     let mut boot_seconds = 0.0;
     let mut app_ready = false;
-    let stall_after = std::env::var("SNOWGLOBE_BOOT_STALL_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .map_or(STALL, Duration::from_secs);
-    let mut stall = Stall::new(stall_after, Instant::now());
+    let mut stall = stall_after(std::env::var("SNOWGLOBE_BOOT_STALL_SECS").ok().as_deref())?
+        .map(|after| Stall::new(after, Instant::now()));
     let mut load = machine::Load::new(&runner);
     let mut sampled = Instant::now();
     loop {
@@ -114,15 +111,16 @@ pub fn main(args: &Args) -> Result<u8, String> {
             dump_cpus(&runner, build_cpus);
             return Err(format!("app not ready after {}s", TIMEOUT.as_secs()));
         }
-        if !app_ready && sampled.elapsed() >= Duration::from_secs(1) {
+        if let Some(stall) = stall.as_mut().filter(|_| !app_ready && sampled.elapsed() >= Duration::from_secs(1)) {
             sampled = Instant::now();
             let output = activity.serial_total() + activity.screen.lock().unwrap().total();
-            let busy = load.busy(&runner);
+            // A request still open to the outside is waiting on it, not stalled
+            let busy = load.busy(&runner) || activity.connected();
             if stall.observe(sampled, output, activity.idle_for(), busy) {
                 eprintln!(
                     "\nsnowglobe-vm: the boot stalled: nothing printed, fetched or computed for {}s, \
                      {:.0}s in. Its CPUs, 2 s apart:",
-                    stall_after.as_secs(),
+                    stall.after.as_secs(),
                     started.elapsed().as_secs_f64()
                 );
                 dump_cpus(&runner, build_cpus);
@@ -239,22 +237,35 @@ fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
     e.finish().map_err(|e| e.to_string())
 }
 
+/// SNOWGLOBE_BOOT_STALL_SECS: how long a boot may do nothing (None: as long as it likes).
+fn stall_after(var: Option<&str>) -> Result<Option<Duration>, String> {
+    match var.map(str::trim) {
+        None | Some("") => Ok(Some(STALL)),
+        Some(s) => match s.parse::<u64>() {
+            Ok(0) => Ok(None),
+            Ok(n) => Ok(Some(Duration::from_secs(n))),
+            Err(_) => Err(format!("SNOWGLOBE_BOOT_STALL_SECS={s}: seconds, or 0 for no limit")),
+        },
+    }
+}
+
 /// Whether a boot has stalled: no output, file fetch or network traffic, and no CPU busy, for
 /// `after`.
-pub struct Stall {
+struct Stall {
     after: Duration,
     output: usize,
     since: Instant,
 }
 
 impl Stall {
-    pub fn new(after: Duration, now: Instant) -> Stall {
+    fn new(after: Duration, now: Instant) -> Stall {
         Stall { after, output: 0, since: now }
     }
 
     /// Look again at `now`: the output so far (bytes printed, all told), how long since a file
-    /// fetch or network traffic, and whether the CPUs were busy. True once it has stalled.
-    pub fn observe(&mut self, now: Instant, output: usize, quiet_for: Duration, busy: bool) -> bool {
+    /// fetch or network traffic, and whether the guest was busy (computing, or with a request
+    /// open). True once it has stalled.
+    fn observe(&mut self, now: Instant, output: usize, quiet_for: Duration, busy: bool) -> bool {
         let since_activity = now.checked_sub(quiet_for).unwrap_or(now);
         if output != self.output || busy {
             self.output = output;
@@ -275,7 +286,8 @@ impl Stall {
 /// timer ticks are handled, and each `cntv` a few ms to seconds ahead. A lost wakeup shows a
 /// timer deadline far in the past with the count standing still; a guest stuck spinning (a
 /// deadlock in the kernel) shows its PC and count moving with nothing printed.
-pub fn describe_cpu(i: usize, c: &armless::cpu::SysRegs, pc: u64, lr: u64, el: u8, daif: u32, insns: u64, now: u64) -> String {
+#[allow(clippy::too_many_arguments)]
+fn describe_cpu(i: usize, c: &armless::cpu::SysRegs, pc: u64, lr: u64, el: u8, daif: u32, insns: u64, now: u64) -> String {
     let timer = |ctl: u64, cval: u64| -> String {
         if ctl & 1 == 0 {
             return "off".into();
@@ -380,6 +392,15 @@ mod tests {
         assert!(s.observe(t0 + secs(1300), 0, secs(1300), false));
         // New output starts the count again
         assert!(!s.observe(t0 + secs(1301), 1, secs(1301), false));
+    }
+
+    #[test]
+    fn the_stall_limit_is_seconds_and_0_turns_it_off() {
+        assert_eq!(stall_after(None), Ok(Some(STALL)));
+        assert_eq!(stall_after(Some("")), Ok(Some(STALL)));
+        assert_eq!(stall_after(Some("20")), Ok(Some(secs(20))));
+        assert_eq!(stall_after(Some("0")), Ok(None));
+        assert!(stall_after(Some("5m")).is_err());
     }
 
     #[test]

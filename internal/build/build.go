@@ -244,12 +244,13 @@ func Run(o Options, version string) error {
 	}
 
 	if err := step("Boot and snapshot", func() error {
-		// The snapshot opens its tunnels natively: one token for the whole boot
-		tunnels, err := tunnel.Fill(s.Tunnels, s.TunnelToken)
-		if err != nil {
-			return err
-		}
 		snapshot := func() error {
+			// The snapshot opens its tunnels natively: one token for the whole boot, fetched
+			// for each, so a boot again after a stall doesn't start on a token minutes old
+			tunnels, err := tunnel.Fill(s.Tunnels, s.TunnelToken)
+			if err != nil {
+				return err
+			}
 			if nativeBuild {
 				cmd := exec.Command(vm, tools.SnapshotArgs(filepath.Join(out, "system"), s.Memory, s.Ready, s.Exercise,
 					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)...)
