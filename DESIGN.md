@@ -231,7 +231,9 @@ Corners are nearly square. Panels and code blocks use a 6px radius. Every button
 ### Buttons
 Pill controls with confident fills and a single colour change on hover.
 - **Shape:** full pill (999px), 44px tall, 0 18px padding, Switzer 550 at 15px.
-- **Run (primary):** Signal Vermilion fill and border with white text: "Run here", one per run.
+- **Run (primary):** Signal Vermilion fill and border with white text: "Run here", one per run. A run on
+  several CPUs can't play inline (it needs a cross-origin isolated page of its own), so it has no
+  "Run here": its "New window" takes the signal fill instead, keeping one filled pill per run.
 - **Outline (secondary):** transparent with a 1px ink border and ink text. Used for "New window" (with a trailing 14px arrow icon) and the live bar's "Stop".
 - **Hover:** both variants fill with ink and switch to white text, with a 0.2s `cubic-bezier(.2,.8,.2,1)` colour transition.
 - **Pressed:** a running "Run here" becomes "Stop" with `aria-pressed="true"` and an ink fill.
@@ -253,6 +255,16 @@ Full width, 15px, right-aligned numerals with a left-aligned first column. The h
 
 ### Navigation
 The masthead has the lowercase "snowglobe" wordmark (650, 20px, −0.02em) followed by a small round dot, and 15px text links on the right. A 1px ink rule runs underneath. Links are underlined with 1px thickness at a 4px offset, thickening to 2px on hover.
+
+### Docs Page (Read surface)
+`site/docs/index.html` is the user guide and CLI reference, in Read mode in the same world. It shares
+`base.css` (tokens, type, masthead, code, tables, footer) and `theme.js` with the index. Prose sits in
+the 8-column main column at a 40em measure; the 4-column rail holds a sticky "On this page" list
+where the index keeps its ledger, ruled like the ledger, with the section being read set in 600
+weight (never signal: signal means live). Sections open with the full-ink rule and a run-title
+sized heading; subsections use the Title step. A note is a 1px ink rule on the left, never a
+tinted box. Under 1080px the contents move above the text; under 720px option tables reflow into
+one block per row and the isolation comparison into labelled rows, so no table scrolls sideways.
 
 ### Run Window Strip (minor surface)
 A run opened in its own window (`internal/site/index.html.tmpl`) shows a one-line strip above a full-bleed black terminal: the title, "sandboxed in this tab · no server · no network", and a status with a dot. The strip is hidden when the run is embedded (`?embed`). It uses the system's tokens: white ground, ink text and rule, graphite secondary text, the amber restoring dot and the signal live dot; its type is the platform mono, since the template ships with every snowglobe site and carries no web fonts.
@@ -294,6 +306,10 @@ dark overrides only the tokens.
 | `--signal` | #d6300c | #ff5a2e |
 | `--on-signal` (run button text) | #ffffff | #0b0b0c |
 | `--restoring` dot | #c48a1e | #e0a640 |
+| `--select` (text selection) | #ffd9cd | #5a2a1e |
+
+The restore progress bar's track is a fixed `#2a2a2a` in both themes: it sits on the panel, which is
+black in both.
 
 - The terminals stay the darkest surface in both themes; in dark they gain a hairline edge so
   they still read as panels against the near-black ground.

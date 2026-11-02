@@ -1,0 +1,98 @@
+/* What every page of the site shares: type, colour (light and dark), the masthead, code,
+   tables and the footer. Each page adds its own layout in a <style> of its own. */
+
+@font-face { font-family: "Switzer"; src: url("fonts/Switzer-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Fragment Mono"; src: url("fonts/FragmentMono-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+
+:root {
+  --ink: #0d0d0d;
+  --ink-2: #5a5a57;
+  --rule: #dedede;
+  --soft: #f3f3f0;
+  --panel: #0b0b0c;
+  --panel-ink: #e9e9e4;
+  --signal: #d6300c;
+  --on-signal: #ffffff;
+  --bg: #ffffff;
+  --on-ink: #ffffff;
+  --select: #ffd9cd;
+  --restoring: #c48a1e;
+  --idle: #c9c9c5;
+  --panel-edge: transparent;
+  --sheet-shadow: rgb(0 0 0 / .25);
+  --gap: 24px;
+  --pad: clamp(20px, 4vw, 64px);
+  --sans: "Switzer", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Fragment Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+/* Dark: follows the system unless the visitor picked a theme; the toggle sets data-theme */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #ecece8; --ink-2: #a2a29c; --rule: #2b2b29; --soft: #171716; --panel: #050505; --panel-edge: #2b2b29;
+    --signal: #ff5a2e; --on-signal: #0b0b0c; --bg: #0d0d0c; --on-ink: #0d0d0c; --select: #5a2a1e;
+    --restoring: #e0a640; --idle: #4a4a46; --sheet-shadow: rgb(0 0 0 / .6);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ink: #ecece8; --ink-2: #a2a29c; --rule: #2b2b29; --soft: #171716; --panel: #050505; --panel-edge: #2b2b29;
+  --signal: #ff5a2e; --on-signal: #0b0b0c; --bg: #0d0d0c; --on-ink: #0d0d0c; --select: #5a2a1e;
+  --restoring: #e0a640; --idle: #4a4a46; --sheet-shadow: rgb(0 0 0 / .6);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scrollbar-color: var(--idle) transparent; background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--ink); transition: background-color .25s, color .25s; font: 400 17px/1.55 var(--sans); font-variant-numeric: tabular-nums; caret-color: var(--signal); -webkit-font-smoothing: antialiased; }
+::selection { background: var(--select); color: var(--ink); }
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; border-radius: 2px; }
+code, pre, .mono { font-family: var(--mono); font-size: .86em; }
+/* Long commands and URLs in running text break rather than widen the page */
+p code, td code { overflow-wrap: anywhere; }
+
+.wrap { max-width: 1440px; margin: 0 auto; padding: 0 var(--pad); }
+
+/* Masthead */
+.top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--gap); padding: 28px 0; border-bottom: 1px solid var(--ink); }
+.mark { font-weight: 650; font-size: 20px; letter-spacing: -.02em; text-decoration: none; }
+.mark i { display: inline-block; width: .5em; height: .5em; border-radius: 50%; background: var(--ink); margin-left: .12em; vertical-align: .05em; transition: background-color .3s; }
+/* The signal colour belongs to live state: the mark lights up only while a run is live */
+.live-any .mark i { background: var(--signal); }
+.top nav { display: flex; align-items: baseline; gap: 28px; font-size: 15px; }
+.theme { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.theme:hover { text-decoration-thickness: 2px; }
+
+/* Code keeps its columns: it scrolls sideways when it must, it never re-wraps */
+pre { margin: 0; padding: 18px 20px; background: var(--soft); border-radius: 6px; overflow-x: auto; line-height: 1.6; font-size: 13.5px; color: var(--ink); white-space: pre; }
+pre .dim { color: var(--ink-2); }
+p + pre { margin-top: 0; }
+
+table { width: 100%; border-collapse: collapse; margin: 40px 0 0; font-size: 15px; }
+th, td { text-align: right; padding: 12px 16px 12px 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+thead th { color: var(--ink-2); font-weight: 500; font-size: 13px; border-bottom-color: var(--ink); }
+td.wrap-cell { white-space: normal; text-align: left; color: var(--ink-2); }
+.table-wrap { overflow-x: auto; }
+table.options th { text-align: left; }
+table.options td:first-child, table.options td:nth-child(2) { font-family: var(--mono); font-size: 13.5px; text-align: left; }
+table.options td.wrap-cell { min-width: 24ch; }
+
+footer { margin-top: clamp(80px, 10vw, 140px); padding: 28px 0 48px; border-top: 1px solid var(--ink); color: var(--ink-2); font-size: 15px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 32px; }
+
+/* Touch: small text links keep their look but get a 44px tall target */
+@media (pointer: coarse) {
+  .top nav a, .theme, footer a, .command a { display: inline-block; padding-block: 12px; margin-block: -12px; }
+}
+/* Phones: an options table reflows into one block per row, so nothing clips */
+@media (max-width: 720px) {
+  table.options thead { display: none; }
+  table.options, table.options tbody, table.options tr { display: block; }
+  table.options tr { padding: 12px 0; border-bottom: 1px solid var(--rule); }
+  table.options td { display: inline; border: 0; padding: 0 12px 0 0; }
+  table.options td.wrap-cell { display: block; min-width: 0; padding-top: 4px; }
+}

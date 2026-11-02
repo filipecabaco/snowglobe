@@ -25,76 +25,12 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
   <link rel="preload" href="fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="xterm/xterm.css">
+  <link rel="stylesheet" href="base.css">
   <script>
     // Apply a remembered theme before first paint, so the page never flashes the wrong one
     try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
   </script>
   <style>
-    @font-face { font-family: "Switzer"; src: url("fonts/Switzer-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
-    @font-face { font-family: "Fragment Mono"; src: url("fonts/FragmentMono-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
-
-    :root {
-      --ink: #0d0d0d;
-      --ink-2: #5a5a57;
-      --rule: #dedede;
-      --soft: #f3f3f0;
-      --panel: #0b0b0c;
-      --panel-ink: #e9e9e4;
-      --signal: #d6300c;
-      --on-signal: #ffffff;
-      --bg: #ffffff;
-      --on-ink: #ffffff;
-      --select: #ffd9cd;
-      --restoring: #c48a1e;
-      --idle: #c9c9c5;
-      --panel-edge: transparent;
-      --sheet-shadow: rgb(0 0 0 / .25);
-      --gap: 24px;
-      --pad: clamp(20px, 4vw, 64px);
-      --sans: "Switzer", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-      --mono: "Fragment Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      color-scheme: light;
-    }
-
-    /* Dark: follows the system unless the visitor picked a theme; the toggle sets data-theme */
-    @media (prefers-color-scheme: dark) {
-      :root:not([data-theme="light"]) {
-        --ink: #ecece8; --ink-2: #a2a29c; --rule: #2b2b29; --soft: #171716; --panel: #050505; --panel-edge: #2b2b29;
-        --signal: #ff5a2e; --on-signal: #0b0b0c; --bg: #0d0d0c; --on-ink: #0d0d0c; --select: #5a2a1e;
-        --restoring: #e0a640; --idle: #4a4a46; --sheet-shadow: rgb(0 0 0 / .6);
-        color-scheme: dark;
-      }
-    }
-    :root[data-theme="dark"] {
-      --ink: #ecece8; --ink-2: #a2a29c; --rule: #2b2b29; --soft: #171716; --panel: #050505; --panel-edge: #2b2b29;
-      --signal: #ff5a2e; --on-signal: #0b0b0c; --bg: #0d0d0c; --on-ink: #0d0d0c; --select: #5a2a1e;
-      --restoring: #e0a640; --idle: #4a4a46; --sheet-shadow: rgb(0 0 0 / .6);
-      color-scheme: dark;
-    }
-
-    * { box-sizing: border-box; }
-    html { scrollbar-color: var(--idle) transparent; background: var(--bg); }
-    body { margin: 0; background: var(--bg); color: var(--ink); transition: background-color .25s, color .25s; font: 400 17px/1.55 var(--sans); font-variant-numeric: tabular-nums; caret-color: var(--signal); -webkit-font-smoothing: antialiased; }
-    ::selection { background: var(--select); color: var(--ink); }
-    a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 4px; }
-    a:hover { text-decoration-thickness: 2px; }
-    :focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; border-radius: 2px; }
-    code, pre, .mono { font-family: var(--mono); font-size: .86em; }
-    /* Long commands and URLs in running text break rather than widen the page */
-    p code, td code { overflow-wrap: anywhere; }
-
-    .wrap { max-width: 1440px; margin: 0 auto; padding: 0 var(--pad); }
-
-    /* Masthead */
-    .top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--gap); padding: 28px 0; border-bottom: 1px solid var(--ink); }
-    .mark { font-weight: 650; font-size: 20px; letter-spacing: -.02em; text-decoration: none; }
-    .mark i { display: inline-block; width: .5em; height: .5em; border-radius: 50%; background: var(--ink); margin-left: .12em; vertical-align: .05em; transition: background-color .3s; }
-    /* The signal colour belongs to live state: the mark lights up only while a run is live */
-    .live-any .mark i { background: var(--signal); }
-    .top nav { display: flex; align-items: baseline; gap: 28px; font-size: 15px; }
-    .theme { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
-      text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
-    .theme:hover { text-decoration-thickness: 2px; }
 
     /* The page: main column for runs, a rail on the right for the live ledger */
     .layout { display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); column-gap: calc(var(--gap) * 2); }
@@ -158,25 +94,8 @@
     .step { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 9fr); gap: var(--gap); padding: 28px 0; border-bottom: 1px solid var(--rule); }
     .step h3 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
     .step p { margin: 0 0 16px; max-width: 40em; }
-    /* Code keeps its columns: it scrolls sideways when it must, it never re-wraps */
-    pre { margin: 0; padding: 18px 20px; background: var(--soft); border-radius: 6px; overflow-x: auto; line-height: 1.6; font-size: 13.5px; color: var(--ink); white-space: pre; }
-    pre .dim { color: var(--ink-2); }
-    p + pre { margin-top: 0; }
+    .ref-more { margin: 40px 0 0; max-width: 40em; }
 
-    table { width: 100%; border-collapse: collapse; margin: 40px 0 0; font-size: 15px; }
-    th, td { text-align: right; padding: 12px 16px 12px 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
-    th:first-child, td:first-child { text-align: left; }
-    thead th { color: var(--ink-2); font-weight: 500; font-size: 13px; border-bottom-color: var(--ink); }
-    td.wrap-cell { white-space: normal; text-align: left; color: var(--ink-2); }
-    .table-wrap { overflow-x: auto; }
-    table.options th { text-align: left; }
-    table.options td:first-child, table.options td:nth-child(2) { font-family: var(--mono); font-size: 13.5px; text-align: left; }
-    table.options td.wrap-cell { min-width: 24ch; }
-    table.commands td:nth-child(2) { font-family: var(--sans); font-size: inherit; }
-    .ref-title { margin: 56px 0 0; font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
-    .ref-title + .table-wrap table { margin-top: 12px; }
-
-    footer { margin-top: clamp(80px, 10vw, 140px); padding: 28px 0 48px; border-top: 1px solid var(--ink); color: var(--ink-2); font-size: 15px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 32px; }
 
     /* The ledger: a live table of the visitor's own runs, in the right rail */
     .rail { position: relative; }
@@ -214,18 +133,13 @@
     }
     @media (max-width: 720px) {
       body { font-size: 16px; }
-      .top nav a:not([href^="https"]) { display: none; }
+      .top nav a[href^="#"] { display: none; }
       .run-head { grid-template-columns: minmax(0, 1fr); }
       .controls { flex-wrap: wrap; }
       .panel { height: 380px; }
       dl.specs { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 20px; }
       .step { grid-template-columns: minmax(0, 1fr); gap: 12px; }
       /* Each flag as its own block: flag and label on one line, what it sets below */
-      table.options thead { display: none; }
-      table.options, table.options tbody, table.options tr { display: block; }
-      table.options tr { padding: 12px 0; border-bottom: 1px solid var(--rule); }
-      table.options td { display: inline; border: 0; padding: 0 12px 0 0; }
-      table.options td.wrap-cell { display: block; min-width: 0; padding-top: 4px; }
       /* Compare: each run as a block of labelled figures, so nothing clips at rest */
       #summary thead { display: none; }
       #summary, #summary tbody, #summary tr { display: block; }
@@ -260,10 +174,6 @@
       .run.playing .panel .loading { bottom: auto; top: calc(80px + env(safe-area-inset-top, 0px)); }
       html:has(.run.playing) { overflow: hidden; }
     }
-    /* Touch: small text links keep their look but get a 44px tall target */
-    @media (pointer: coarse) {
-      .top nav a, .theme, footer a { display: inline-block; padding-block: 12px; margin-block: -12px; }
-    }
     @media (prefers-reduced-motion: reduce) {
       .ledger li.enter, .ledger [data-state="ready"] .dot { animation: none; }
       ::view-transition-old(*), ::view-transition-new(*) { animation: none; }
@@ -277,6 +187,7 @@
       <nav aria-label="Site">
         <a href="#runs">Runs</a>
         <a href="#make-your-own">Make your own</a>
+        <a href="docs/">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
       </nav>
@@ -430,50 +341,8 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
             </div>
           </div>
 
-          <h3 class="ref-title" id="commands">Commands</h3>
-          <div class="table-wrap">
-            <table class="options commands" aria-labelledby="commands">
-              <thead><tr><th scope="col">Command</th><th scope="col">Does</th></tr></thead>
-              <tbody>
-                <tr><td>build &lt;dir | image&gt;</td><td class="wrap-cell">package a Docker image (a directory with a Dockerfile, or an image) into a static site; the flags are below</td></tr>
-                <tr><td>serve [dir] [--port N]</td><td class="wrap-cell">preview a built site at localhost, port 8000 by default</td></tr>
-                <tr><td>pwa &lt;site&gt;</td><td class="wrap-cell">make it an installable app that works offline once it has run; <code>--name</code> and <code>--short-name</code> override the title</td></tr>
-                <tr><td>pool &lt;dir&gt;</td><td class="wrap-cell">let every site under a directory share one blob store, for hosting several together</td></tr>
-                <tr><td>pack &lt;site&gt; [-o file]</td><td class="wrap-cell">write a site as one tarball (.tar.gz or .tar.zst) to publish on a CDN</td></tr>
-                <tr><td>run [site | url]</td><td class="wrap-cell">run a site without a browser, in a sandboxed container or natively (<code>--runtime native</code>, no Docker): a session in a terminal, or piped lines typed in as commands. Takes a folder, a tarball, or a URL to either; <code>--detach --name N</code> keeps it running, <code>-p 8000:8000</code> forwards a port into a guest built with a network, and <code>--max-runtime</code>, <code>--stop-file</code> and <code>--log-dir</code> let a program drive it</td></tr>
-                <tr><td>bundle &lt;site&gt; [-o file]</td><td class="wrap-cell">make a site one executable, the emulator and the site together, that runs it with no Docker or hypervisor and takes one-shot jobs (<code>--workspace</code>, <code>--cmd</code>)</td></tr>
-                <tr><td>exec &lt;name&gt; &lt;command&gt;</td><td class="wrap-cell">type a command into a running instance and print only its output</td></tr>
-                <tr><td>attach &lt;name&gt;</td><td class="wrap-cell">join a running instance's session; ctrl-] detaches and leaves it running</td></tr>
-                <tr><td>sh &lt;name&gt; &lt;command&gt;</td><td class="wrap-cell">run a shell command on a native instance, whatever its app is: its output and exit status (<code>--json</code>); out of time, it and everything it started are killed</td></tr>
-                <tr><td>cp &lt;src&gt; &lt;dst&gt;</td><td class="wrap-cell">copy files or directories in or out of a native instance, <code>name:/path</code> on one side</td></tr>
-                <tr><td>mcp &lt;site | url&gt;</td><td class="wrap-cell">serve a site to an agent over MCP (stdio): an isolated Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code></td></tr>
-                <tr><td>warm &lt;site&gt; &lt;reads.json&gt;</td><td class="wrap-cell">add the files a run recorded (<code>run --record-reads</code>) to the site's preloaded files</td></tr>
-                <tr><td>ps</td><td class="wrap-cell">list running instances</td></tr>
-                <tr><td>stop &lt;name&gt;</td><td class="wrap-cell">throw a running instance away (natively, it kills its job and logs why first)</td></tr>
-              </tbody>
-            </table>
-          </div>
-
-          <h3 class="ref-title" id="build-flags">Build flags</h3>
-          <div class="table-wrap">
-            <table class="options" aria-labelledby="build-flags">
-              <thead><tr><th scope="col">Flag</th><th scope="col">Label</th><th scope="col">Sets</th></tr></thead>
-              <tbody>
-                <tr><td>--ready TEXT</td><td>snowglobe.ready</td><td class="wrap-cell">terminal output that means the program is ready to snapshot</td></tr>
-                <tr><td>--exercise CMD</td><td>snowglobe.exercise</td><td class="wrap-cell">commands typed after the snapshot; their files get preloaded</td></tr>
-                <tr><td>--cmd CMD</td><td></td><td class="wrap-cell">run something other than the image's own CMD</td></tr>
-                <tr><td>--memory MB</td><td>snowglobe.memory</td><td class="wrap-cell">guest RAM, 512 by default</td></tr>
-                <tr><td>--title TEXT</td><td>snowglobe.title</td><td class="wrap-cell">the page title</td></tr>
-                <tr><td>--warm REGEX</td><td>snowglobe.warm</td><td class="wrap-cell">extra guest paths to preload</td></tr>
-                <tr><td>--network fetch</td><td>snowglobe.network</td><td class="wrap-cell">give the guest a network: HTTP(S) and WebSockets leave as the visitor's own browser requests, so CORS applies; none by default</td></tr>
-                <tr><td>--tunnel [HOST:]PORT=URL</td><td>snowglobe.tunnels</td><td class="wrap-cell">carry the guest's other TCP (a database, Redis) to that port over a WebSocket to URL; <code>--tunnel-token URL</code> fetches a fresh token per connection, so no credential ships with the site</td></tr>
-                <tr><td>--cpus N</td><td>snowglobe.cpus</td><td class="wrap-cell">guest CPUs, 1 to 8, each in a Web Worker; 1 by default</td></tr>
-                <tr><td>--builder native</td><td></td><td class="wrap-cell">build with no Docker, from an image reference or a saved archive</td></tr>
-                <tr><td>--sandbox</td><td></td><td class="wrap-cell">keep the guest's file cache in the snapshot instead of dropping it: for bundles and native runs, which carry the files anyway</td></tr>
-                <tr><td>--out DIR</td><td></td><td class="wrap-cell">where the site is written, dist by default</td></tr>
-              </tbody>
-            </table>
-          </div>
+          <p class="ref-more">Every command, flag, label and setting is in the <a href="docs/#reference">docs</a>,
+            with guides to building, networking, running headlessly and driving it from an agent.</p>
         </section>
       </main>
 
@@ -518,27 +387,7 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
     </article>
   </template>
 
-  <script>
-  {
-    // Theme: system by default; the toggle pins the other one and remembers it
-    const toggle = document.getElementById("theme-toggle");
-    const systemDark = matchMedia("(prefers-color-scheme: dark)");
-    const isDark = () => (document.documentElement.dataset.theme || (systemDark.matches ? "dark" : "light")) === "dark";
-    const labelTheme = () => {
-      toggle.textContent = isDark() ? "Light" : "Dark";
-      toggle.setAttribute("aria-label", `Switch to ${isDark() ? "light" : "dark"} theme`);
-    };
-    toggle.addEventListener("click", () => {
-      const next = isDark() ? "light" : "dark";
-      document.documentElement.dataset.theme = next;
-      try { localStorage.setItem("snowglobe-theme", next); } catch {}
-      labelTheme();
-    });
-    systemDark.addEventListener("change", labelTheme);
-    labelTheme();
-
-  }
-  </script>
+  <script src="theme.js"></script>
   <script src="xterm/xterm.js" defer></script>
   <script type="module">
     const demos = [
@@ -576,7 +425,8 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
       win.setAttribute("aria-label", `Open ${demo.name} in a new window`);
       win.addEventListener("click", (event) => openWindow(event, demo));
       const play = $(".play", node);
-      play.setAttribute("aria-label", `Run ${demo.name} here`);
+      // The visible text first, so "click Run here" works by voice too (WCAG 2.5.3)
+      play.setAttribute("aria-label", `Run here: ${demo.name}`);
       // Several CPUs need a cross-origin isolated page, which a frame in this page can't be:
       // those runs open in a window of their own
       play.addEventListener("click", (event) => (entry.cpus > 1 ? openWindow(event, demo) : toggleInline(entry)));
@@ -605,7 +455,11 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
       }
       if (run) {
         entry.cpus = run.cpus || 1;
-        if (entry.cpus > 1) $(".play", node).setAttribute("aria-label", `Run ${demo.name} in a new window (${entry.cpus} CPUs)`);
+        if (entry.cpus > 1) {
+          // It can only run in a window of its own (above): one control, saying what it does
+          $(".play", node).hidden = true;
+          $(".window", node).classList.add("go");
+        }
         spec("Snapshot to restore", mb(run.snapshot_bytes), "MB");
         spec("Ready at build", run.boot_seconds.toFixed(1), "s");
         spec("Preloaded", mb(pre), "MB");
@@ -715,6 +569,7 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
       $(".panel", node).style.viewTransitionName = "panel-" + demo.dir;
       const play = $(".play", node);
       play.textContent = "Run here";
+      play.setAttribute("aria-label", `Run here: ${demo.name}`);
       play.setAttribute("aria-pressed", "false");
       playing = null;
     }
@@ -741,6 +596,7 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
         node.classList.add("playing");
         const play = $(".play", node);
         play.textContent = "Stop";
+        play.setAttribute("aria-label", `Stop: ${demo.name}`);
         play.setAttribute("aria-pressed", "true");
         playing = entry;
       });

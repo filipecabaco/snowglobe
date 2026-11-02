@@ -8,8 +8,10 @@ web
 
 ## Stack
 
-Plain static HTML/CSS/JS, no framework or build step for the site itself (`site/index.html`,
-copied into `dist/` by `mise run build`). Deployed to GitHub Pages next to the demo builds.
+Plain static HTML/CSS/JS, no framework or build step for the site itself: the demo index
+(`site/index.html`) and the docs (`site/docs/index.html`), sharing `site/base.css` and
+`site/theme.js`, copied into `dist/` by `mise run build`. Deployed to GitHub Pages next to the demo
+builds.
 
 ## Users
 
@@ -36,6 +38,8 @@ shell, not a subset runtime: the real program built from a Dockerfile.
 ## Operating Context
 
 - Demos open in their own browser windows; the index page presents them and the runs.
+- The docs page (`/docs/`) is the user guide and CLI reference, and the source of truth for usage;
+  the README links into it rather than repeating it.
 - Each demo build emits measured data: `warm-report.json` (files read by phase) and the snapshot.
 - Demos: Supabase (the CLI's native stack and a notes app on it), Elixir IEx (plain IEx from Alpine packages), PostgreSQL (psql against a Postgres 18 server), Elixir + Postgres (Ecto/Postgrex, PostgreSQL 18 in the guest), Python + Rich, TypeScript + Zod (tsx), Go + Bubble Tea
   (Game of Life), Rust + clap (jtab), Java + Gson (jshell, OpenJDK 21), curl + jq (a shell, network on).

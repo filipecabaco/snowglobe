@@ -10,7 +10,8 @@
 
 Live demos: https://filipecabaco.github.io/snowglobe/ (Supabase, Elixir IEx, PostgreSQL,
 Elixir + Postgres, Python + Rich, TypeScript + Zod, Go + Bubble Tea, Rust + clap, Java + Gson,
-curl + jq). Source and README: https://github.com/filipecabaco/snowglobe
+curl + jq). Docs: https://filipecabaco.github.io/snowglobe/docs/ (guides and the full CLI
+reference). Source: https://github.com/filipecabaco/snowglobe
 
 Install: a release binary (Linux or macOS, amd64 or arm64) from
 https://github.com/filipecabaco/snowglobe/releases, or
@@ -46,7 +47,8 @@ https://github.com/filipecabaco/snowglobe/releases, or
   - `--tunnel [HOST:]PORT=URL`, `--tunnel-token URL`, `--allow-private`, `--record-reads FILE`.
 - `snowglobe exec <name> <command>` types one command into a running instance's app and prints
   only what it printed (plain text when piped): the way to drive a REPL.
-- `snowglobe sh <name> [--json] [--timeout SECS] <command>` runs a shell command on a native
+- `snowglobe sh <name> [--json] [--timeout SECS] '<command>'` runs a shell command, passed as one
+  quoted argument (its own flags would otherwise be read as snowglobe's), on a native
   instance's serial root shell, whatever its app is, with the app's environment: its output and
   exit status (`{"exit", "output", "timed_out", "killed"}` with `--json`). Out of time (default
   300 s), the command and everything it started are killed (exit 124).
