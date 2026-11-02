@@ -62,10 +62,16 @@ func For(version, goos, goarch string, image *Image) (string, error) {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return "", err
 		}
-		if err := image.Extract(dest + ".tmp"); err != nil {
+		// A temporary name of its own: another run may be copying it out at the same time
+		tmp, err := os.MkdirTemp(filepath.Dir(dest), ".extract-")
+		if err != nil {
 			return "", err
 		}
-		return dest, os.Rename(dest+".tmp", dest)
+		defer os.RemoveAll(tmp)
+		if err := image.Extract(filepath.Join(tmp, "snowglobe-vm")); err != nil {
+			return "", err
+		}
+		return dest, os.Rename(filepath.Join(tmp, "snowglobe-vm"), dest)
 	}
 	return "", fmt.Errorf("%w (%s/%s): set SNOWGLOBE_VM, or use a release of snowglobe", ErrNone, goos, goarch)
 }
@@ -111,20 +117,31 @@ func Download(url, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	tmp := dest + ".tmp"
-	f, err := os.Create(tmp)
+	return writeAtomically(dest, 0o644, resp.Body)
+}
+
+// writeAtomically writes r to dest through a temporary file of its own, so another process
+// writing dest at the same time (two runs on a fresh machine) never leaves a mix of both, and a
+// failed write leaves nothing.
+func writeAtomically(dest string, mode os.FileMode, r io.Reader) error {
+	f, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
+	_, err = io.Copy(f, r)
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	if err := f.Close(); err != nil {
-		return err
+	if err == nil {
+		err = os.Chmod(f.Name(), mode)
 	}
-	return os.Rename(tmp, dest)
+	if err == nil {
+		err = os.Rename(f.Name(), dest)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
 }
 
 // Extract writes the tarball member `member` to dest (executable).
@@ -148,19 +165,7 @@ func Extract(r io.Reader, member, dest string) error {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return err
 		}
-		tmp := dest + ".tmp"
-		f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(f, tr); err != nil {
-			f.Close()
-			return err
-		}
-		if err := f.Close(); err != nil {
-			return err
-		}
-		return os.Rename(tmp, dest)
+		return writeAtomically(dest, 0o755, tr)
 	}
 }
 

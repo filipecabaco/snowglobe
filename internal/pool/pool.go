@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -47,6 +49,27 @@ func Run(root string) (Stats, error) {
 		if len(files) == 0 {
 			continue // already pooled
 		}
+		// The page first: one that can't be pointed at the pool keeps its blobs
+		index := filepath.Join(site, "index.html")
+		page, err := repoint(index)
+		if err != nil {
+			return stats, err
+		}
+
+		// Then that no blob of the same name in the pool holds something else (names are short
+		// hashes), before any blob moves
+		for _, file := range files {
+			target := filepath.Join(blobs, filepath.Base(file))
+			if exists(target) {
+				same, err := sameBlob(file, target)
+				if err != nil {
+					return stats, err
+				}
+				if !same {
+					return stats, fmt.Errorf("%s and %s have one name but different contents: rebuild one of them", file, target)
+				}
+			}
+		}
 
 		for _, file := range files {
 			target := filepath.Join(blobs, filepath.Base(file))
@@ -67,7 +90,7 @@ func Run(root string) (Stats, error) {
 		if err := os.Remove(filepath.Join(site, "system", "filesystem")); err != nil {
 			return stats, err
 		}
-		if err := repoint(filepath.Join(site, "index.html")); err != nil {
+		if err := os.WriteFile(index, page, 0o644); err != nil {
 			return stats, err
 		}
 		stats.Sites++
@@ -78,16 +101,41 @@ func Run(root string) (Stats, error) {
 	return stats, nil
 }
 
-func repoint(index string) error {
+// sameBlob says whether two blobs hold the same file: the same bytes, or the same once
+// decompressed (another snowglobe may compress it differently).
+func sameBlob(a, b string) (bool, error) {
+	x, err := os.ReadFile(a)
+	if err != nil {
+		return false, err
+	}
+	y, err := os.ReadFile(b)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(x, y) {
+		return true, nil
+	}
+	d, err := zstd.NewReader(nil)
+	if err != nil {
+		return false, err
+	}
+	defer d.Close()
+	dx, errX := d.DecodeAll(x, nil)
+	dy, errY := d.DecodeAll(y, nil)
+	return errX == nil && errY == nil && bytes.Equal(dx, dy), nil
+}
+
+// repoint is the page in index with its blobs in the pool.
+func repoint(index string) ([]byte, error) {
 	html, err := os.ReadFile(index)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pooled := bytes.Replace(html, []byte(ownBlobs), []byte(`baseurl: "../blobs/"`), 1)
 	if bytes.Equal(pooled, html) {
-		return fmt.Errorf("%s: couldn't find the blob location to repoint", index)
+		return nil, fmt.Errorf("%s: couldn't find the blob location to repoint", index)
 	}
-	return os.WriteFile(index, pooled, 0o644)
+	return pooled, nil
 }
 
 func exists(path string) bool {

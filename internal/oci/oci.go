@@ -106,8 +106,13 @@ func Pull(ref string) (*Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &client{http: http.DefaultClient, base: "https://" + r.Registry + "/v2/" + r.Repository}
-	m, err := c.manifest(r.Reference)
+	return (&client{http: http.DefaultClient, base: "https://" + r.Registry + "/v2/" + r.Repository}).pull(ref, r.Reference)
+}
+
+// pull reads the linux/arm64 image at reference (a tag or digest) from c's repository; ref names
+// it in errors.
+func (c *client) pull(ref, reference string) (*Image, error) {
+	m, err := c.manifest(reference)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ref, err)
 	}
@@ -363,10 +368,12 @@ func FromTar(r io.Reader, archive, dir string) (*Image, error) {
 			return nil, err
 		}
 	}
-	read := func(name string) ([]byte, error) { return os.ReadFile(filepath.Join(dir, filepath.FromSlash(name))) }
+	// The archive names its config and layers: within dir, as it was unpacked, whatever the names say
+	file := func(name string) string { return filepath.Join(dir, filepath.FromSlash(path.Clean("/"+name))) }
+	read := func(name string) ([]byte, error) { return os.ReadFile(file(name)) }
 	open := func(name, mediaType string) Layer {
 		return func() (io.ReadCloser, error) {
-			f, err := os.Open(filepath.Join(dir, filepath.FromSlash(name)))
+			f, err := os.Open(file(name))
 			if err != nil {
 				return nil, err
 			}
@@ -404,7 +411,11 @@ func FromTar(r io.Reader, archive, dir string) (*Image, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
-	for len(m.Manifests) > 0 {
+	for depth := 0; len(m.Manifests) > 0; depth++ {
+		// An index of indexes, not one that lists itself
+		if depth == 8 {
+			return nil, fmt.Errorf("%s: image indexes nested too deep", archive)
+		}
 		pick := m.Manifests[0]
 		for _, d := range m.Manifests {
 			if d.Platform != nil && d.Platform.Architecture == "arm64" {
@@ -533,7 +544,13 @@ func Flatten(layers []Layer, tmp string, w io.Writer) error {
 			}
 			nodes[name] = n
 		}
+		// To its end: a tar stops at its end-of-archive blocks, and only a layer read to the end is
+		// checked against its digest (and a gzip against its checksum)
+		_, err = io.Copy(io.Discard, r)
 		r.Close()
+		if err != nil {
+			return fmt.Errorf("layer %d: %w", i+1, err)
+		}
 	}
 	// Directories every path needs, if a layer left them implicit
 	for name := range nodes {

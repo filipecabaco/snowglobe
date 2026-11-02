@@ -50,6 +50,9 @@ func Job(name string, req JobRequest) (*JobResult, error) {
 		}
 		return nil, fmt.Errorf("no instance called %s (snowglobe ps lists them)", name)
 	}
+	if req.Timeout < 0 {
+		return nil, fmt.Errorf("timeout %v: 0 or more seconds", req.Timeout)
+	}
 	if req.Timeout == 0 {
 		req.Timeout = 300
 	}
@@ -247,8 +250,17 @@ func untar(r io.Reader, dir string) error {
 	if err != nil {
 		return err
 	}
+	// inside checks where p's parent resolves to, before any of it is made: the deepest directory
+	// there is, as what MkdirAll makes below it can't be a symlink
 	inside := func(p string) error {
-		parent, err := filepath.EvalSymlinks(filepath.Dir(p))
+		parent := filepath.Dir(p)
+		for {
+			if _, err := os.Lstat(parent); err == nil || filepath.Dir(parent) == parent {
+				break
+			}
+			parent = filepath.Dir(parent)
+		}
+		parent, err := filepath.EvalSymlinks(parent)
 		if err != nil {
 			return err
 		}
@@ -280,10 +292,10 @@ func untar(r io.Reader, dir string) error {
 				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			if err := inside(p); err != nil {
 				return err
 			}
-			if err := inside(p); err != nil {
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 				return err
 			}
 			if st, err := os.Lstat(p); err == nil && st.Mode()&os.ModeSymlink != 0 {
@@ -299,10 +311,10 @@ func untar(r io.Reader, dir string) error {
 				return err
 			}
 		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			if err := inside(p); err != nil {
 				return err
 			}
-			if err := inside(p); err != nil {
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 				return err
 			}
 			os.Remove(p)

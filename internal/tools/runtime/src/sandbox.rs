@@ -57,7 +57,12 @@ pub fn apply_stage(p: &Policy, stage: Stage) -> Result<String, String> {
         let _ = std::fs::create_dir_all(d);
     }
     let (applied, missing) = imp::apply(p, stage);
-    if mode == "strict" && !missing.is_empty() {
+    report(&applied, &missing, mode == "strict")
+}
+
+/// What is in force, for the run's banner; with `strict`, an error if any part is missing.
+fn report(applied: &[String], missing: &[String], strict: bool) -> Result<String, String> {
+    if strict && !missing.is_empty() {
         return Err(format!("sandbox: {} unavailable (SNOWGLOBE_SANDBOX=strict)", missing.join(", ")));
     }
     let mut s = format!("sandboxed: {}", if applied.is_empty() { "nothing".into() } else { applied.join(", ") });
@@ -98,15 +103,16 @@ fn network_reads() -> Vec<PathBuf> {
 #[cfg(target_os = "linux")]
 mod imp {
     use super::*;
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
+    use crate::sys::{self, Insn, RulesetAttr};
+    use std::os::fd::AsFd;
+    use std::os::unix::fs::OpenOptionsExt;
 
     pub fn apply(p: &Policy, stage: Stage) -> (Vec<String>, Vec<String>) {
         let mut applied = Vec::new();
         let mut missing = Vec::new();
         if stage != Stage::Child {
-            // SAFETY: plain prctl; needed for both Landlock and seccomp without privileges
-            if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } == 0 {
+            // Needed for both Landlock and seccomp without privileges
+            if sys::no_new_privs() {
                 applied.push("no_new_privs".to_string());
             } else {
                 missing.push("no_new_privs".to_string());
@@ -128,26 +134,11 @@ mod imp {
 
     fn rlimits() {
         // No core dumps (guest memory, the site's secrets), and a bound on open files
-        let set = |r, v| {
-            let l = libc::rlimit { rlim_cur: v, rlim_max: v };
-            // SAFETY: setrlimit with a valid struct; lowering only
-            unsafe { libc::setrlimit(r, &l) };
-        };
-        set(libc::RLIMIT_CORE, 0);
-        let mut cur = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
-        // SAFETY: getrlimit into a valid struct
-        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut cur) } == 0 && cur.rlim_max > 4096 {
-            set(libc::RLIMIT_NOFILE, 4096);
-        }
+        sys::no_core_dumps();
+        sys::cap_open_files(4096);
     }
 
-    // Landlock (linux/landlock.h); the syscall numbers are the same on every architecture
-    const SYS_CREATE_RULESET: libc::c_long = 444;
-    const SYS_ADD_RULE: libc::c_long = 445;
-    const SYS_RESTRICT_SELF: libc::c_long = 446;
-    const CREATE_RULESET_VERSION: u32 = 1;
-    const RULE_PATH_BENEATH: u32 = 1;
-    const RULE_NET_PORT: u32 = 2;
+    // Landlock's rights (linux/landlock.h)
 
     const FS_EXECUTE: u64 = 1 << 0;
     const FS_WRITE_FILE: u64 = 1 << 1;
@@ -166,34 +157,42 @@ mod imp {
     const SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
     const SCOPE_SIGNAL: u64 = 1 << 1;
 
-    #[repr(C)]
-    struct RulesetAttr {
-        fs: u64,
-        net: u64,
-        scoped: u64,
-    }
-
-    #[repr(C, packed)]
-    struct PathBeneath {
-        allowed: u64,
-        parent_fd: i32,
-    }
-
-    #[repr(C)]
-    struct NetPort {
-        allowed: u64,
-        port: u64,
-    }
-
     fn landlock(p: &Policy) -> Result<String, String> {
-        // SAFETY: the version query takes no attributes
-        let abi = unsafe {
-            libc::syscall(SYS_CREATE_RULESET, std::ptr::null::<RulesetAttr>(), 0usize, CREATE_RULESET_VERSION)
-        };
+        let abi = sys::landlock_abi();
         if abi < 1 {
             return Err("not in this kernel".into());
         }
-        // Every right this kernel knows, handled (denied unless a rule grants it)
+        let (attr, size) = ruleset(abi, p.network);
+        let ruleset = sys::landlock_ruleset(&attr, size).map_err(|e| e.to_string())?;
+        let RulesetAttr { fs, net, scoped } = attr;
+        for (path, allowed) in rules(p) {
+            // O_PATH: a handle on the file or directory, not opened for reading
+            let Ok(parent) = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_PATH | libc::O_CLOEXEC).open(&path)
+            else {
+                continue; // not on this system
+            };
+            let allowed = if path.is_dir() { allowed } else { allowed & FS_FILE } & fs;
+            sys::landlock_allow_path(ruleset.as_fd(), parent.as_fd(), allowed);
+        }
+        if net != 0 {
+            for &port in &p.bind {
+                sys::landlock_allow_port(ruleset.as_fd(), port, NET_BIND_TCP);
+            }
+        }
+        sys::landlock_restrict(ruleset.as_fd()).map_err(|e| e.to_string())?;
+        let mut what = vec!["fs"];
+        if net != 0 {
+            what.push(if p.network { "tcp listen" } else { "tcp" });
+        }
+        if scoped != 0 {
+            what.push("signals");
+        }
+        Ok(format!("landlock v{abi} ({})", what.join(", ")))
+    }
+
+    /// The rights a ruleset handles (every one this kernel's Landlock `abi` knows: denied unless
+    /// a rule grants it), and the size of its attribute for that ABI.
+    fn ruleset(abi: i64, network: bool) -> (RulesetAttr, usize) {
         let mut fs = (1u64 << 13) - 1;
         if abi >= 2 {
             fs |= 1 << 13; // REFER
@@ -206,22 +205,21 @@ mod imp {
         }
         let net = if abi >= 4 {
             // Listening only on the forwarded ports; connecting only with a network
-            NET_BIND_TCP | if p.network { 0 } else { NET_CONNECT_TCP }
+            NET_BIND_TCP | if network { 0 } else { NET_CONNECT_TCP }
         } else {
             0
         };
         let scoped = if abi >= 6 { SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL } else { 0 };
-        let attr = RulesetAttr { fs, net, scoped };
         let size = match abi {
             1..=3 => 8,
             4 | 5 => 16,
             _ => 24,
         };
-        // SAFETY: attr is valid for `size` bytes
-        let fd = unsafe { libc::syscall(SYS_CREATE_RULESET, &attr as *const RulesetAttr, size, 0u32) } as i32;
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
+        (RulesetAttr { fs, net, scoped }, size)
+    }
+
+    /// The paths a policy grants, with their rights.
+    fn rules(p: &Policy) -> Vec<(PathBuf, u64)> {
         let read = FS_READ_FILE | FS_READ_DIR;
         let mut rules: Vec<(PathBuf, u64)> = p.read.iter().map(|d| (d.clone(), read)).collect();
         rules.push(("/dev/urandom".into(), FS_READ_FILE));
@@ -235,58 +233,10 @@ mod imp {
         if p.network {
             rules.extend(network_reads().into_iter().map(|d| (d, read)));
         }
-        for (path, allowed) in rules {
-            let Ok(c) = CString::new(path.as_os_str().as_bytes()) else { continue };
-            // SAFETY: open with O_PATH of a NUL-terminated path
-            let pfd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
-            if pfd < 0 {
-                continue; // not on this system
-            }
-            let allowed = if path.is_dir() { allowed } else { allowed & FS_FILE } & fs;
-            let rule = PathBeneath { allowed, parent_fd: pfd };
-            // SAFETY: rule is a valid path-beneath attribute
-            unsafe {
-                libc::syscall(SYS_ADD_RULE, fd, RULE_PATH_BENEATH, &rule as *const PathBeneath, 0u32);
-                libc::close(pfd);
-            }
-        }
-        if net != 0 {
-            for &port in &p.bind {
-                let rule = NetPort { allowed: NET_BIND_TCP, port: port as u64 };
-                // SAFETY: rule is a valid net-port attribute
-                unsafe { libc::syscall(SYS_ADD_RULE, fd, RULE_NET_PORT, &rule as *const NetPort, 0u32) };
-            }
-        }
-        // SAFETY: fd is the ruleset made above
-        let r = unsafe { libc::syscall(SYS_RESTRICT_SELF, fd, 0u32) };
-        unsafe { libc::close(fd) };
-        if r != 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        let mut what = vec!["fs"];
-        if net != 0 {
-            what.push(if p.network { "tcp listen" } else { "tcp" });
-        }
-        if scoped != 0 {
-            what.push("signals");
-        }
-        Ok(format!("landlock v{abi} ({})", what.join(", ")))
+        rules
     }
 
     // seccomp-bpf
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Insn {
-        code: u16,
-        jt: u8,
-        jf: u8,
-        k: u32,
-    }
-    #[repr(C)]
-    struct Prog {
-        len: u16,
-        filter: *const Insn,
-    }
 
     const LD_W_ABS: u16 = 0x20;
     const JEQ: u16 = 0x15;
@@ -307,7 +257,7 @@ mod imp {
     /// Calls a run never makes, refused (EPERM) rather than fatal, so a library probing for
     /// one carries on
     fn denied() -> Vec<libc::c_long> {
-        let mut v = vec![
+        let v = vec![
             libc::SYS_execve,
             libc::SYS_execveat,
             libc::SYS_ptrace,
@@ -349,18 +299,18 @@ mod imp {
             libc::SYS_pidfd_getfd,
         ];
         #[cfg(target_arch = "x86_64")]
-        v.extend([
-            libc::SYS_fork,
-            libc::SYS_vfork,
-            libc::SYS_uselib,
-            libc::SYS_iopl,
-            libc::SYS_ioperm,
-            libc::SYS_modify_ldt,
-        ]);
+        let v = [v, vec![libc::SYS_fork, libc::SYS_vfork, libc::SYS_uselib, libc::SYS_iopl, libc::SYS_ioperm, libc::SYS_modify_ldt]]
+            .concat();
         v
     }
 
     fn seccomp() -> Result<(), String> {
+        // no_new_privs is set
+        sys::seccomp(&program()?).map_err(|e| e.to_string())
+    }
+
+    /// The seccomp filter, assembled.
+    fn program() -> Result<Vec<Insn>, String> {
         const NR: u32 = 0;
         const ARCH_OFF: u32 = 4;
         const ARG0: u32 = 16;
@@ -414,36 +364,112 @@ mod imp {
             let (jt, jf) = if *op == RET || *op == LD_W_ABS { (0, 0) } else { (rel(t)?, rel(f)?) };
             prog.push(Insn { code: *op, jt, jf, k: *k });
         }
-        let fprog = Prog { len: prog.len() as u16, filter: prog.as_ptr() };
-        // SAFETY: a valid filter program; no_new_privs is set
-        let r = unsafe { libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &fprog as *const Prog, 0, 0) };
-        if r != 0 {
-            return Err(std::io::Error::last_os_error().to_string());
+        Ok(prog)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The filter's answer to a call, worked out as the kernel would (for the instructions
+        /// the filter uses).
+        fn verdict(prog: &[Insn], arch: u32, nr: libc::c_long, arg0: u32) -> u32 {
+            let (mut pc, mut a) = (0, 0u32);
+            loop {
+                let i = prog[pc];
+                match i.code {
+                    LD_W_ABS => {
+                        a = match i.k {
+                            0 => nr as u32,
+                            4 => arch,
+                            16 => arg0,
+                            k => panic!("a load of offset {k}"),
+                        }
+                    },
+                    RET => return i.k,
+                    JEQ | JSET | JGE => {
+                        let taken = match i.code {
+                            JEQ => a == i.k,
+                            JSET => a & i.k != 0,
+                            _ => a >= i.k,
+                        };
+                        pc += if taken { i.jt } else { i.jf } as usize;
+                    },
+                    op => panic!("op {op:#x}"),
+                }
+                pc += 1;
+            }
         }
-        Ok(())
+
+        #[test]
+        fn a_ruleset_handles_every_right_its_kernel_knows() {
+            let (v1, size) = ruleset(1, false);
+            assert_eq!((v1.fs, v1.net, v1.scoped, size), ((1 << 13) - 1, 0, 0, 8));
+            assert_eq!(ruleset(3, false).0.fs, ((1 << 13) - 1) | (1 << 13) | FS_TRUNCATE);
+            // From v4, TCP: listening only on the forwarded ports, connecting only with a network
+            let (v4, size) = ruleset(4, false);
+            assert_eq!((v4.net, size), (NET_BIND_TCP | NET_CONNECT_TCP, 16));
+            assert_eq!(ruleset(4, true).0.net, NET_BIND_TCP);
+            assert_eq!(ruleset(5, false).0.fs & (1 << 15), 1 << 15);
+            let (v6, size) = ruleset(6, false);
+            assert_eq!((v6.scoped, size), (SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL, 24));
+        }
+
+        #[test]
+        fn rules_grant_reads_writes_and_the_socket_directory() {
+            let p = Policy {
+                read: vec!["/site".into()],
+                write: vec!["/cache".into()],
+                socket_dir: Some("/sock".into()),
+                bind: vec![],
+                network: false,
+            };
+            let r = rules(&p);
+            let rights = |path: &str| r.iter().find(|(p, _)| p == Path::new(path)).map(|(_, a)| *a);
+            assert_eq!(rights("/site"), Some(FS_READ_FILE | FS_READ_DIR));
+            let cache = rights("/cache").unwrap();
+            assert_eq!(cache & (FS_WRITE_FILE | FS_MAKE_DIR | FS_REMOVE_FILE), FS_WRITE_FILE | FS_MAKE_DIR | FS_REMOVE_FILE);
+            assert_eq!(cache & FS_EXECUTE, 0, "nothing runs from what a run writes");
+            assert_eq!(rights("/sock"), Some(FS_MAKE_SOCK | FS_REMOVE_FILE));
+            assert_eq!(rights("/dev/urandom"), Some(FS_READ_FILE));
+            assert_eq!(rights("/etc/resolv.conf"), None);
+            // A network reads DNS configuration and TLS roots
+            assert!(rules(&Policy { network: true, ..p }).iter().any(|(p, _)| p == Path::new("/etc/resolv.conf")));
+        }
+
+        #[test]
+        fn the_filter_refuses_new_programs_and_processes_but_not_threads() {
+            let p = program().unwrap();
+            let call = |nr, arg0| verdict(&p, ARCH, nr, arg0);
+            assert_eq!(call(libc::SYS_read, 0), ALLOW);
+            assert_eq!(call(libc::SYS_openat, 0), ALLOW);
+            for nr in denied() {
+                assert_eq!(call(nr, 0), errno(libc::EPERM), "{nr}");
+            }
+            // clone3: the C library falls back to clone, whose flags the filter can see
+            assert_eq!(call(libc::SYS_clone3, 0), errno(libc::ENOSYS));
+            let thread = (libc::CLONE_VM | libc::CLONE_FS | libc::CLONE_FILES | libc::CLONE_SIGHAND | libc::CLONE_THREAD) as u32;
+            assert_eq!(call(libc::SYS_clone, thread), ALLOW);
+            assert_eq!(call(libc::SYS_clone, libc::SIGCHLD as u32), errno(libc::EPERM), "fork");
+            assert_eq!(call(libc::SYS_clone, thread | libc::CLONE_NEWUSER as u32), errno(libc::EPERM), "a namespace");
+            // Calls of another architecture end the process
+            assert_eq!(verdict(&p, 0x1234, libc::SYS_read, 0), KILL_PROCESS);
+        }
     }
 }
 
 #[cfg(target_os = "macos")]
 mod imp {
     use super::*;
-    use std::ffi::{CStr, CString};
-
-    extern "C" {
-        fn sandbox_init(profile: *const libc::c_char, flags: u64, errorbuf: *mut *mut libc::c_char) -> libc::c_int;
-        fn sandbox_free_error(errorbuf: *mut libc::c_char);
-    }
+    use std::ffi::CString;
 
     fn quoted(p: &Path) -> String {
         let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
         format!("\"{}\"", p.display().to_string().replace('\\', "\\\\").replace('"', "\\\""))
     }
 
-    pub fn apply(p: &Policy, stage: Stage) -> (Vec<String>, Vec<String>) {
-        // Seatbelt forbids forking, so a parent leaves it to each child
-        if stage == Stage::Parent {
-            return (vec!["seatbelt per job".into()], vec![]);
-        }
+    /// The Seatbelt profile for a policy, `home` the user's home directory.
+    pub fn profile(p: &Policy, home: Option<&Path>) -> String {
         let subpaths = |v: &[PathBuf]| v.iter().map(|d| format!("(subpath {})", quoted(d))).collect::<Vec<_>>().join(" ");
         let mut writable = p.write.clone();
         writable.extend(p.socket_dir.iter().cloned());
@@ -452,14 +478,13 @@ mod imp {
         if p.network {
             readable.extend(network_reads());
         }
-        let home = std::env::var_os("HOME").map(PathBuf::from);
         // Later rules take precedence over earlier ones
         let mut profile = String::from("(version 1)\n(allow default)\n(deny process-exec*)\n(deny process-fork)\n");
         profile += &format!(
             "(deny file-write*)\n(allow file-write* (subpath \"/dev\") {})\n",
             subpaths(&writable)
         );
-        if let Some(home) = &home {
+        if let Some(home) = home {
             profile += &format!("(deny file-read* (subpath {}))\n", quoted(home));
             if !readable.is_empty() {
                 profile += &format!("(allow file-read* {})\n", subpaths(&readable));
@@ -470,12 +495,20 @@ mod imp {
         if !p.network {
             profile += "(deny network-outbound (remote ip))\n";
         }
-        let Ok(c) = CString::new(profile) else {
+        profile
+    }
+
+    pub fn apply(p: &Policy, stage: Stage) -> (Vec<String>, Vec<String>) {
+        // Seatbelt forbids forking, so a parent leaves it to each child
+        if stage == Stage::Parent {
+            return (vec!["seatbelt per job".into()], vec![]);
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let Ok(c) = CString::new(profile(p, home.as_deref())) else {
             return (vec![], vec!["seatbelt".into()]);
         };
-        let mut err = std::ptr::null_mut();
-        // SAFETY: a NUL-terminated profile; flags 0 means it is SBPL text
-        if unsafe { sandbox_init(c.as_ptr(), 0, &mut err) } == 0 {
+        match crate::sys::seatbelt(&c) {
+            Ok(()) => {
             let mut what = vec!["exec", "writes"];
             if home.is_some() {
                 what.push("home reads");
@@ -484,16 +517,8 @@ mod imp {
                 what.push("network");
             }
             (vec![format!("seatbelt ({})", what.join(", "))], vec![])
-        } else {
-            let msg = if err.is_null() {
-                "refused".to_string()
-            } else {
-                // SAFETY: the error sandbox_init returned, freed after copying
-                let m = unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned();
-                unsafe { sandbox_free_error(err) };
-                m
-            };
-            (vec![], vec![format!("seatbelt ({})", msg.trim())])
+            },
+            Err(msg) => (vec![], vec![format!("seatbelt ({})", msg.trim())]),
         }
     }
 }
@@ -522,23 +547,20 @@ pub fn check(forked: bool) -> Result<u8, String> {
     let policy = Policy { read: vec![], write: vec![allowed.clone()], socket_dir: None, bind: vec![], network: false };
     if forked {
         println!("parent: {}", apply_stage(&policy, Stage::Parent)?);
-        // SAFETY: single-threaded here; the child runs the checks and exits
-        match unsafe { libc::fork() } {
-            0 => {
+        // Single-threaded here; the child runs the checks and exits
+        match crate::sys::fork().map_err(|e| format!("fork: {e}"))? {
+            crate::sys::Forked::Child => {
                 let code = apply_stage(&policy, Stage::Child).map_or(2, |s| {
                     println!("child: {s}");
                     attempts(&scratch, &allowed)
                 });
                 let _ = std::io::Write::flush(&mut std::io::stdout());
-                // SAFETY: leave the child without unwinding into the parent's code
-                unsafe { libc::_exit(code as i32) };
+                // Leave the child without unwinding into the parent's code
+                crate::sys::exit_now(code as i32);
             },
-            -1 => return Err(format!("fork: {}", std::io::Error::last_os_error())),
-            pid => {
-                let mut status = 0;
-                // SAFETY: waiting for our own child
-                unsafe { libc::waitpid(pid, &mut status, 0) };
-                return Ok(if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) as u8 } else { 1 });
+            crate::sys::Forked::Parent(pid) => {
+                let code = crate::sys::wait(pid, true).and_then(|(_, code)| code);
+                return Ok(code.map_or(1, |c| c as u8));
             },
         }
     }
@@ -570,5 +592,79 @@ fn attempts(scratch: &Path, allowed: &Path) -> u8 {
         0
     } else {
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_socket_is_made_in_its_directory_even_a_relative_one() {
+        assert_eq!(parent_of(Path::new("/tmp/s.sock")), Some(PathBuf::from("/tmp")));
+        assert_eq!(parent_of(Path::new("s.sock")), Some(PathBuf::from(".")));
+        assert_eq!(parent_of(Path::new("/")), None);
+    }
+
+    #[test]
+    fn the_banner_says_what_is_in_force_and_strict_wants_all_of_it() {
+        let s = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(report(&s(&["landlock", "seccomp"]), &[], true), Ok("sandboxed: landlock, seccomp".into()));
+        assert_eq!(report(&[], &[], false), Ok("sandboxed: nothing".into()));
+        assert_eq!(
+            report(&s(&["seccomp"]), &s(&["landlock (old kernel)"]), false),
+            Ok("sandboxed: seccomp (unavailable: landlock (old kernel))".into())
+        );
+        assert_eq!(
+            report(&s(&["seccomp"]), &s(&["landlock (old kernel)"]), true),
+            Err("sandbox: landlock (old kernel) unavailable (SNOWGLOBE_SANDBOX=strict)".into())
+        );
+    }
+
+    #[test]
+    fn a_network_reads_dns_and_tls_roots() {
+        let reads = network_reads();
+        assert!(reads.contains(&PathBuf::from("/etc/resolv.conf")));
+        assert!(reads.contains(&PathBuf::from("/etc/ssl")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_seatbelt_profile_denies_programs_writes_home_and_network() {
+        let p = Policy {
+            read: vec!["/site".into()],
+            write: vec!["/cache".into()],
+            socket_dir: Some("/sock".into()),
+            bind: vec![],
+            network: false,
+        };
+        let profile = imp::profile(&p, Some(Path::new("/Users/me")));
+        let lines: Vec<&str> = profile.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "(version 1)",
+                "(allow default)",
+                "(deny process-exec*)",
+                "(deny process-fork)",
+                "(deny file-write*)",
+                "(allow file-write* (subpath \"/dev\") (subpath \"/cache\") (subpath \"/sock\"))",
+                "(deny file-read* (subpath \"/Users/me\"))",
+                "(allow file-read* (subpath \"/site\") (subpath \"/cache\") (subpath \"/sock\"))",
+                "(allow file-read-metadata (literal \"/Users/me\"))",
+                "(deny network-outbound (remote ip))",
+            ]
+        );
+        // With a network: no network rule, and its configuration readable
+        let net = imp::profile(&Policy { network: true, ..p }, None);
+        assert!(!net.contains("network-outbound"));
+        assert!(!net.contains("file-read"), "no home, nothing to hide reads from");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_paths_are_quoted() {
+        let p = Policy { read: vec![], write: vec!["/a \"b\"\\c".into()], socket_dir: None, bind: vec![], network: true };
+        assert!(imp::profile(&p, None).contains(r#"(subpath "/a \"b\"\\c")"#));
     }
 }

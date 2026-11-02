@@ -141,6 +141,12 @@ impl Activity {
         self.watchers.lock().unwrap().push(w);
     }
 
+    /// Drop the watchers that are done now (each is called with nothing printed), rather than at
+    /// the next console output.
+    pub fn unwatch_done(&self) {
+        self.watchers.lock().unwrap().retain_mut(|w| w(&[]));
+    }
+
     pub fn observe(self: &Arc<Self>, e: &Event) {
         match e {
             Event::Console(b) => {
@@ -334,5 +340,237 @@ pub fn enable_jit(runner: &armless::runner::Runner, cpus: usize) {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{self, site, EMPTY_FS};
+
+    fn args(v: &[&str]) -> crate::Args {
+        let v: Vec<String> = v.iter().map(|s| s.to_string()).collect();
+        crate::Args::parse(&v, crate::RUN_FLAGS).unwrap()
+    }
+
+    fn console(a: &Arc<Activity>, b: &[u8]) {
+        a.observe(&Event::Console(b.to_vec()));
+    }
+
+    fn serial(a: &Arc<Activity>, b: &[u8]) {
+        a.observe(&Event::Serial(b.to_vec()));
+    }
+
+    #[test]
+    fn the_screen_keeps_the_last_of_the_console_and_counts_what_it_dropped() {
+        let a = Activity::new(false);
+        assert!(a.last_console.lock().unwrap().is_none());
+        console(&a, b"hello ");
+        console(&a, b"world");
+        assert!(a.last_console.lock().unwrap().is_some());
+        {
+            let s = a.screen.lock().unwrap();
+            assert_eq!(s.total(), 11);
+            assert_eq!(s.since(6), b"world");
+            assert_eq!(s.since(0), b"hello world");
+            assert_eq!(s.since(99), b"");
+        }
+        // Past twice the limit, it is cut back to the last MiB
+        console(&a, &vec![b'x'; SCREEN_MAX * 2]);
+        let s = a.screen.lock().unwrap();
+        assert_eq!(s.buf.len(), SCREEN_MAX);
+        assert_eq!(s.total(), 11 + SCREEN_MAX * 2);
+        assert_eq!(s.dropped, 11 + SCREEN_MAX);
+        // An offset in what was dropped gives everything kept
+        assert_eq!(s.since(3).len(), SCREEN_MAX);
+        assert_eq!(s.since(s.total() - 2), b"xx");
+    }
+
+    #[test]
+    fn watchers_see_the_console_until_they_say_stop() {
+        let a = Activity::new(false);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        a.watch(Box::new(move |b| {
+            s.lock().unwrap().extend_from_slice(b);
+            !b.contains(&b'!')
+        }));
+        console(&a, b"one ");
+        console(&a, b"two!");
+        console(&a, b"three");
+        serial(&a, b"not the console");
+        assert_eq!(*seen.lock().unwrap(), b"one two!");
+        // One that is done goes without waiting for output
+        let gone = Arc::new(Mutex::new(false));
+        let g = gone.clone();
+        a.watch(Box::new(move |_| !*g.lock().unwrap()));
+        a.unwatch_done();
+        assert_eq!(a.watchers.lock().unwrap().len(), 1);
+        *gone.lock().unwrap() = true;
+        a.unwatch_done();
+        assert!(a.watchers.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_serial_line_is_kept_apart_with_offsets_into_it() {
+        let a = Activity::new(false);
+        let before = Instant::now();
+        std::thread::sleep(Duration::from_millis(5));
+        serial(&a, b"boot\n");
+        assert_eq!(a.serial_total(), 5);
+        serial(&a, b"# ");
+        assert_eq!(a.serial_since(5), b"# ");
+        assert_eq!(a.serial_since(100), b"");
+        assert!(a.screen.lock().unwrap().buf.is_empty());
+        // Serial output is not activity of the app's
+        assert!(*a.last.lock().unwrap() < before + Duration::from_millis(5));
+        // Past four MiB it keeps the last two
+        serial(&a, &vec![b'x'; SCREEN_MAX * 4]);
+        assert_eq!(a.serial.lock().unwrap().len(), SCREEN_MAX * 2);
+        assert_eq!(a.serial_total(), 7 + SCREEN_MAX * 4);
+        assert_eq!(a.serial_since(0).len(), SCREEN_MAX * 2);
+        assert_eq!(a.serial_since(a.serial_total() - 1), b"x");
+    }
+
+    #[test]
+    fn waiting_on_the_serial_line_ends_when_it_shows_or_in_time() {
+        let a = Activity::new(false);
+        serial(&a, b"login: ");
+        assert!(a.wait_serial(Duration::ZERO, |s| s.ends_with(b"login: ")));
+        let begun = Instant::now();
+        assert!(!a.wait_serial(Duration::from_millis(50), |s| s.ends_with(b"# ")));
+        assert!(begun.elapsed() >= Duration::from_millis(50));
+        // Woken by the output it waits for, long before its timeout
+        let b = a.clone();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            serial(&b, b"\n# ");
+        });
+        let begun = Instant::now();
+        assert!(a.wait_serial(Duration::from_secs(10), |s| s.ends_with(b"# ")));
+        assert!(begun.elapsed() < Duration::from_secs(5));
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn files_fetched_are_recorded_only_when_asked() {
+        let a = Activity::new(false);
+        a.observe(&Event::Blob("before".into()));
+        *a.reads.lock().unwrap() = Some(BTreeSet::new());
+        a.observe(&Event::Blob("b".into()));
+        a.observe(&Event::Blob("a".into()));
+        a.observe(&Event::Blob("a".into()));
+        let reads: Vec<String> = a.reads.lock().unwrap().iter().flatten().cloned().collect();
+        assert_eq!(reads, ["a", "b"]);
+    }
+
+    #[test]
+    fn open_connections_keep_the_guest_busy_until_they_close() {
+        let a = Activity::new(false);
+        assert!(!a.connected());
+        a.observe(&Event::TcpOpen { id: 1, host: "example.com".into(), port: 443 });
+        a.observe(&Event::HttpRequest { id: 2, method: "GET".into(), url: "/".into(), headers: vec![], body: vec![] });
+        a.observe(&Event::WsOpen { id: 3, url: "wss://x".into(), protocols: vec![] });
+        a.observe(&Event::TcpConnected { id: 4 });
+        for id in [1, 2, 3] {
+            a.observe(&Event::TcpClosed { id });
+            assert!(a.connected(), "{id}");
+        }
+        a.observe(&Event::TcpClosed { id: 4 });
+        assert!(!a.connected());
+        // Closing what was never open is no matter
+        a.observe(&Event::TcpClosed { id: 9 });
+        assert!(!a.connected());
+    }
+
+    #[test]
+    fn a_tunnelled_connection_is_activity_but_not_an_open_connection() {
+        let a = Activity::new(false);
+        *a.tunnels.lock().unwrap() = vec![Tunnel { host: Some("db".into()), port: 5432, url: "wss://x".into() }];
+        a.observe(&Event::TcpOpen { id: 1, host: "DB".into(), port: 5432 });
+        assert!(!a.connected(), "a pool that stays open isn't a command still running");
+        // Another port of the same host is an ordinary connection
+        a.observe(&Event::TcpOpen { id: 2, host: "db".into(), port: 5433 });
+        assert!(a.connected());
+    }
+
+    #[test]
+    fn any_traffic_is_activity() {
+        let a = Activity::new(false);
+        let quiet = |a: &Arc<Activity>| {
+            *a.last.lock().unwrap() = Instant::now() - Duration::from_secs(60);
+            assert!(a.idle_for() >= Duration::from_secs(60));
+        };
+        for e in [
+            Event::Console(b"x".to_vec()),
+            Event::Blob("b".into()),
+            Event::TcpOpen { id: 1, host: "h".into(), port: 1 },
+            Event::TcpConnected { id: 1 },
+            Event::TcpData { id: 1, data: vec![1] },
+            Event::TcpEof { id: 1 },
+            Event::WsMessage { id: 1, text: true, data: vec![] },
+            Event::WsClose { id: 1, code: 1000 },
+            Event::TcpClosed { id: 1 },
+        ] {
+            quiet(&a);
+            a.observe(&e);
+            assert!(a.idle_for() < Duration::from_secs(1), "{e:?}");
+        }
+        quiet(&a);
+        a.touch();
+        assert!(a.idle_for() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn tunnels_come_from_the_flags_else_from_run_json() {
+        let saved = serde_json::json!([{ "host": "db", "port": 5432, "url": "wss://a/db" }, { "port": 6379, "url": "ws://b" }]);
+        let n = Net::from_args(&args(&[]), Some(&saved)).unwrap();
+        assert_eq!(n.tunnels.len(), 2);
+        assert_eq!(n.tunnels[0].host.as_deref(), Some("db"));
+        assert_eq!((n.tunnels[1].host.as_deref(), n.tunnels[1].port), (None, 6379));
+        assert!(!n.allow_private);
+        // --tunnel replaces the saved ones
+        let n = Net::from_args(&args(&["--tunnel", "cache:1=wss://c", "--allow-private"]), Some(&saved)).unwrap();
+        assert_eq!(n.tunnels.len(), 1);
+        assert_eq!((n.tunnels[0].port, n.tunnels[0].url.as_str()), (1, "wss://c"));
+        assert!(n.allow_private);
+        // None saved (or null, as a site without tunnels has)
+        assert!(Net::from_args(&args(&[]), None).unwrap().tunnels.is_empty());
+        assert!(Net::from_args(&args(&[]), Some(&serde_json::Value::Null)).unwrap().tunnels.is_empty());
+    }
+
+    #[test]
+    fn bad_tunnels_are_refused() {
+        for bad in ["5432", "5432=https://x", ":5432=wss://x", "db:0=wss://x"] {
+            let e = Net::from_args(&args(&["--tunnel", bad]), None).err().unwrap();
+            assert!(e.starts_with(&format!("--tunnel {bad}:")), "{e}");
+        }
+        for saved in [
+            serde_json::json!([{ "port": 70000, "url": "wss://x" }]),
+            serde_json::json!([{ "port": 1 }]),
+            serde_json::json!([{ "host": "h", "url": "wss://x" }]),
+        ] {
+            assert!(Net::from_args(&args(&[]), Some(&saved)).is_err(), "{saved}");
+        }
+    }
+
+    #[test]
+    fn a_machine_is_made_from_the_sites_filesystem() {
+        let (board, runner) = testing::machine("machine-new");
+        board.fs_write_file("/a/b", b"hi", 0o644).unwrap();
+        assert_eq!(board.fs_read_tree("/a").unwrap(), Some(vec![("b".to_string(), b"hi".to_vec())]));
+        // A machine that never ran is not busy
+        let mut load = Load::new(&runner);
+        assert!(!load.busy(&runner));
+    }
+
+    #[test]
+    fn a_machine_needs_its_filesystem_and_with_a_network_its_certificates() {
+        let spec = |network: &str| Spec { memory_mb: 16, cpus: 1, network: network.into() };
+        let (_, bare) = site("machine-bare", &[]);
+        assert_eq!(new_vm_jit(&spec("none"), &bare, false).err().unwrap(), "system/filesystem.json: not in the site");
+        let (_, s) = site("machine-net", &[("system/filesystem.json", EMPTY_FS)]);
+        assert_eq!(new_vm_jit(&spec("fetch"), &s, false).err().unwrap(), "system/tls.json: not in the site");
+        assert!(new_vm_jit(&Spec { memory_mb: 1, ..spec("none") }, &s, false).is_err());
     }
 }

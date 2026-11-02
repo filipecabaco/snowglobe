@@ -173,6 +173,16 @@ mod tests {
     }
 
     #[test]
+    fn a_run_that_ends_by_itself_exits_with_its_own_status() {
+        assert_eq!(stopped(), None);
+        assert_eq!(finish("end", 3), 3);
+        assert_eq!(end("guest-stopped", 0), 0);
+        // Nothing to watch: no thread that could end the run
+        watch(Controls::default(), Instant::now());
+        assert_eq!(stopped(), None);
+    }
+
+    #[test]
     fn controls_are_checked() {
         for bad in ["0", "-1", "soon", "inf", "NaN"] {
             assert!(Controls::from_args(&args(&["--max-runtime", bad])).is_err(), "{bad}");

@@ -23,11 +23,28 @@ func Run(site, out string) (int64, error) {
 	if _, err := os.Stat(filepath.Join(site, "run.json")); err != nil {
 		return 0, fmt.Errorf("%s isn't a built snowglobe site (no run.json)", site)
 	}
+	// Not into the site: the walk would read the archive as it is written
+	if absSite, err := filepath.Abs(site); err == nil {
+		if absOut, err := filepath.Abs(out); err == nil && strings.HasPrefix(absOut, absSite+string(filepath.Separator)) {
+			return 0, fmt.Errorf("%s is inside the site %s: write the archive somewhere else", out, site)
+		}
+	}
+	// The name first: a file that isn't to be an archive is left alone
+	if !strings.HasSuffix(out, ".tar.gz") && !strings.HasSuffix(out, ".tgz") && !strings.HasSuffix(out, ".tar.zst") &&
+		!strings.HasSuffix(out, ".tar") {
+		return 0, fmt.Errorf("%s: name it .tar.gz, .tar.zst or .tar", out)
+	}
 	f, err := os.Create(out)
 	if err != nil {
 		return 0, err
 	}
 	defer f.Close()
+	ok := false
+	defer func() {
+		if !ok {
+			os.Remove(out) // half an archive is none
+		}
+	}()
 
 	var w io.WriteCloser = nopCloser{f}
 	switch {
@@ -37,9 +54,6 @@ func Run(site, out string) (int64, error) {
 		if w, err = zstd.NewWriter(f); err != nil {
 			return 0, err
 		}
-	case strings.HasSuffix(out, ".tar"):
-	default:
-		return 0, fmt.Errorf("%s: name it .tar.gz, .tar.zst or .tar", out)
 	}
 	tw := tar.NewWriter(w)
 
@@ -82,7 +96,11 @@ func Run(site, out string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return info.Size(), f.Close()
+	if err := f.Close(); err != nil {
+		return 0, err
+	}
+	ok = true
+	return info.Size(), nil
 }
 
 func addPooledBlobs(tw *tar.Writer, site string) error {

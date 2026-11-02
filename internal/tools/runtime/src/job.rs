@@ -82,6 +82,25 @@ pub fn wait_idle(timeout: Duration) -> bool {
     }
 }
 
+/// A job's time limit, in seconds (300 unless given). Never negative, NaN or endless: making a
+/// Duration of those panics, which would take the whole instance down with one request.
+pub fn timeout(secs: Option<f64>) -> Result<Duration, String> {
+    let t = Duration::try_from_secs_f64(secs.unwrap_or(300.0)).map_err(|_| "timeout: seconds")?;
+    // Longer than any job runs, and still a time to wait until
+    Ok(t.min(Duration::from_secs(1 << 32)))
+}
+
+/// A job's exit status as a process's: its own, or 124 (as timeout(1) has it) when it ran out of
+/// time or was stopped.
+pub fn exit_code(status: Option<i64>) -> u8 {
+    status.map_or(124, |s| s.clamp(0, 255) as u8)
+}
+
+/// `--timeout SECS`
+pub fn timeout_flag(arg: Option<&str>) -> Result<Duration, String> {
+    arg.map(str::parse).transpose().ok().and_then(|s| timeout(s).ok()).ok_or_else(|| "--timeout: seconds".into())
+}
+
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -171,7 +190,9 @@ pub fn run(board: &armless::Board, activity: &Arc<Activity>, req: &Request) -> R
     let (launcher, cmd) = scripts(&id, &ws, &req.env, &req.command)?;
     let mut files = 0;
     for (rel, data, mode) in &req.files {
-        if rel.starts_with(".sg/") || rel.starts_with("out/") || rel.split('/').any(|c| c == "..") {
+        // However it is spelled (`/out/x`, `./out/x`), nothing goes in the job's own directories
+        let first = rel.split('/').find(|c| !c.is_empty() && *c != ".");
+        if matches!(first, Some(".sg" | "out")) || rel.split('/').any(|c| c == "..") {
             continue;
         }
         board.fs_write_file(&format!("{ws}/{rel}"), data, *mode)?;
@@ -335,7 +356,7 @@ pub fn from_json(v: &serde_json::Value) -> Result<Request, String> {
             .flatten()
             .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
             .collect(),
-        timeout: Duration::from_secs_f64(v["timeout"].as_f64().unwrap_or(300.0)),
+        timeout: timeout(v["timeout"].as_f64())?,
     })
 }
 
@@ -388,14 +409,257 @@ mod tests {
         assert!(launcher.contains("SGDONE_%s_%s_%s\\n' id"));
     }
 
+    #[test]
+    fn timeouts_are_seconds_a_job_can_wait() {
+        assert_eq!(timeout(None), Ok(Duration::from_secs(300)));
+        assert_eq!(timeout(Some(1.5)), Ok(Duration::from_millis(1500)));
+        assert_eq!(timeout(Some(0.0)), Ok(Duration::ZERO));
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            assert!(timeout(Some(bad)).is_err(), "{bad}");
+        }
+        // However long, a deadline can still be made of it
+        let _ = Instant::now() + timeout(Some(1e19)).unwrap();
+        assert!(timeout(Some(1e300)).is_err());
+        assert_eq!(timeout_flag(None), Ok(Duration::from_secs(300)));
+        assert_eq!(timeout_flag(Some("2")), Ok(Duration::from_secs(2)));
+        for bad in ["-1", "soon", "NaN", "inf", ""] {
+            assert_eq!(timeout_flag(Some(bad)), Err("--timeout: seconds".into()), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_jobs_exit_code_is_its_status_or_124() {
+        assert_eq!(exit_code(Some(0)), 0);
+        assert_eq!(exit_code(Some(7)), 7);
+        assert_eq!(exit_code(Some(300)), 255);
+        assert_eq!(exit_code(None), 124);
+    }
+
+    #[test]
+    fn quoting_survives_any_text() {
+        assert_eq!(quote("plain"), "'plain'");
+        assert_eq!(quote(""), "''");
+        assert_eq!(quote("a'b"), "'a'\\''b'");
+        assert_eq!(quote("$(rm -rf /) `x` \"y\""), "'$(rm -rf /) `x` \"y\"'");
+    }
+
+    #[test]
+    fn a_job_from_json_decodes_its_files_and_keeps_string_variables() {
+        let v = serde_json::json!({
+            "files": { "in/a.txt": crate::b64::encode(b"hello") },
+            "cmd": "cat in/a.txt",
+            "env": { "A": "1", "N": 2 },
+            "timeout": 5,
+        });
+        let r = from_json(&v).unwrap();
+        assert_eq!(r.files, [("in/a.txt".to_string(), b"hello".to_vec(), 0o644)]);
+        assert_eq!(r.command, "cat in/a.txt");
+        assert_eq!(r.env, [("A".to_string(), "1".to_string())], "a value that isn't a string is left out");
+        assert_eq!(r.timeout, Duration::from_secs(5));
+        // Only cmd is needed
+        let r = from_json(&serde_json::json!({ "cmd": "true" })).unwrap();
+        assert!(r.files.is_empty() && r.env.is_empty());
+        assert_eq!(r.timeout, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn a_bad_job_from_json_says_what_is_wrong() {
+        let err = |v: serde_json::Value| from_json(&v).err().unwrap();
+        assert_eq!(err(serde_json::json!({})), "no cmd");
+        assert_eq!(err(serde_json::json!({ "cmd": "x", "files": { "a": 1 } })), "files: base64 strings");
+        assert_eq!(err(serde_json::json!({ "cmd": "x", "files": { "a": "!!" } })), "files: bad base64");
+        // Not a panic that takes the instance down
+        assert_eq!(err(serde_json::json!({ "cmd": "x", "timeout": -1 })), "timeout: seconds");
+    }
+
+    #[test]
+    fn a_finished_job_as_json() {
+        let d = Done {
+            output: b"hi\n".to_vec(),
+            status: Some(3),
+            out: vec![("r/x".into(), b"made".to_vec())],
+            ms: 12,
+            ..Done::default()
+        };
+        let v = to_json(&d);
+        assert_eq!(v["status"], 3);
+        assert_eq!(crate::b64::decode(v["output"].as_str().unwrap()).unwrap(), b"hi\n");
+        assert_eq!(crate::b64::decode(v["out"]["r/x"].as_str().unwrap()).unwrap(), b"made");
+        assert_eq!((v["timed_out"].as_bool(), v["cancelled"].as_bool(), v["killed"].as_bool()), (Some(false), Some(false), Some(false)));
+        assert_eq!(v["ms"], 12);
+        // Out of time: no status
+        assert!(to_json(&Done { timed_out: true, ..Done::default() })["status"].is_null());
+    }
+
+    #[test]
+    fn a_workspace_goes_in_without_its_own_out_and_sg() {
+        use std::os::unix::fs::PermissionsExt;
+        let ws = crate::testing::tmp("job-files");
+        crate::testing::write(&ws, &[("a", b"a"), ("d/e/f", b"f"), ("out/old", b"x"), (".sg/cmd", b"x"), ("d/out/kept", b"k")]);
+        std::fs::set_permissions(ws.join("a"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", ws.join("link")).unwrap();
+        let mut got = files(&ws).unwrap();
+        got.sort();
+        let names: Vec<(&str, u32)> = got.iter().map(|(n, _, m)| (n.as_str(), *m)).collect();
+        assert_eq!(names, [("a", 0o755), ("d/e/f", 0o644), ("d/out/kept", 0o644)]);
+        assert_eq!(got[1].1, b"f");
+        assert!(files(&ws.join("missing")).is_err());
+    }
+
+    #[test]
+    fn idle_when_no_job_runs() {
+        assert!(wait_idle(Duration::ZERO) || wait_idle(Duration::from_secs(30)));
+    }
+
+    /// A job on a machine that never runs: this plays the guest, from the files the job wrote
+    /// into its filesystem to the marker its launcher prints.
+    mod guest {
+        use super::super::*;
+        use crate::testing;
+        use armless::dev::Event;
+
+        /// The job's id and the files it was given
+        type Played = (String, Vec<(String, Vec<u8>)>);
+
+        /// Wait for the job's files to appear; then, after `after`, write `files` into its
+        /// workspace and print the marker with `status` and `killed`.
+        fn play(
+            board: Arc<armless::Board>,
+            activity: Arc<Activity>,
+            after: Duration,
+            files: &'static [(&'static str, &'static [u8])],
+            status: i32,
+            killed: bool,
+        ) -> std::thread::JoinHandle<Played> {
+            std::thread::spawn(move || {
+                let begun = Instant::now();
+                let given = loop {
+                    if let Some(f) = board.fs_read_tree("/sgjob").unwrap() {
+                        if f.iter().any(|(n, _)| n.ends_with("/.sg/job.sh")) {
+                            break f;
+                        }
+                    }
+                    assert!(begun.elapsed() < Duration::from_secs(10), "the job never wrote its files");
+                    std::thread::sleep(Duration::from_millis(5));
+                };
+                let id = given[0].0.split('/').next().unwrap().to_string();
+                std::thread::sleep(after);
+                for (rel, data) in files {
+                    board.fs_write_file(&format!("/sgjob/{id}/{rel}"), data, 0o644).unwrap();
+                }
+                activity.observe(&Event::Serial(format!("sh /sgjob/{id}/.sg/job.sh\r\n").into_bytes()));
+                activity.observe(&Event::Serial(format!("\r\nSGDONE_{id}_{status}_{}\r\n# ", killed as u8).into_bytes()));
+                (id, given)
+            })
+        }
+
+        fn request(files: Vec<File>, timeout: Duration) -> Request {
+            Request { files, command: "make".into(), env: vec![("K".into(), "v".into())], timeout }
+        }
+
+        #[test]
+        fn a_job_that_ends_brings_back_its_status_output_and_out() {
+            let (board, _runner) = testing::machine("job-ends");
+            let activity = Activity::new(false);
+            let printed: &[(&str, &[u8])] = &[(".sg/output", b"built\n"), ("out/r/x", b"made")];
+            let guest = play(board.clone(), activity.clone(), Duration::ZERO, printed, 7, false);
+            let files = vec![
+                ("src/main.c".into(), b"int main;".to_vec(), 0o600),
+                // Never written: the job's own, its results, or outside its workspace
+                (".sg/cmd".into(), b"x".to_vec(), 0o644),
+                ("out/x".into(), b"x".to_vec(), 0o644),
+                ("../escape".into(), b"x".to_vec(), 0o644),
+                ("a/../../escape".into(), b"x".to_vec(), 0o644),
+            ];
+            let done = run(&board, &activity, &request(files, Duration::from_secs(30))).unwrap();
+            let (id, given) = guest.join().unwrap();
+            assert_eq!(done.status, Some(7));
+            assert_eq!(done.output, b"built\n");
+            assert_eq!(done.out, [("r/x".to_string(), b"made".to_vec())]);
+            assert!(!done.timed_out && !done.cancelled && !done.killed);
+            let names: Vec<&str> = given.iter().map(|(n, _)| n.strip_prefix(&format!("{id}/")).unwrap()).collect();
+            assert_eq!(names, [".sg/cmd", ".sg/job.sh", "src/main.c"]);
+            let cmd = String::from_utf8_lossy(&given[0].1).into_owned();
+            assert!(cmd.contains("export K='v'\n") && cmd.ends_with("make\n"), "{cmd}");
+            assert!(board.fs_read_tree("/escape").unwrap().is_none());
+        }
+
+        #[test]
+        fn a_job_out_of_time_is_killed_and_brings_back_no_status() {
+            let (board, _runner) = testing::machine("job-late");
+            let activity = Activity::new(false);
+            // The guest answers the ctrl-c sent at the deadline: it killed the command
+            let printed: &[(&str, &[u8])] = &[(".sg/output", b"partial"), ("out/r", b"x")];
+            let guest = play(board.clone(), activity.clone(), Duration::from_millis(300), printed, 130, true);
+            let done = run(&board, &activity, &request(vec![], Duration::from_millis(50))).unwrap();
+            guest.join().unwrap();
+            assert_eq!(done.status, None);
+            assert!(done.timed_out && done.killed && !done.cancelled);
+            assert_eq!(done.output, b"partial");
+            assert!(done.out.is_empty(), "out/ of a job that didn't finish isn't taken");
+            assert_eq!(to_json(&done)["status"], serde_json::Value::Null);
+        }
+
+        #[test]
+        fn a_job_that_ends_just_as_its_time_is_up_counts_as_ended() {
+            let (board, _runner) = testing::machine("job-just");
+            let activity = Activity::new(false);
+            // The ctrl-c went to the shell's prompt: the marker says the command ended by itself
+            let guest = play(board.clone(), activity.clone(), Duration::from_millis(200), &[], 0, false);
+            let done = run(&board, &activity, &request(vec![], Duration::from_millis(20))).unwrap();
+            guest.join().unwrap();
+            assert_eq!(done.status, Some(0));
+            assert!(!done.timed_out && !done.killed);
+        }
+
+        #[test]
+        fn input_files_never_land_in_the_jobs_own_directories_however_spelled() {
+            let (board, _runner) = testing::machine("job-spelled");
+            let activity = Activity::new(false);
+            let guest = play(board.clone(), activity.clone(), Duration::ZERO, &[], 0, false);
+            let files = ["/out/fake", "./out/fake", "out//fake", "//.sg/x", "./.sg/x", "a/./b"]
+                .iter()
+                .map(|n| (n.to_string(), b"x".to_vec(), 0o644))
+                .collect();
+            let done = run(&board, &activity, &request(files, Duration::from_secs(30))).unwrap();
+            let (id, given) = guest.join().unwrap();
+            assert!(done.out.is_empty(), "an input came back as a result: {:?}", done.out);
+            let names: Vec<&str> = given.iter().map(|(n, _)| n.strip_prefix(&format!("{id}/")).unwrap()).collect();
+            assert_eq!(names, [".sg/cmd", ".sg/job.sh", "a/b"]);
+        }
+
+        #[test]
+        fn a_bad_variable_name_fails_the_job_before_it_starts() {
+            let (board, _runner) = testing::machine("job-badenv");
+            let r = Request { env: vec![("A B".into(), "v".into())], ..request(vec![], Duration::from_secs(1)) };
+            assert_eq!(run(&board, &Activity::new(false), &r).err().unwrap(), "A B: not a variable name");
+            assert!(board.fs_read_tree("/sgjob").unwrap().is_none());
+        }
+
+        #[test]
+        fn a_workspace_job_writes_out_back_into_the_directory() {
+            let (board, _runner) = testing::machine("job-ws");
+            let activity = Activity::new(false);
+            let dir = testing::tmp("job-ws-dir");
+            testing::write(&dir, &[("in.txt", b"in")]);
+            let guest = play(board.clone(), activity.clone(), Duration::ZERO, &[("out/a/b.txt", b"result"), ("out/c", b"c")], 0, false);
+            let w = Workspace { dir: dir.clone(), command: "true".into(), env: vec![], timeout: Duration::from_secs(30) };
+            let (done, n) = run_workspace(&board, &activity, &w).unwrap();
+            let (_, given) = guest.join().unwrap();
+            assert!(given.iter().any(|(n, d)| n.ends_with("/in.txt") && d == b"in"));
+            assert_eq!((done.status, n), (Some(0), 2));
+            assert_eq!(std::fs::read(dir.join("out/a/b.txt")).unwrap(), b"result");
+            assert_eq!(std::fs::read(dir.join("out/c")).unwrap(), b"c");
+        }
+    }
+
     /// The launcher, run by this machine's sh as the guest's serial shell runs it: on a terminal
     /// (a pty here), where ctrl-c is a byte typed into it. What it prints, and what it leaves.
     #[cfg(target_os = "linux")]
     mod launcher {
         use super::super::*;
         use std::io::{Read, Write};
-        use std::os::fd::{FromRawFd, OwnedFd};
-        use std::os::unix::process::CommandExt;
+        use std::os::fd::AsFd;
         use std::process::Command;
 
         struct Run {
@@ -415,30 +679,15 @@ mod tests {
                 std::fs::write(ws.join(".sg/cmd"), cmd).unwrap();
                 std::fs::write(ws.join(".sg/job.sh"), launcher).unwrap();
 
-                let (mut m, mut s) = (0, 0);
-                // SAFETY: openpty fills in two descriptors we then own
-                assert_eq!(unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) }, 0);
-                let slave = unsafe { OwnedFd::from_raw_fd(s) };
-                let master = unsafe { std::fs::File::from_raw_fd(m) };
+                let (master, slave) = crate::sys::openpty().unwrap();
+                let master = std::fs::File::from(master);
                 let mut cmd = Command::new("sh");
                 cmd.arg(ws.join(".sg/job.sh"));
                 if let Some(p) = path {
                     cmd.env("PATH", p);
                 }
-                let fd = std::os::fd::AsRawFd::as_raw_fd(&slave);
-                // SAFETY: only async-signal-safe calls between fork and exec
-                unsafe {
-                    cmd.pre_exec(move || {
-                        // A session of its own, the pty its terminal, as getty gives the shell
-                        if libc::setsid() < 0 || libc::ioctl(fd, libc::TIOCSCTTY, 0) < 0 {
-                            return Err(std::io::Error::last_os_error());
-                        }
-                        for to in 0..3 {
-                            libc::dup2(fd, to);
-                        }
-                        Ok(())
-                    });
-                }
+                // A session of its own, the pty its terminal, as getty gives the shell
+                crate::sys::on_terminal(&mut cmd, slave.as_fd());
                 let child = cmd.spawn().unwrap();
                 drop(slave);
                 let printed = Arc::new(Mutex::new(Vec::new()));

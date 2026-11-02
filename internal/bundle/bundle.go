@@ -95,12 +95,17 @@ func Write(site, runtime, out string) (Stats, error) {
 		}
 	}
 
-	tmp := out + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	// A temporary file of its own, executable once in place
+	f, err := os.CreateTemp(filepath.Dir(out), filepath.Base(out)+".tmp-*")
 	if err != nil {
 		return s, err
 	}
+	tmp := f.Name()
 	defer os.Remove(tmp)
+	if err := f.Chmod(0o755); err != nil {
+		f.Close()
+		return s, err
+	}
 	w := bufio.NewWriterSize(f, 1<<20)
 	if _, err := w.Write(exe); err != nil {
 		f.Close()
@@ -165,7 +170,8 @@ func index(data []byte) (int, map[string][2]int64, bool) {
 	exe := binary.LittleEndian.Uint64(t[0:])
 	at := binary.LittleEndian.Uint64(t[8:])
 	n := binary.LittleEndian.Uint64(t[16:])
-	if at+n > uint64(len(data)-trailer) || exe > at {
+	end := uint64(len(data) - trailer)
+	if at > end || n > end-at || exe > at { // not at+n: it can wrap round
 		return 0, nil, false
 	}
 	var files map[string][2]int64

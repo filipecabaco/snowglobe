@@ -17,6 +17,8 @@ use std::sync::Arc;
 
 use armless::native::BlobSource;
 
+use crate::sys::Mmap;
+
 const MAGIC: &[u8; 8] = b"SGBUNDL1";
 const TRAILER: usize = 8 * 3 + MAGIC.len();
 
@@ -48,7 +50,11 @@ impl Site {
 
     /// The site this executable carries, if it is a bundle.
     pub fn this_bundle() -> Option<Site> {
-        let exe = std::env::current_exe().ok()?;
+        Site::bundle(std::env::current_exe().ok()?)
+    }
+
+    /// The site a bundle carries (None: `exe` is no bundle).
+    fn bundle(exe: PathBuf) -> Option<Site> {
         let file = std::fs::File::open(&exe).ok()?;
         let map = Mmap::of(&file)?;
         let files = index(&map)?;
@@ -120,45 +126,128 @@ fn index(data: &[u8]) -> Option<HashMap<String, (usize, usize)>> {
     Some(files)
 }
 
-/// A read-only mapping of a whole file.
-struct Mmap {
-    ptr: *const u8,
-    len: usize,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{site, tmp, write};
 
-// The mapping is read-only and lives as long as the Mmap
-unsafe impl Send for Mmap {}
-unsafe impl Sync for Mmap {}
-
-impl Mmap {
-    fn of(file: &std::fs::File) -> Option<Mmap> {
-        use std::os::fd::AsRawFd;
-        let len = file.metadata().ok()?.len() as usize;
-        if len == 0 {
-            return None;
+    /// A bundle as `snowglobe bundle` writes it: `exe`, the files back to back, the index, the
+    /// trailer.
+    fn bundle_bytes(exe: &[u8], files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut out = exe.to_vec();
+        let mut index = BTreeMap::new();
+        for (name, data) in files {
+            index.insert(name.to_string(), (out.len(), data.len()));
+            out.extend_from_slice(data);
         }
-        // SAFETY: a private read-only mapping of an open file; the bundle is not written while
-        // it runs (replacing it makes a new file)
-        let ptr = unsafe {
-            libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_PRIVATE, file.as_raw_fd(), 0)
-        };
-        if ptr == libc::MAP_FAILED {
-            return None;
+        let json = serde_json::to_vec(&index).unwrap();
+        let at = out.len();
+        out.extend_from_slice(&json);
+        for n in [exe.len(), at, json.len()] {
+            out.extend_from_slice(&(n as u64).to_le_bytes());
         }
-        Some(Mmap { ptr: ptr as *const u8, len })
+        out.extend_from_slice(MAGIC);
+        out
     }
-}
 
-impl std::ops::Deref for Mmap {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        // SAFETY: mapped for `len` bytes until drop
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    #[test]
+    fn a_site_directory_reads_its_files_and_system_files() {
+        let (root, s) = site("site-dir", &[("run.json", b"{}"), ("system/state.bin.zst", b"state")]);
+        assert_eq!(s.file("run.json").as_deref(), Some(&b"{}"[..]));
+        assert_eq!(s.file("system/state.bin.zst").as_deref(), Some(&b"state"[..]));
+        assert!(s.file("missing").is_none());
+        assert_eq!(s.need("system/nope").err().unwrap(), "system/nope: not in the site");
+        assert_eq!(s.describe(), root.display().to_string());
+        assert_eq!(s.read_paths(), [root.clone(), root.join("system"), root.join("system/filesystem")]);
     }
-}
 
-impl Drop for Mmap {
-    fn drop(&mut self) {
-        unsafe { libc::munmap(self.ptr as *mut _, self.len) };
+    #[test]
+    fn a_pooled_site_needs_its_blobs_store() {
+        let root = tmp("site-pooled");
+        write(&root, &[("run.json", b"{}"), ("pool/abc", b"blob")]);
+        assert!(Site::dir(&root, None).err().unwrap().contains("--blobs"));
+        let s = Site::dir(&root, Some(&root.join("pool"))).unwrap();
+        assert_eq!((s.blobs().0)("abc"), Some(b"blob".to_vec()));
+        assert_eq!(s.read_paths()[2], root.join("pool"));
+    }
+
+    #[test]
+    fn blobs_are_names_never_paths() {
+        let (root, s) = site("site-blobs", &[("system/filesystem/abc", b"blob"), ("system/secret", b"no")]);
+        let get = s.blobs().0;
+        assert_eq!(get("abc"), Some(b"blob".to_vec()));
+        assert_eq!(get("missing"), None);
+        for bad in ["../secret", "a/b", "..", &format!("{}/system/secret", root.display())] {
+            assert_eq!(get(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_system_directory_has_no_site_files() {
+        let root = tmp("site-system");
+        write(&root, &[("state.bin.zst", b"state"), ("filesystem/abc", b"blob")]);
+        let s = Site::system(&root);
+        assert_eq!(s.file("system/state.bin.zst").as_deref(), Some(&b"state"[..]));
+        // run.json is beside system/, which a system directory doesn't have
+        assert!(s.file("run.json").is_none());
+        assert_eq!((s.blobs().0)("abc"), Some(b"blob".to_vec()));
+        assert_eq!(s.describe(), root.display().to_string());
+    }
+
+    #[test]
+    fn a_bundle_carries_its_files_and_blobs() {
+        let exe = tmp("site-bundle").join("site");
+        let data = bundle_bytes(b"\x7fELF...", &[("run.json", b"{\"title\":\"t\"}"), ("blob/abc", b"blob"), ("empty", b"")]);
+        std::fs::write(&exe, data).unwrap();
+        let s = Site::bundle(exe.clone()).unwrap();
+        assert_eq!(s.file("run.json").as_deref(), Some(&b"{\"title\":\"t\"}"[..]));
+        assert_eq!(s.file("empty").as_deref(), Some(&b""[..]));
+        assert!(s.file("system/state.bin.zst").is_none());
+        let get = s.blobs().0;
+        assert_eq!(get("abc"), Some(b"blob".to_vec()));
+        assert_eq!(get("../run.json"), None);
+        // Mapped already: nothing for the sandbox to let it read
+        assert!(s.read_paths().is_empty());
+        assert_eq!(s.describe(), exe.display().to_string());
+    }
+
+    #[test]
+    fn an_executable_without_a_trailer_is_no_bundle() {
+        let d = tmp("site-nobundle");
+        std::fs::write(d.join("plain"), b"just a program, long enough to hold a trailer's worth").unwrap();
+        assert!(Site::bundle(d.join("plain")).is_none());
+        std::fs::write(d.join("empty"), b"").unwrap();
+        assert!(Site::bundle(d.join("empty")).is_none());
+        assert!(Site::bundle(d.join("missing")).is_none());
+        // This test binary is no bundle either
+        assert!(Site::this_bundle().is_none());
+    }
+
+    #[test]
+    fn an_index_never_points_outside_the_files() {
+        assert!(index(b"short").is_none());
+        let good = bundle_bytes(b"exe", &[("a", b"aaaa")]);
+        assert_eq!(index(&good).unwrap()["a"], (3, 4));
+        // An entry running into the index (or past the end) is dropped
+        let mut bad = b"exeaaaa".to_vec();
+        let json = br#"{"a":[3,4],"over":[3,999],"wrap":[18446744073709551615,2]}"#;
+        let at = bad.len();
+        bad.extend_from_slice(json);
+        for n in [3, at, json.len()] {
+            bad.extend_from_slice(&(n as u64).to_le_bytes());
+        }
+        bad.extend_from_slice(MAGIC);
+        let files = index(&bad).unwrap();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(files["a"], (3, 4));
+        // An index that isn't where the trailer says, or isn't JSON
+        let mut lost = good.clone();
+        let n = lost.len();
+        lost[n - TRAILER + 8..n - TRAILER + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(index(&lost).is_none());
+        let mut garbled = good.clone();
+        let at = u64::from_le_bytes(good[n - TRAILER + 8..n - TRAILER + 16].try_into().unwrap()) as usize;
+        garbled[at] = b'x';
+        assert!(index(&garbled).is_none());
     }
 }

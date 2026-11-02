@@ -44,7 +44,7 @@ func instancesDir() (string, error) {
 // loadNative is the native instance called name, if one is running.
 func loadNative(name string) (*nativeState, string, bool) {
 	dir, err := instancesDir()
-	if err != nil || name == "" || strings.ContainsAny(name, "/\\") {
+	if err != nil || !validName(name) {
 		return nil, "", false
 	}
 	dir = filepath.Join(dir, name)
@@ -59,12 +59,21 @@ func loadNative(name string) (*nativeState, string, bool) {
 	return &st, dir, true
 }
 
+// validName says whether name can name an instance: its directory is instances/<name>, removed
+// when it stops, so not a path or a path step (".." would be the whole cache).
+func validName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\\")
+}
+
 func alive(pid int) bool {
 	return pid > 0 && syscall.Kill(pid, 0) == nil
 }
 
 // runNative runs the site with snowglobe-vm at vm, attached or (named) detached.
 func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) error {
+	if o.Name != "" && !validName(o.Name) {
+		return fmt.Errorf("--name %s: a name, not a path", o.Name)
+	}
 	args := append([]string{"run", site}, tools.TunnelArgs(tunnels, o.AllowPrivate)...)
 	if o.RecordReads != "" {
 		record, err := filepath.Abs(o.RecordReads)
@@ -110,9 +119,13 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 	args = append(args, vmDriver...)
 
 	if !o.Detach {
-		// Its own control socket, so that runs side by side don't share one
-		sock := filepath.Join(os.TempDir(), fmt.Sprintf("snowglobe-%d.sock", os.Getpid()))
-		defer os.Remove(sock)
+		// Its own control socket, so that runs side by side don't share one: in a private
+		// directory, not at a name others could take first
+		sock, err := privateSocket()
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(filepath.Dir(sock))
 		dir := ""
 		if o.Name != "" {
 			st, d, running := loadNative(o.Name)
@@ -185,7 +198,7 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 	// Wait until it has restored (or failed)
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
-	deadline := time.After(2 * time.Minute)
+	deadline := time.After(restoreTimeout)
 	for {
 		select {
 		case err := <-exited:
@@ -195,7 +208,13 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 			os.RemoveAll(dir)
 			return fmt.Errorf("%s stopped while restoring (%v): %s", o.Name, err, said)
 		case <-deadline:
-			return fmt.Errorf("%s did not restore within 2 minutes; its log: %s", o.Name, logPath)
+			// Not left running unannounced: ended, and forgotten like one that stopped
+			cmd.Process.Kill()
+			<-exited
+			said := lastLines(logPath, 5)
+			removeSocket(sock, dir)
+			os.RemoveAll(dir)
+			return fmt.Errorf("%s did not restore within %s, so it was stopped: %s", o.Name, restoreTimeout, said)
 		case <-time.After(100 * time.Millisecond):
 		}
 		if line := firstLine(logPath, "restored "); line != "" {
@@ -205,6 +224,9 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 		}
 	}
 }
+
+// restoreTimeout is how long a detached run gets to restore before it is given up on.
+var restoreTimeout = 2 * time.Minute
 
 // sockMax is the longest control socket path this system takes: a Unix socket's path has to fit
 // sun_path (104 bytes on macOS and the BSDs, 108 on Linux), terminating NUL included.
@@ -218,6 +240,16 @@ func socketPath(dir string) (string, error) {
 	if p := filepath.Join(dir, "sock"); len(p) <= sockMax {
 		return p, nil
 	}
+	p, err := privateSocket()
+	if err != nil {
+		return "", fmt.Errorf("%s: too long a path for a control socket, and no short temporary directory", dir)
+	}
+	return p, nil
+}
+
+// privateSocket is a control socket's path in a directory of its own (0700) under the temporary
+// directory, short enough for a Unix socket.
+func privateSocket() (string, error) {
 	for _, base := range []string{os.TempDir(), "/tmp"} {
 		if len(filepath.Join(base, "sg-0123456789", "sock")) > sockMax {
 			continue
@@ -228,7 +260,7 @@ func socketPath(dir string) (string, error) {
 		}
 		return filepath.Join(private, "sock"), nil
 	}
-	return "", fmt.Errorf("%s: too long a path for a control socket, and no short temporary directory", dir)
+	return "", errors.New("no temporary directory short enough for a control socket")
 }
 
 // removeSocket removes a control socket kept outside its instance's directory, and the private
