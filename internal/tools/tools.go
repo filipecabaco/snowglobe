@@ -95,16 +95,7 @@ func (i *Image) CopySite(out string) error {
 	if err := i.run(out, nil, "cp", "-R", "/tools/site/.", "/out/"); err != nil {
 		return err
 	}
-	file := filepath.Join(out, "armless", "armless.js")
-	source, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
-	patched, err := snapshotMemoryHeadroom(source)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(file, patched, 0o644)
+	return patchArmless(out)
 }
 
 // FetchSite writes what CopySite copies out of the image (armless's browser runtime and xterm.js)
@@ -166,16 +157,7 @@ func FetchSite(out string) error {
 			return fmt.Errorf("%s: %w", archive, err)
 		}
 	}
-	file := filepath.Join(out, "armless", "armless.js")
-	source, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
-	patched, err := snapshotMemoryHeadroom(source)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(file, patched, 0o644)
+	return patchArmless(out)
 }
 
 func extractMembers(archive string, members map[string]string, out string) error {
@@ -221,6 +203,20 @@ func extractMembers(archive string, members map[string]string, out string) error
 		return fmt.Errorf("found %d of its %d files", found, len(members))
 	}
 	return nil
+}
+
+// patchArmless applies snapshotMemoryHeadroom to the site's armless.js in out.
+func patchArmless(out string) error {
+	file := filepath.Join(out, "armless", "armless.js")
+	source, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	patched, err := snapshotMemoryHeadroom(source)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(file, patched, 0o644)
 }
 
 // armless (v0.2.6 to v0.3.0) reserves only RAM+1 GiB for SMP. A live snapshot also allocates serialized

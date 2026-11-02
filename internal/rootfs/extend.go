@@ -23,6 +23,12 @@ func ReadWarmPack(file string) ([]PackEntry, [][]byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	return ParseWarmPack(data)
+}
+
+// ParseWarmPack reads a warm pack's bytes: <<index_size::32-little, index_json, blobs...>>. It may
+// come from a remote site, so a malformed one is an error, never a panic.
+func ParseWarmPack(data []byte) ([]PackEntry, [][]byte, error) {
 	if len(data) < 4 {
 		return nil, nil, errors.New("short warm pack")
 	}
@@ -44,10 +50,10 @@ func ReadWarmPack(file string) ([]PackEntry, [][]byte, error) {
 		name, _ := e[0].(string)
 		size, _ := e[1].(float64)
 		length, _ := e[2].(float64)
-		end := offset + int(length)
-		if name == "" || end > len(data) {
+		if name == "" || length < 0 || length > float64(len(data)-offset) {
 			return nil, nil, errors.New("bad warm pack entry")
 		}
+		end := offset + int(length)
 		entries = append(entries, PackEntry{Blob: name, Size: int64(size), Compressed: int64(length)})
 		blobs = append(blobs, data[offset:end])
 		offset = end
@@ -120,9 +126,15 @@ func ExtendWarmPack(system, blobDir string, names []string) (added, files int, b
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	tmp := packFile + ".tmp"
-	out, err := os.Create(tmp)
+	// A temporary file of its own: another warm of this site may be writing at the same time
+	out, err := os.CreateTemp(system, "warm.pack.tmp-*")
 	if err != nil {
+		return 0, 0, 0, err
+	}
+	tmp := out.Name()
+	if err := out.Chmod(0o644); err != nil {
+		out.Close()
+		os.Remove(tmp)
 		return 0, 0, 0, err
 	}
 	w := bufio.NewWriter(out)
@@ -140,5 +152,9 @@ func ExtendWarmPack(system, blobDir string, names []string) (added, files int, b
 		os.Remove(tmp)
 		return 0, 0, 0, err
 	}
-	return added, len(entries), bytes, os.Rename(tmp, packFile)
+	if err := os.Rename(tmp, packFile); err != nil {
+		os.Remove(tmp)
+		return 0, 0, 0, err
+	}
+	return added, len(entries), bytes, nil
 }

@@ -5,11 +5,10 @@ package remote
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,16 +33,21 @@ func IsURL(source string) bool {
 
 // IsTarball reports whether a source (a URL or a path) names a packed site.
 func IsTarball(source string) bool {
-	p := source
-	if u, err := url.Parse(source); err == nil && IsURL(source) {
-		p = u.Path
-	}
+	p := sourcePath(source)
 	for _, ext := range []string{".tar.gz", ".tgz", ".tar.zst", ".tar"} {
 		if strings.HasSuffix(p, ext) {
 			return true
 		}
 	}
 	return false
+}
+
+// sourcePath is a source's file name part: a URL's path, without its query, or the path itself.
+func sourcePath(source string) string {
+	if u, err := url.Parse(source); err == nil && IsURL(source) {
+		return u.Path
+	}
+	return source
 }
 
 // Fetch makes the site at source available locally and returns its directory: a tarball URL is
@@ -88,7 +92,31 @@ func Unpack(file string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	return dir, extract(f, abs, dir)
+	return dir, unpackInto(f, abs, dir)
+}
+
+// unpackInto extracts a tarball into dir, replacing what is there only once all of it is out: one
+// cut short must not leave a run.json that makes a part of a site look like all of it.
+func unpackInto(r io.Reader, name, dir string) error {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(dir), ".unpack-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	// Readable as a site is: a container runs it as another user
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return err
+	}
+	if err := extract(r, name, tmp); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dir)
 }
 
 // ---- a tarball ----
@@ -122,10 +150,7 @@ func fetchTarball(source, dir string) error {
 		return fmt.Errorf("%s: %s", source, resp.Status)
 	}
 	fmt.Fprintf(os.Stderr, "downloading %s (%s)\n", source, size(resp.ContentLength))
-	if err := os.RemoveAll(dir); err != nil {
-		return err
-	}
-	if err := extract(resp.Body, source, dir); err != nil {
+	if err := unpackInto(resp.Body, source, dir); err != nil {
 		return err
 	}
 	if etag := resp.Header.Get("ETag"); etag != "" {
@@ -138,15 +163,16 @@ func fetchTarball(source, dir string) error {
 }
 
 func extract(r io.Reader, name, dir string) error {
-	switch {
-	case strings.HasSuffix(name, ".gz") || strings.HasSuffix(name, ".tgz"):
+	// A URL's query (?v=2) isn't part of its file name
+	switch p := sourcePath(name); {
+	case strings.HasSuffix(p, ".gz") || strings.HasSuffix(p, ".tgz"):
 		gz, err := gzip.NewReader(r)
 		if err != nil {
 			return err
 		}
 		defer gz.Close()
 		r = gz
-	case strings.HasSuffix(name, ".zst"):
+	case strings.HasSuffix(p, ".zst"):
 		zr, err := zstd.NewReader(r)
 		if err != nil {
 			return err
@@ -189,13 +215,13 @@ func extract(r io.Reader, name, dir string) error {
 
 var baseurlPattern = regexp.MustCompile(`baseurl:\s*"([^"]+)"`)
 
-// The files a run needs besides the guest's blobs; the optional ones exist only for some sites
+// The files a run needs besides run.json and the guest's blobs; the optional ones exist only for
+// some sites
 var siteFiles = []struct {
 	path     string
 	optional bool
 }{
-	{"run.json", false}, {"index.html", false},
-	{"system/filesystem.json", false}, {"system/state.bin.zst", false}, {"system/console.bin", true},
+	{"index.html", false}, {"system/filesystem.json", false}, {"system/state.bin.zst", false}, {"system/console.bin", true},
 	// The site's CA: with a network, the guest's HTTPS ends in the machine with it
 	{"system/tls.json", true},
 }
@@ -210,7 +236,7 @@ func mirror(source, dir string) error {
 	}
 
 	// run.json says which build this is: when it matches the cache, nothing else is fetched
-	fresh, err := get(site.ResolveReference(&url.URL{Path: "run.json"}).String())
+	fresh, err := get(site.ResolveReference(&url.URL{Path: "run.json"}).String(), maxRunJSON)
 	if err != nil {
 		return fmt.Errorf("%s doesn't look like a snowglobe site: %w", source, err)
 	}
@@ -223,15 +249,18 @@ func mirror(source, dir string) error {
 	os.Remove(filepath.Join(dir, ".complete"))
 	fmt.Fprintf(os.Stderr, "fetching %s\n", source)
 
+	// The run.json just fetched, not another copy that may be of a newer build
+	if err := writeBytes(filepath.Join(dir, "run.json"), fresh); err != nil {
+		return err
+	}
 	for _, f := range siteFiles {
-		data, err := get(site.ResolveReference(&url.URL{Path: f.path}).String())
-		if err != nil {
-			if f.optional {
+		target := filepath.Join(dir, filepath.FromSlash(f.path))
+		if err := fetchTo(site.ResolveReference(&url.URL{Path: f.path}).String(), target); err != nil {
+			if f.optional && errors.Is(err, errNotThere) {
+				// Not in this build: an earlier build's copy must not stay
+				os.Remove(target)
 				continue
 			}
-			return err
-		}
-		if err := writeBytes(filepath.Join(dir, filepath.FromSlash(f.path)), data); err != nil {
 			return err
 		}
 	}
@@ -263,7 +292,7 @@ func mirror(source, dir string) error {
 
 	// The warm pack carries the files a run reads first in one request
 	if len(missing) > 0 {
-		if pack, err := get(site.ResolveReference(&url.URL{Path: "system/warm.pack"}).String()); err == nil {
+		if pack, err := get(site.ResolveReference(&url.URL{Path: "system/warm.pack"}).String(), maxWarmPack); err == nil {
 			unpacked, err := unpackWarm(pack, blobDir)
 			if err == nil {
 				fmt.Fprintf(os.Stderr, "  %d files from warm.pack\n", unpacked)
@@ -299,10 +328,7 @@ func fetchAll(base *url.URL, dir string, names []string) error {
 		go func() {
 			defer wg.Done()
 			for name := range jobs {
-				data, err := get(base.ResolveReference(&url.URL{Path: name}).String())
-				if err == nil {
-					err = writeBytes(filepath.Join(dir, name), data)
-				}
+				err := fetchTo(base.ResolveReference(&url.URL{Path: name}).String(), filepath.Join(dir, name))
 				if err != nil {
 					errOnce.Do(func() { failure = err })
 				}
@@ -333,61 +359,130 @@ func BlobNames(file string) ([]string, error) {
 	}
 	names := make([]string, len(refs))
 	for i, r := range refs {
+		if !blobName(r.Name) {
+			return nil, fmt.Errorf("%s: %q isn't a blob name", file, r.Name)
+		}
 		names[i] = r.Name
 	}
 	return names, nil
 }
 
-// unpackWarm writes the blobs in a warm pack: <<index_size::32-little, index_json, blobs...>>
-func unpackWarm(pack []byte, dir string) (int, error) {
-	if len(pack) < 4 {
-		return 0, errors.New("short warm pack")
-	}
-	n := int(binary.LittleEndian.Uint32(pack))
-	if 4+n > len(pack) {
-		return 0, errors.New("bad warm pack index")
-	}
-	var index [][]any
-	if err := json.Unmarshal(pack[4:4+n], &index); err != nil {
-		return 0, err
-	}
-	offset := 4 + n
-	for _, entry := range index {
-		name, _ := entry[0].(string)
-		length, _ := entry[2].(float64)
-		end := offset + int(length)
-		if name == "" || end > len(pack) {
-			return 0, errors.New("bad warm pack entry")
-		}
-		if err := writeBytes(filepath.Join(dir, name), pack[offset:end]); err != nil {
-			return 0, err
-		}
-		offset = end
-	}
-	return len(index), nil
+// blobName says whether name is a plain file name in the blob directory: a site from elsewhere
+// names the blobs, and a path in a name would write (or read) outside it.
+func blobName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\`)
 }
 
-func get(u string) ([]byte, error) {
+// unpackWarm writes the blobs in a warm pack.
+func unpackWarm(pack []byte, dir string) (int, error) {
+	entries, blobs, err := rootfs.ParseWarmPack(pack)
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range entries {
+		if !blobName(e.Blob) {
+			return 0, fmt.Errorf("bad warm pack entry %q", e.Blob)
+		}
+	}
+	for i, e := range entries {
+		if err := writeBytes(filepath.Join(dir, e.Blob), blobs[i]); err != nil {
+			return 0, err
+		}
+	}
+	return len(entries), nil
+}
+
+// What a site's server may send, at most: it is someone else's, so it can't make this process
+// hold or write without end. Generous for real sites (a snapshot of several GiB). Variables for
+// the tests.
+var (
+	maxRunJSON  int64 = 16 << 20
+	maxWarmPack int64 = 2 << 30 // held in memory to unpack
+	maxFile     int64 = 16 << 30
+)
+
+// errNotThere is an answer other than 200: for an optional file, one the build doesn't have
+// (S3 says 403 rather than 404, say).
+var errNotThere = errors.New("not there")
+
+// open GETs u, its body read at most limit bytes.
+func open(u string, limit int64) (io.ReadCloser, error) {
 	resp, err := http.Get(u)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: %s", u, resp.Status)
+		resp.Body.Close()
+		return nil, fmt.Errorf("%s: %s: %w", u, resp.Status, errNotThere)
 	}
-	return io.ReadAll(resp.Body)
+	return struct {
+		io.Reader
+		io.Closer
+	}{&capped{r: resp.Body, left: limit, limit: limit, u: u}, resp.Body}, nil
+}
+
+// get reads u into memory, at most limit bytes.
+func get(u string, limit int64) ([]byte, error) {
+	body, err := open(u, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+	return io.ReadAll(body)
+}
+
+// fetchTo streams u into target, at most maxFile bytes.
+func fetchTo(u, target string) error {
+	body, err := open(u, maxFile)
+	if err != nil {
+		return err
+	}
+	defer body.Close()
+	return writeFrom(target, body)
+}
+
+// capped fails a read past its limit, rather than stopping short as if that were all.
+type capped struct {
+	r           io.Reader
+	left, limit int64
+	u           string
+}
+
+func (c *capped) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if c.left -= int64(n); c.left < 0 {
+		return 0, fmt.Errorf("%s: more than %d bytes", c.u, c.limit)
+	}
+	return n, err
 }
 
 func writeBytes(target string, data []byte) error {
+	return writeFrom(target, bytes.NewReader(data))
+}
+
+func writeFrom(target string, r io.Reader) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	tmp := target + ".part"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// A temporary file of its own: another process may be writing the same target
+	f, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".part-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, target)
+	_, err = io.Copy(f, r)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(f.Name(), 0o644)
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), target)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
 }
 
 func writeFile(target string, r io.Reader) error {

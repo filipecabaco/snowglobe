@@ -62,7 +62,7 @@ Usage:
                                                      image's), macOS on Apple silicon (this
                                                      release's), or the snowglobe-vm --runtime
                                                      (or SNOWGLOBE_VM) names
-  snowglobe sh <name> [--json] [--timeout S] <cmd>  run a command on a native instance's shell
+  snowglobe sh <name> [--json] [--timeout S] '<cmd>' run a command on a native instance's shell
                                                      (whatever its app is): its output and exit
                                                      status, or {"exit", "output"} with --json.
                                                      Out of time (300 s), it and everything it
@@ -170,63 +170,68 @@ func main() {
 	if version == "" {
 		version = moduleVersion()
 	}
-	if len(os.Args) < 2 {
+	os.Exit(run(os.Args[1:]))
+}
+
+// run runs the command in args (the program's arguments) and returns its exit status.
+func run(args []string) int {
+	if len(args) < 1 {
 		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		return 2
 	}
 
 	var err error
-	switch os.Args[1] {
+	switch args[0] {
 	case "build":
-		err = runBuild(os.Args[2:])
+		err = runBuild(args[1:])
 	case "serve":
-		err = runServe(os.Args[2:])
+		err = runServe(args[1:])
 	case "pool":
-		err = runPool(os.Args[2:])
+		err = runPool(args[1:])
 	case "pwa":
-		err = runPWA(os.Args[2:])
+		err = runPWA(args[1:])
 	case "run":
-		err = runRun(os.Args[2:])
+		err = runRun(args[1:])
 	case "pack":
-		err = runPack(os.Args[2:])
+		err = runPack(args[1:])
 	case "bundle":
-		err = runBundle(os.Args[2:])
+		err = runBundle(args[1:])
 	case "warm":
-		err = runWarm(os.Args[2:])
+		err = runWarm(args[1:])
 	case "exec":
-		if len(os.Args) < 4 {
+		if len(args) < 3 {
 			err = fmt.Errorf("exec takes an instance name and a command")
 		} else {
-			err = instance.Exec(os.Args[2], os.Args[3:])
+			err = instance.Exec(args[1], args[2:])
 		}
 	case "sh":
-		err = runSh(os.Args[2:])
+		err = runSh(args[1:])
 	case "cp":
-		if len(os.Args) != 4 {
+		if len(args) != 3 {
 			err = fmt.Errorf("cp takes a source and a destination, one of them name:/path in an instance")
 		} else {
-			err = instance.Copy(os.Args[2], os.Args[3])
+			err = instance.Copy(args[1], args[2])
 		}
 	case "mcp":
-		err = runMCP(os.Args[2:])
+		err = runMCP(args[1:])
 	case "attach":
-		if len(os.Args) != 3 {
+		if len(args) != 2 {
 			err = fmt.Errorf("attach takes an instance name")
 		} else {
-			err = instance.Attach(os.Args[2])
+			err = instance.Attach(args[1])
 		}
 	case "stop":
-		if len(os.Args) != 3 {
+		if len(args) != 2 {
 			err = fmt.Errorf("stop takes an instance name")
 		} else {
-			err = instance.Stop(os.Args[2])
+			err = instance.Stop(args[1])
 		}
 	case "ps":
 		err = instance.List()
 	case "tools":
-		if len(os.Args) == 4 && os.Args[2] == "kernel" {
+		if len(args) == 3 && args[1] == "kernel" {
 			// The kernel archive builds without Docker add (a release asset), built with Docker
-			err = boot.BuildKernel(os.Args[3])
+			err = boot.BuildKernel(args[2])
 			break
 		}
 		// Build (or find) the tools image and print its tag, e.g. to build it once in CI
@@ -239,19 +244,20 @@ func main() {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], usage)
-		os.Exit(2)
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", args[0], usage)
+		return 2
 	}
 
 	var exit instance.ExitError
 	if errors.As(err, &exit) {
 		// The runtime's own exit status (what a piped session or exec ended with)
-		os.Exit(exit.Code)
+		return exit.Code
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\033[31merror:\033[0m %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func runBuild(args []string) error {
@@ -511,6 +517,10 @@ func runSh(args []string) error {
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	positional, err := parse(fs, args)
 	if err != nil {
+		if strings.HasPrefix(err.Error(), "flag provided but not defined") {
+			// Most likely the command's own flag: its words were left unquoted
+			return fmt.Errorf("%w: quote the command, as in snowglobe sh web 'ls -l'", err)
+		}
 		return err
 	}
 	if len(positional) < 2 {

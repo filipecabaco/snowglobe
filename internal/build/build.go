@@ -391,11 +391,14 @@ func printReport(r rootfs.Report, order []string) {
 	fmt.Printf("    %-34s %5d files %8.1f MB  (fetched on demand)\n", "never read", r.Cold.Files, float64(r.Cold.Bytes)/(1<<20))
 }
 
+// truncate shortens s to n characters (runes, as the report's columns count them), the last an
+// ellipsis; never a byte slice, which could cut a character in two.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string(r[:n-1]) + "…"
 }
 
 // Resolve merges options, image labels and defaults.
@@ -437,6 +440,9 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		} else {
 			s.Memory = 512
 		}
+	}
+	if s.Memory < 1 {
+		return nil, fmt.Errorf("memory %d: a number of MB", s.Memory)
 	}
 
 	// Networking is opt-in: "fetch" turns the guest's HTTP requests into the browser's fetch()

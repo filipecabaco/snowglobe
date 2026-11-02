@@ -177,8 +177,7 @@ func readAndStore(tr *tar.Reader, blobsDir string, o Options) ([]*entry, error) 
 			}
 
 			p := normalize(h.Name)
-			// docker export adds /.dockerenv; inside the guest it makes OpenRC think it runs in a
-			// container and skip services such as networking and hostname
+			// /.dockerenv marks a container, which the guest is not: if a layer carries one, leave it out
 			if p == "" || p == ".dockerenv" {
 				continue
 			}
@@ -195,6 +194,10 @@ func readAndStore(tr *tar.Reader, blobsDir string, o Options) ([]*entry, error) 
 			}
 			if h.Typeflag == tar.TypeLink {
 				e.linkname = normalize(h.Linkname)
+			}
+			// Nothing outside the root: refused, not folded into it over a file of the same name
+			if escapes(p) || (h.Typeflag == tar.TypeLink && escapes(e.linkname)) {
+				return fmt.Errorf("tar entry %s escapes the root", h.Name)
 			}
 
 			mu.Lock()
@@ -350,8 +353,17 @@ func addNode(nodes map[string][]any, children map[string][]string, p string, nod
 	nodes[p] = node
 }
 
+// normalize is a tar member's path relative to the root, cleaned: "" for the root itself, and
+// starting with ".." for one that climbs out of it.
 func normalize(name string) string {
-	name = strings.TrimPrefix(name, "./")
-	name = strings.TrimLeft(name, "/")
-	return strings.TrimRight(name, "/")
+	name = path.Clean(strings.TrimLeft(name, "/"))
+	if name == "." {
+		return ""
+	}
+	return name
+}
+
+// escapes says whether a normalized path climbs out of the root.
+func escapes(p string) bool {
+	return p == ".." || strings.HasPrefix(p, "../")
 }

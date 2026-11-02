@@ -140,18 +140,26 @@ func BuildKernel(dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	tmp := dest + ".tmp"
-	f, err := os.Create(tmp)
+	// A temporary file of its own: another build may be making the same kernel at the same time
+	f, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 	err = docker.Stream(func(r io.Reader) error { _, err := io.Copy(f, r); return err },
 		"run", "--rm", "--platform", "linux/arm64", tag,
 		"tar", "-czf", "-", "-C", "/", "boot/vmlinuz-virt", "boot/initramfs-virt", "lib/modules")
-	f.Close()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, 0o644)
+	}
+	if err == nil {
+		err = os.Rename(tmp, dest)
+	}
 	if err != nil {
 		os.Remove(tmp)
-		return err
 	}
-	return os.Rename(tmp, dest)
+	return err
 }
