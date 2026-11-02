@@ -102,6 +102,8 @@ pub struct Activity {
     pub reads: Mutex<Option<BTreeSet<String>>>,
     watchers: Mutex<Vec<Watcher>>,
     pub echo_serial: bool,
+    /// The serial shell may still be running a job that never ended (`job`)
+    pub shell_busy: std::sync::atomic::AtomicBool,
 }
 
 const SCREEN_MAX: usize = 1 << 20;
@@ -120,6 +122,7 @@ impl Activity {
             reads: Mutex::new(None),
             watchers: Mutex::default(),
             echo_serial,
+            shell_busy: Default::default(),
         })
     }
 

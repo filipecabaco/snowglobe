@@ -10,15 +10,24 @@
 //! The job's files are written into the guest from the host (no console, no quoting) under
 //! /sgjob/<id>, a directory its kernel has never seen (it caches what it has, so new files appear
 //! only in a new directory), and `EXCLAVE_WORKSPACE` names it. Only `sh <launcher>` is typed. The
-//! launcher starts the command in a session of its own (setsid; else a process group of its own),
-//! waits for it, syncs what it wrote, then prints a marker with its status, which the echo of the
-//! typed line can't contain. One job at a time per machine.
+//! launcher asks for a nonce, which the host then types (it is in no file, and the command hasn't
+//! started yet), starts the command in a session of its own (setsid; else a process group of its
+//! own), waits for it, syncs what it wrote, then prints a marker line with the nonce and its
+//! status. Only that whole line ends the job: a job that prints a marker of its own from what it
+//! can read (`.sg/job.sh`, its id) doesn't end or misreport itself. One job at a time per machine.
+//!
+//! What this can't stop: a job runs as root in the guest, so one set on it can still read the
+//! nonce out of the launcher's memory (/proc/<pid>/mem) or take over the serial line, and forge
+//! its own result. It can only ever forge its own: the host enforces the timeout, and a job that
+//! leaves the shell busy holds up the next one (below) rather than having it typed into it.
 //!
 //! Out of time (or the instance stopping), the host types ctrl-c: the launcher, in the terminal's
 //! foreground, traps it and kills the command's session and process group, TERM and then KILL
 //! after 3 s, so nothing the command started is left running (short of a process that made a
 //! session of its own: a daemon), and the shell is free for the next job. Its marker then says
-//! it killed them.
+//! it killed them. If no marker comes even then, the shell may still be busy: before another job
+//! is typed, the shell must answer a sync (a line it computes, which its echo can't contain); until
+//! it does, jobs fail with "the guest's shell is not answering".
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,7 +68,9 @@ static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 static STOPPING: AtomicBool = AtomicBool::new(false);
 
 /// How long the guest gets to kill a job, once told to
-const KILL_GRACE: Duration = Duration::from_secs(10);
+const KILL_GRACE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(10) };
+/// How long a shell that may be busy gets to answer a sync
+const SYNC_WAIT: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(10) };
 /// Output kept in a job's log entry
 const LOGGED_OUTPUT: usize = 64 << 10;
 
@@ -125,10 +136,14 @@ pub fn scripts(id: &str, ws: &str, env: &[(String, String)], command: &str) -> R
     cmd += command;
     cmd.push('\n');
 
-    // The trap first: a ctrl-c that comes early still finds it
+    // The trap first: a ctrl-c that comes early still finds it. Then the nonce, typed by the host
+    // when asked (never in a file; before the command starts, so it can't read it off the
+    // terminal), kept in an unexported variable
     let launcher = format!(
         r#"k=0
 trap 'k=1' INT TERM HUP
+printf '\nSGNONCE_%s\n' {id}
+read -r n
 cd {ws} || exit 1
 sg_procs() {{
   for p in /proc/[0-9]*; do
@@ -161,7 +176,7 @@ if [ "$k" = 1 ]; then
   wait "$pg"; s=$?
 fi
 sync
-printf '\nSGDONE_%s_%s_%s\n' {id} "$s" "$k"
+printf '\nSGDONE_%s_%s_%s_%s\n' {id} "$n" "$s" "$k"
 "#,
         ws = quote(ws),
     );
@@ -169,14 +184,45 @@ printf '\nSGDONE_%s_%s_%s\n' {id} "$s" "$k"
 }
 
 /// The launcher's marker in what the serial line printed: the command's status, and whether it
-/// was killed.
-pub fn parse_marker(printed: &str, id: &str) -> Option<(i32, bool)> {
-    let marker = format!("SGDONE_{id}_");
-    let at = printed.find(&marker)?;
-    let rest = &printed[at + marker.len()..];
-    let line = &rest[..rest.find(['\r', '\n'])?];
-    let (status, killed) = line.trim().split_once('_')?;
-    Some((status.parse().ok()?, killed == "1"))
+/// was killed. Only a whole line `SGDONE_<id>_<nonce>_<status>_<0|1>` counts: not one without the
+/// nonce, nor one pieced together around the terminal's echo of the typed nonce.
+pub fn parse_marker(printed: &str, id: &str, nonce: &str) -> Option<(i32, bool)> {
+    let prefix = format!("SGDONE_{id}_{nonce}_");
+    // Whole lines only: the last piece hasn't ended yet
+    let (lines, _) = printed.rsplit_once('\n')?;
+    lines.split('\n').find_map(|line| {
+        let (status, killed) = line.trim_end_matches('\r').strip_prefix(&prefix)?.split_once('_')?;
+        let killed = match killed {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        };
+        Some((status.parse().ok()?, killed))
+    })
+}
+
+/// A fresh random token, 16 hex digits.
+fn token() -> String {
+    format!("{:016x}", u64::from_le_bytes(armless::runner::os_entropy()[..8].try_into().unwrap()))
+}
+
+/// Whether the serial shell is at its prompt: it runs a line (once whatever it is running ends)
+/// and prints what it computes, which the echo of the typed line can't contain.
+fn shell_answers(board: &armless::Board, activity: &Activity, wait: Duration) -> bool {
+    let tok = token();
+    let from = activity.serial_total();
+    board.serial_input(format!("echo SGSYNC_{tok}_$((6*7))\n").as_bytes());
+    let answer = format!("SGSYNC_{tok}_42");
+    let deadline = Instant::now() + wait;
+    loop {
+        if String::from_utf8_lossy(&activity.serial_since(from)).contains(&answer) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 pub fn run(board: &armless::Board, activity: &Arc<Activity>, req: &Request) -> Result<Done, String> {
@@ -184,8 +230,16 @@ pub fn run(board: &armless::Board, activity: &Arc<Activity>, req: &Request) -> R
     if STOPPING.load(Ordering::SeqCst) {
         return Err("the instance is stopping".into());
     }
+    // The last job left the shell maybe busy: nothing is typed into it until it answers
+    if activity.shell_busy.load(Ordering::SeqCst) {
+        if !shell_answers(board, activity, SYNC_WAIT) {
+            return Err("the guest's shell is not answering".into());
+        }
+        activity.shell_busy.store(false, Ordering::SeqCst);
+    }
     let begun = Instant::now();
-    let id = format!("{:016x}", u64::from_le_bytes(armless::runner::os_entropy()[..8].try_into().unwrap()));
+    let id = token();
+    let nonce = token();
     let ws = format!("/sgjob/{id}");
     let (launcher, cmd) = scripts(&id, &ws, &req.env, &req.command)?;
     let mut files = 0;
@@ -219,11 +273,16 @@ pub fn run(board: &armless::Board, activity: &Arc<Activity>, req: &Request) -> R
     let mut done = Done::default();
     let mut killing = false;
     let mut marker = None;
+    let mut asked = false;
     {
         let mut screen = activity.screen.lock().unwrap();
         loop {
             let printed = String::from_utf8_lossy(&activity.serial_since(from)).into_owned();
-            if let Some(m) = parse_marker(&printed, &id) {
+            if !asked && printed.contains(&format!("SGNONCE_{id}")) {
+                board.serial_input(format!("{nonce}\n").as_bytes());
+                asked = true;
+            }
+            if let Some(m) = parse_marker(&printed, &id, &nonce) {
                 marker = Some(m);
                 break;
             }
@@ -258,6 +317,13 @@ pub fn run(board: &armless::Board, activity: &Arc<Activity>, req: &Request) -> R
             done.timed_out = false;
             done.cancelled = false;
         }
+    }
+    // No marker even after the ctrl-c: the launcher may still be running in the shell. The job
+    // keeps the shell (and the lock) until the shell answers; if it doesn't, the next job asks
+    // again rather than being typed into it
+    if marker.is_none() && !shell_answers(board, activity, SYNC_WAIT) {
+        activity.shell_busy.store(true, Ordering::SeqCst);
+        log::event("job_shell_busy", json!({ "job": id }));
     }
     if done.status.is_some() {
         done.out = board
@@ -380,14 +446,30 @@ mod tests {
 
     #[test]
     fn the_marker_carries_status_and_kill() {
-        let printed = "sh /sgjob/ab/.sg/job.sh\r\n\r\nSGDONE_ab_143_1\r\n# ";
-        assert_eq!(parse_marker(printed, "ab"), Some((143, true)));
-        assert_eq!(parse_marker("\nSGDONE_ab_0_0\n", "ab"), Some((0, false)));
+        let printed = "sh /sgjob/ab/.sg/job.sh\r\n\r\nSGDONE_ab_n0_143_1\r\n# ";
+        assert_eq!(parse_marker(printed, "ab", "n0"), Some((143, true)));
+        assert_eq!(parse_marker("\nSGDONE_ab_n0_0_0\n", "ab", "n0"), Some((0, false)));
         // Not this job's, or not a whole line yet
-        assert_eq!(parse_marker("\nSGDONE_cd_0_0\n", "ab"), None);
-        assert_eq!(parse_marker("\nSGDONE_ab_0_", "ab"), None);
+        assert_eq!(parse_marker("\nSGDONE_cd_n0_0_0\n", "ab", "n0"), None);
+        assert_eq!(parse_marker("\nSGDONE_ab_n0_0_", "ab", "n0"), None);
+        assert_eq!(parse_marker("\nSGDONE_ab_n0_0_0", "ab", "n0"), None, "not a whole line yet");
         // The typed line's echo has no marker in it
-        assert_eq!(parse_marker("sh /sgjob/ab/.sg/job.sh\r\n", "ab"), None);
+        assert_eq!(parse_marker("sh /sgjob/ab/.sg/job.sh\r\n", "ab", "n0"), None);
+    }
+
+    #[test]
+    fn only_the_launchers_own_marker_line_counts() {
+        // Without the nonce (all a job can build from .sg/job.sh), or with another one
+        assert_eq!(parse_marker("\nSGDONE_ab_0_0\n", "ab", "n0"), None);
+        assert_eq!(parse_marker("\nSGDONE_ab_n1_0_0\n", "ab", "n0"), None);
+        // Not at the start of its line, or with more after it
+        assert_eq!(parse_marker("x SGDONE_ab_n0_0_0\n", "ab", "n0"), None);
+        assert_eq!(parse_marker("\nSGDONE_ab_n0_0_0x\n", "ab", "n0"), None);
+        assert_eq!(parse_marker("\nSGDONE_ab_n0_0_2\n", "ab", "n0"), None);
+        // Pieced together around the terminal's echo of the typed nonce: its own line, cut short
+        assert_eq!(parse_marker("SGDONE_ab_n0\r\n_0_0\n", "ab", "n0"), None);
+        // A spoof first, then the real one: the real one
+        assert_eq!(parse_marker("\nSGDONE_ab_0_0\nSGDONE_ab_n0_7_0\n", "ab", "n0"), Some((7, false)));
     }
 
     #[test]
@@ -403,10 +485,12 @@ mod tests {
     #[test]
     fn the_launcher_traps_before_anything_else() {
         let (launcher, _) = scripts("id", "/sgjob/id", &[], "true").unwrap();
-        let first: Vec<&str> = launcher.lines().take(2).collect();
-        assert_eq!(first, ["k=0", "trap 'k=1' INT TERM HUP"]);
+        let first: Vec<&str> = launcher.lines().take(4).collect();
+        assert_eq!(first, ["k=0", "trap 'k=1' INT TERM HUP", "printf '\\nSGNONCE_%s\\n' id", "read -r n"]);
         assert!(launcher.contains("setsid sh .sg/cmd"));
-        assert!(launcher.contains("SGDONE_%s_%s_%s\\n' id"));
+        // The marker carries the nonce, which is in no file
+        assert!(launcher.contains("SGDONE_%s_%s_%s_%s\\n' id \"$n\""));
+        assert!(!launcher.contains("export n"));
     }
 
     #[test]
@@ -521,8 +605,56 @@ mod tests {
         /// The job's id and the files it was given
         type Played = (String, Vec<(String, Vec<u8>)>);
 
-        /// Wait for the job's files to appear; then, after `after`, write `files` into its
-        /// workspace and print the marker with `status` and `killed`.
+        /// The next whole line the host typed into the serial line (`typed` keeps what has come
+        /// in after it).
+        fn next_line(board: &armless::Board, typed: &mut String) -> String {
+            let begun = Instant::now();
+            loop {
+                typed.push_str(&testing::typed(board));
+                if let Some((line, rest)) = typed.split_once('\n') {
+                    let line = line.to_string();
+                    *typed = rest.to_string();
+                    return line;
+                }
+                assert!(begun.elapsed() < Duration::from_secs(10), "nothing typed: {typed:?}");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+
+        /// A launcher starting, played: typed in, it asks for its nonce and reads it. Its id and
+        /// nonce.
+        fn start_launcher(board: &armless::Board, activity: &Arc<Activity>, typed: &mut String) -> (String, String) {
+            let id = loop {
+                let line = next_line(board, typed);
+                if let Some(id) = line.strip_prefix("sh /sgjob/").and_then(|l| l.strip_suffix("/.sg/job.sh")) {
+                    break id.to_string();
+                }
+            };
+            activity.observe(&Event::Serial(format!("sh /sgjob/{id}/.sg/job.sh\r\n\r\nSGNONCE_{id}\r\n").into_bytes()));
+            let nonce = next_line(board, typed);
+            // The terminal echoes it
+            activity.observe(&Event::Serial(format!("{nonce}\r\n").into_bytes()));
+            (id, nonce)
+        }
+
+        /// The shell back at its prompt: it answers the next sync typed in.
+        fn answer_sync(board: &armless::Board, activity: &Arc<Activity>, typed: &mut String) {
+            loop {
+                // A ctrl-c typed before it is the shell's, not part of the line
+                let line = next_line(board, typed).trim_start_matches('\x03').to_string();
+                if let Some(tok) = line.strip_prefix("echo SGSYNC_").and_then(|l| l.strip_suffix("_$((6*7))")) {
+                    activity.observe(&Event::Serial(format!("{line}\r\nSGSYNC_{tok}_42\r\n# ").into_bytes()));
+                    return;
+                }
+            }
+        }
+
+        fn marker(activity: &Arc<Activity>, id: &str, nonce: &str, status: i32, killed: bool) {
+            activity.observe(&Event::Serial(format!("\r\nSGDONE_{id}_{nonce}_{status}_{}\r\n# ", killed as u8).into_bytes()));
+        }
+
+        /// A job, played: its launcher starts; then, after `after`, `files` are written into its
+        /// workspace and the marker printed with `status` and `killed`.
         fn play(
             board: Arc<armless::Board>,
             activity: Arc<Activity>,
@@ -532,23 +664,13 @@ mod tests {
             killed: bool,
         ) -> std::thread::JoinHandle<Played> {
             std::thread::spawn(move || {
-                let begun = Instant::now();
-                let given = loop {
-                    if let Some(f) = board.fs_read_tree("/sgjob").unwrap() {
-                        if f.iter().any(|(n, _)| n.ends_with("/.sg/job.sh")) {
-                            break f;
-                        }
-                    }
-                    assert!(begun.elapsed() < Duration::from_secs(10), "the job never wrote its files");
-                    std::thread::sleep(Duration::from_millis(5));
-                };
-                let id = given[0].0.split('/').next().unwrap().to_string();
+                let (id, nonce) = start_launcher(&board, &activity, &mut String::new());
+                let given = board.fs_read_tree("/sgjob").unwrap().unwrap();
                 std::thread::sleep(after);
                 for (rel, data) in files {
                     board.fs_write_file(&format!("/sgjob/{id}/{rel}"), data, 0o644).unwrap();
                 }
-                activity.observe(&Event::Serial(format!("sh /sgjob/{id}/.sg/job.sh\r\n").into_bytes()));
-                activity.observe(&Event::Serial(format!("\r\nSGDONE_{id}_{status}_{}\r\n# ", killed as u8).into_bytes()));
+                marker(&activity, &id, &nonce, status, killed);
                 (id, given)
             })
         }
@@ -629,6 +751,83 @@ mod tests {
         }
 
         #[test]
+        fn a_marker_the_job_prints_itself_doesnt_end_or_misreport_it() {
+            let (board, _runner) = testing::machine("job-spoof");
+            let activity = Activity::new(false);
+            let guest = {
+                let (board, activity) = (board.clone(), activity.clone());
+                std::thread::spawn(move || {
+                    let (id, nonce) = start_launcher(&board, &activity, &mut String::new());
+                    // The job read its id from .sg/job.sh and prints "done, status 0" itself, as
+                    // the old launcher did, and with a guessed nonce
+                    activity.observe(&Event::Serial(format!("\r\nSGDONE_{id}_0_0\r\nSGDONE_{id}_0000000000000000_0_0\r\n").into_bytes()));
+                    std::thread::sleep(Duration::from_millis(300));
+                    board.fs_write_file(&format!("/sgjob/{id}/.sg/output"), b"real", 0o644).unwrap();
+                    marker(&activity, &id, &nonce, 7, false);
+                })
+            };
+            let done = run(&board, &activity, &request(vec![], Duration::from_secs(30))).unwrap();
+            guest.join().unwrap();
+            assert_eq!(done.status, Some(7), "ended by its own marker");
+            assert_eq!(done.output, b"real");
+            assert!(done.ms >= 300);
+        }
+
+        #[test]
+        fn a_job_whose_shell_never_comes_back_holds_up_the_next_one() {
+            let (board, _runner) = testing::machine("job-stuck-shell");
+            let activity = Activity::new(false);
+            let mut typed = String::new();
+            // A job out of time whose launcher never answers the ctrl-c, nor the sync after it
+            let first = {
+                let (board, activity) = (board.clone(), activity.clone());
+                std::thread::spawn(move || run(&board, &activity, &request(vec![], Duration::from_millis(50))))
+            };
+            let (first_id, _) = start_launcher(&board, &activity, &mut typed);
+            let done = first.join().unwrap().unwrap();
+            assert_eq!(done.status, None);
+            assert!(done.timed_out && !done.killed);
+            assert!(activity.shell_busy.load(Ordering::SeqCst));
+            // The next one isn't typed into the busy shell: it fails, having typed only a sync
+            let e = run(&board, &activity, &request(vec![], Duration::from_secs(30))).err().unwrap();
+            assert_eq!(e, "the guest's shell is not answering");
+            typed.push_str(&testing::typed(&board));
+            assert!(!typed.contains("sh /sgjob/"), "typed into the busy shell: {typed:?}");
+            let jobs: Vec<String> = board.fs_read_tree("/sgjob").unwrap().unwrap().iter().map(|(n, _)| n.split('/').next().unwrap().to_string()).collect();
+            assert!(jobs.iter().all(|j| *j == first_id), "{jobs:?}");
+            // Once the shell is back, jobs run again
+            typed.clear();
+            let next = {
+                let (board, activity) = (board.clone(), activity.clone());
+                std::thread::spawn(move || run(&board, &activity, &request(vec![], Duration::from_secs(30))))
+            };
+            answer_sync(&board, &activity, &mut typed);
+            let (id, nonce) = start_launcher(&board, &activity, &mut typed);
+            marker(&activity, &id, &nonce, 0, false);
+            assert_eq!(next.join().unwrap().unwrap().status, Some(0));
+            assert!(!activity.shell_busy.load(Ordering::SeqCst));
+        }
+
+        #[test]
+        fn a_killed_job_whose_shell_answers_frees_it_at_once() {
+            let (board, _runner) = testing::machine("job-late-sync");
+            let activity = Activity::new(false);
+            let guest = {
+                let (board, activity) = (board.clone(), activity.clone());
+                std::thread::spawn(move || {
+                    let mut typed = String::new();
+                    start_launcher(&board, &activity, &mut typed);
+                    // No marker, but the shell is back by the time the host asks
+                    answer_sync(&board, &activity, &mut typed);
+                })
+            };
+            let done = run(&board, &activity, &request(vec![], Duration::from_millis(50))).unwrap();
+            guest.join().unwrap();
+            assert!(done.timed_out && done.status.is_none());
+            assert!(!activity.shell_busy.load(Ordering::SeqCst));
+        }
+
+        #[test]
         fn a_bad_variable_name_fails_the_job_before_it_starts() {
             let (board, _runner) = testing::machine("job-badenv");
             let r = Request { env: vec![("A B".into(), "v".into())], ..request(vec![], Duration::from_secs(1)) };
@@ -661,6 +860,8 @@ mod tests {
         use std::io::{Read, Write};
         use std::os::fd::AsFd;
         use std::process::Command;
+
+        const NONCE: &str = "0123456789abcdef";
 
         struct Run {
             ws: PathBuf,
@@ -702,7 +903,15 @@ mod tests {
                         }
                     });
                 }
-                Run { ws, child, master, printed }
+                let mut run = Run { ws, child, master, printed };
+                // It asks for its nonce, as the host types it
+                let begun = Instant::now();
+                while !String::from_utf8_lossy(&run.printed.lock().unwrap()).contains("SGNONCE_t") {
+                    assert!(begun.elapsed() < Duration::from_secs(10), "the launcher never asked for its nonce");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                run.master.write_all(format!("{NONCE}\n").as_bytes()).unwrap();
+                run
             }
 
             fn ctrl_c(&mut self) {
@@ -718,7 +927,7 @@ mod tests {
                 }
                 std::thread::sleep(Duration::from_millis(100));
                 let printed = String::from_utf8_lossy(&self.printed.lock().unwrap()).into_owned();
-                (parse_marker(&printed, "t"), self.ws)
+                (parse_marker(&printed, "t", NONCE), self.ws)
             }
         }
 
@@ -748,6 +957,30 @@ mod tests {
             let output = std::fs::read_to_string(ws.join(".sg/output")).unwrap();
             assert_eq!(output, format!("it's me in {}\n", ws.display()));
             assert_eq!(std::fs::read_to_string(ws.join("out/r")).unwrap(), "made\n");
+        }
+
+        #[test]
+        fn a_job_that_prints_its_own_marker_on_the_terminal_isnt_believed() {
+            // What a job can do: read its id from the launcher, find the launcher's terminal, and
+            // print "done, status 0" there, with no nonce or a guessed one
+            let run = Run::start(
+                "spoof",
+                &[],
+                r#"id=$(awk '/SGNONCE/ {print $NF}' .sg/job.sh)
+for p in /proc/[0-9]*; do
+  f=$(readlink "$p/fd/1" 2>/dev/null)
+  case "$f" in /dev/pts/*) grep -q job.sh "$p/cmdline" 2>/dev/null && t=$f ;; esac
+done
+[ -n "$t" ] || exit 99
+printf '
+SGDONE_%s_0_0
+SGDONE_%s_0000000000000000_0_0
+' "$id" "$id" > "$t"
+exit 7"#,
+                None,
+            );
+            let (marker, _) = run.finish();
+            assert_eq!(marker, Some((7, false)));
         }
 
         /// In the background, ignoring TERM (only KILL ends it), in a shell of its own, and in
