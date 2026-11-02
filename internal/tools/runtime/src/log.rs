@@ -181,6 +181,45 @@ mod tests {
     }
 
     #[test]
+    fn keeping_none_starts_the_file_over() {
+        let d = tmp("keep0");
+        let p = d.join("x.log");
+        let mut r = Rotating::open(&p, 4, 0).unwrap();
+        r.write(b"aaa");
+        r.write(b"bbb");
+        r.sync();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "bbb");
+        assert!(!d.join("x.log.1").exists());
+        // A write bigger than the limit goes into a file of its own
+        r.write(b"cccccccc");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "cccccccc");
+    }
+
+    #[test]
+    fn each_stream_has_its_file() {
+        let d = tmp("streams");
+        let l = Logs::open(&d).unwrap();
+        l.console(b"app");
+        l.serial(b"kernel");
+        // Not an object: the event alone
+        l.event("restored", Value::Null);
+        l.sync();
+        assert_eq!(std::fs::read_to_string(d.join("console.log")).unwrap(), "app");
+        assert_eq!(std::fs::read_to_string(d.join("serial.log")).unwrap(), "kernel");
+        let e: Value = serde_json::from_str(std::fs::read_to_string(d.join("events.jsonl")).unwrap().trim()).unwrap();
+        assert_eq!(e["event"], "restored");
+        assert_eq!(e.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_log_dir_that_cant_be_made_is_an_error() {
+        let d = tmp("notadir");
+        std::fs::write(d.join("file"), b"").unwrap();
+        assert!(Logs::open(&d.join("file")).err().unwrap().contains("file"));
+        assert!(Logs::open(&d.join("file/sub")).is_err());
+    }
+
+    #[test]
     fn appends_across_opens() {
         let d = tmp("append");
         Logs::open(&d).unwrap().console(b"one ");

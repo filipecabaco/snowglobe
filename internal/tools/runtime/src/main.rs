@@ -11,6 +11,9 @@
 //! site headlessly and connects its app console to the terminal, a pipe, or the control socket
 //! `exec` and `attach` talk to.
 
+#![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
+
 mod b64;
 mod driver;
 mod job;
@@ -22,6 +25,8 @@ mod sandbox;
 mod serve;
 mod site;
 mod snapshot;
+#[allow(unsafe_code)]
+mod sys;
 mod term;
 mod text;
 
@@ -133,5 +138,98 @@ fn finish(result: Result<u8, String>) -> ExitCode {
             eprintln!("snowglobe-vm: {e}");
             ExitCode::from(1)
         },
+    }
+}
+
+/// What the tests of several modules share: scratch directories, a site, a machine that is made
+/// but never started (its devices, filesystem and CPUs are there; no guest code runs).
+#[cfg(test)]
+mod testing {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    use crate::machine::{self, Spec};
+    use crate::site::Site;
+
+    /// A filesystem.json with nothing in it
+    pub const EMPTY_FS: &[u8] = br#"{"version":3,"size":0,"fsroot":[]}"#;
+
+    /// A fresh, empty directory for one test.
+    pub fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("sgtest-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Write `files` (paths relative to `root`), making their directories.
+    pub fn write(root: &Path, files: &[(&str, &[u8])]) {
+        for (rel, data) in files {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, data).unwrap();
+        }
+    }
+
+    /// A site directory with its own blobs and `files` besides.
+    pub fn site(name: &str, files: &[(&str, &[u8])]) -> (PathBuf, Site) {
+        let root = tmp(name);
+        std::fs::create_dir_all(root.join("system/filesystem")).unwrap();
+        write(&root, files);
+        let site = Site::dir(&root, None).unwrap();
+        (root, site)
+    }
+
+    /// The smallest machine, never started.
+    pub fn machine(name: &str) -> (Arc<armless::Board>, armless::runner::Runner) {
+        let (_, site) = site(name, &[("system/filesystem.json", EMPTY_FS)]);
+        let spec = Spec { memory_mb: 16, cpus: 1, network: "none".into() };
+        let (vm, clock) = machine::new_vm_jit(&spec, &site, false).unwrap();
+        let board = vm.board.clone();
+        (board, armless::runner::Runner::new(vm, clock, false))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn flags_switches_and_positionals_parse_in_any_order() {
+        let a = Args::parse(&strings(&["--detached", "site", "--socket", "/s", "--forward", "1:2", "--forward", "3:4"]), RUN_FLAGS)
+            .unwrap();
+        assert_eq!(a.positional, ["site"]);
+        assert!(a.has("detached"));
+        assert!(!a.has("socket"), "a flag with a value is not a switch");
+        assert_eq!(a.get("socket"), Some("/s"));
+        assert_eq!(a.all("forward"), ["1:2", "3:4"]);
+        assert_eq!(a.get("blobs"), None);
+        assert!(a.all("blobs").is_empty());
+    }
+
+    #[test]
+    fn the_last_of_a_repeated_flag_wins() {
+        let a = Args::parse(&strings(&["--socket", "/a", "--socket", "/b"]), RUN_FLAGS).unwrap();
+        assert_eq!(a.get("socket"), Some("/b"));
+    }
+
+    #[test]
+    fn a_flag_without_its_value_is_an_error() {
+        let e = Args::parse(&strings(&["site", "--socket"]), RUN_FLAGS).err().unwrap();
+        assert_eq!(e, "--socket needs a value");
+        // A value that looks like a flag is still the value
+        let a = Args::parse(&strings(&["--cmd", "--version"]), RUN_FLAGS).unwrap();
+        assert_eq!(a.get("cmd"), Some("--version"));
+    }
+
+    #[test]
+    fn a_failed_command_exits_1_and_a_finished_one_with_its_code() {
+        assert_eq!(finish(Ok(7)), ExitCode::from(7));
+        assert_eq!(finish(Err("nope".into())), ExitCode::from(1));
+        assert_eq!(usage(), ExitCode::from(2));
     }
 }

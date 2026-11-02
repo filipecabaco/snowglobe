@@ -69,11 +69,11 @@ pub fn main(args: &Args) -> Result<u8, String> {
     let ready = args.get("ready").map(str::to_string);
     let exercises = args.all("exercise");
     let blobs = system.join("filesystem");
+    let cols = args.get("cols").map_or(Ok(COLS), str::parse).map_err(|_| "--cols: not a number")?;
+    let rows = args.get("rows").map_or(Ok(ROWS), str::parse).map_err(|_| "--rows: not a number")?;
 
     let site = crate::site::Site::system(&system);
     let (mut vm, clock) = machine::new_vm(&spec, &site)?;
-    let cols = args.get("cols").map_or(Ok(COLS), str::parse).map_err(|_| "--cols: not a number")?;
-    let rows = args.get("rows").map_or(Ok(ROWS), str::parse).map_err(|_| "--rows: not a number")?;
     vm.board.console_resize(cols, rows);
 
     eprintln!("Booting, please stand by ...");
@@ -134,20 +134,13 @@ pub fn main(args: &Args) -> Result<u8, String> {
             }
         }
         if !app_ready {
-            app_ready = match &ready {
-                Some(r) => {
-                    let s = activity.screen.lock().unwrap();
-                    s.buf.windows(r.len()).any(|w| w == r.as_bytes())
-                },
-                None => activity.last_console.lock().unwrap().is_some_and(|t| t.elapsed() >= QUIET),
-            };
+            app_ready = is_ready(&activity, ready.as_deref());
             if app_ready {
                 boot_seconds = started.elapsed().as_secs_f64();
                 eprintln!("\nApp ready on hvc0 after {boot_seconds:.1}s");
             }
         }
-        let shell = activity.serial.lock().unwrap().windows(2).any(|w| w == b"# ");
-        if app_ready && shell {
+        if app_ready && shell_up(&activity) {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -177,12 +170,8 @@ pub fn main(args: &Args) -> Result<u8, String> {
     // and each ends in PSCI CPU_OFF, so the snapshot can leave them out
     if build_cpus > cpus {
         activity.serial.lock().unwrap().clear();
-        let offline = format!(
-            "for c in $(seq {cpus} {}); do echo 0 > /sys/devices/system/cpu/cpu$c/online; done; echo CPUS_$(nproc)_OFF\n",
-            build_cpus - 1
-        );
+        let (offline, marker) = offline(cpus, build_cpus);
         board.serial_input(offline.as_bytes());
-        let marker = format!("CPUS_{cpus}_OFF");
         if !activity.wait_serial(Duration::from_secs(120), |s| s.windows(marker.len()).any(|w| w == marker.as_bytes())) {
             return Err(format!("the guest did not take CPUs {cpus}-{} offline", build_cpus - 1));
         }
@@ -190,18 +179,8 @@ pub fn main(args: &Args) -> Result<u8, String> {
     }
 
     let state = runner.save_state_cpus(cpus)?;
-    eprintln!("\nCompressing {} MB snapshot ...", state.len() >> 20);
-    let compressed = compress(&state)?;
-    let out = system.join("state.bin.zst");
-    std::fs::write(&out, &compressed).map_err(|e| e.to_string())?;
-    write_json(
-        &system.join("run-meta.json"),
-        &json!({ "bootSeconds": boot_seconds, "stateBytes": state.len(), "snapshotBytes": compressed.len() }),
-    )?;
     let console = activity.screen.lock().unwrap().buf.clone();
-    let replay = text::without_progress_reports(&text::without_queries(text::since_last_clear(&console)));
-    std::fs::write(system.join("console.bin"), replay).map_err(|e| e.to_string())?;
-    eprintln!("Saved {} ({} MB)", out.display(), compressed.len() >> 20);
+    save(&system, &state, boot_seconds, &console)?;
     drop(state);
 
     // What the JIT compiled up to the snapshot: the profile with --sandbox, or if there are no
@@ -229,6 +208,48 @@ pub fn main(args: &Args) -> Result<u8, String> {
     runner.shutdown();
     let _ = std::io::stdout().flush();
     Ok(0)
+}
+
+/// Whether the app is ready: its --ready text is on the screen, or without one, its console has
+/// been quiet a while.
+fn is_ready(activity: &Activity, ready: Option<&str>) -> bool {
+    match ready {
+        Some(r) => activity.screen.lock().unwrap().buf.windows(r.len()).any(|w| w == r.as_bytes()),
+        None => activity.last_console.lock().unwrap().is_some_and(|t| t.elapsed() >= QUIET),
+    }
+}
+
+/// Whether the root shell on the serial port is up.
+fn shell_up(activity: &Activity) -> bool {
+    activity.serial.lock().unwrap().windows(2).any(|w| w == b"# ")
+}
+
+/// What takes CPUs `cpus` to `build_cpus - 1` offline, and the marker it ends with (computed by
+/// the guest, so the echoed command line can't match it).
+fn offline(cpus: usize, build_cpus: usize) -> (String, String) {
+    let command = format!(
+        "for c in $(seq {cpus} {}); do echo 0 > /sys/devices/system/cpu/cpu$c/online; done; echo CPUS_$(nproc)_OFF\n",
+        build_cpus - 1
+    );
+    (command, format!("CPUS_{cpus}_OFF"))
+}
+
+/// Write the snapshot into the system directory: the machine's state compressed, its sizes and
+/// boot time, and the console the page replays (what the screen shows, without the terminal
+/// queries and progress reports).
+fn save(system: &std::path::Path, state: &[u8], boot_seconds: f64, console: &[u8]) -> Result<(), String> {
+    eprintln!("\nCompressing {} MB snapshot ...", state.len() >> 20);
+    let compressed = compress(state)?;
+    let out = system.join("state.bin.zst");
+    std::fs::write(&out, &compressed).map_err(|e| e.to_string())?;
+    write_json(
+        &system.join("run-meta.json"),
+        &json!({ "bootSeconds": boot_seconds, "stateBytes": state.len(), "snapshotBytes": compressed.len() }),
+    )?;
+    let replay = text::without_progress_reports(&text::without_queries(text::since_last_clear(console)));
+    std::fs::write(system.join("console.bin"), replay).map_err(|e| e.to_string())?;
+    eprintln!("Saved {} ({} MB)", out.display(), compressed.len() >> 20);
+    Ok(())
 }
 
 fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -393,6 +414,135 @@ fn exercised(output: &[u8], prompt: Option<&[u8]>, idle: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{self, tmp, write, EMPTY_FS};
+    use armless::dev::Event;
+    use std::sync::Arc;
+
+    fn args(v: &[&str]) -> Args {
+        let v: Vec<String> = v.iter().map(|s| s.to_string()).collect();
+        Args::parse(&v, &["memory", "cpus", "build-cpus", "network", "ready", "exercise", "cols", "rows", "tunnel"]).unwrap()
+    }
+
+    #[test]
+    fn snapshot_refuses_bad_arguments_before_it_boots() {
+        let system = tmp("snapshot-args");
+        write(&system, &[("filesystem.json", EMPTY_FS)]);
+        let dir = system.display().to_string();
+        let err = |v: &[&str]| main(&args(v)).err().unwrap();
+        assert_eq!(err(&[]), "snapshot needs the system directory");
+        assert_eq!(err(&[&dir, "--cpus", "two"]), "--cpus: not a number");
+        assert_eq!(err(&[&dir, "--build-cpus", "x"]), "--build-cpus: not a number");
+        assert_eq!(err(&[&dir, "--cpus", "4", "--build-cpus", "2"]), "--build-cpus 2 is fewer than --cpus 4");
+        assert_eq!(err(&[&dir, "--memory", "lots"]), "--memory: not a number");
+        assert_eq!(err(&[&dir, "--cols", "wide"]), "--cols: not a number");
+        assert_eq!(err(&[&dir, "--rows", "-1"]), "--rows: not a number");
+        assert_eq!(err(&[&dir, "--memory", "1"]), "memory size must be between 16 MiB and 3.5 GiB");
+        // A machine is made, but there is no kernel in its filesystem to boot
+        assert!(err(&[&dir, "--memory", "16"]).contains("no kernel"));
+        assert_eq!(err(&[&tmp("snapshot-empty").display().to_string(), "--memory", "16"]), "system/filesystem.json: not in the site");
+    }
+
+    #[test]
+    fn the_app_is_ready_at_its_text_or_after_a_quiet_console() {
+        let a = Activity::new(false);
+        assert!(!is_ready(&a, Some("Listening")));
+        assert!(!is_ready(&a, None), "nothing printed yet");
+        a.observe(&Event::Console(b"booting\r\n".to_vec()));
+        assert!(!is_ready(&a, None), "printed just now");
+        *a.last_console.lock().unwrap() = Some(Instant::now() - QUIET);
+        assert!(is_ready(&a, None));
+        a.observe(&Event::Console(b"Listen".to_vec()));
+        a.observe(&Event::Console(b"ing on :4000".to_vec()));
+        assert!(is_ready(&a, Some("Listening")), "across console chunks");
+        assert!(!shell_up(&a));
+        a.observe(&Event::Serial(b"login\r\n# ".to_vec()));
+        assert!(shell_up(&a));
+    }
+
+    #[test]
+    fn extra_cpus_go_offline_and_say_how_many_are_left() {
+        let (command, marker) = offline(1, 4);
+        assert!(command.starts_with("for c in $(seq 1 3); do echo 0 > /sys/devices/system/cpu/cpu$c/online; done;"));
+        assert!(command.ends_with("echo CPUS_$(nproc)_OFF\n"));
+        assert_eq!(marker, "CPUS_1_OFF");
+        // The typed line's echo doesn't hold the marker
+        assert!(!command.contains(&marker));
+    }
+
+    #[test]
+    fn a_snapshot_is_saved_compressed_with_its_sizes_and_screen() {
+        let system = tmp("snapshot-save");
+        let state: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let console = b"kernel noise\x1b[2Jiex(1)> \x1b[6n=PROGRESS REPORT==== x\r\n\r\nready";
+        save(&system, &state, 12.5, console).unwrap();
+        let compressed = std::fs::read(system.join("state.bin.zst")).unwrap();
+        assert!(compressed.len() < state.len() / 10);
+        // A zstd frame with its size in it, as a restore streams it
+        assert_eq!(zstd::stream::decode_all(&compressed[..]).unwrap(), state);
+        assert_eq!(zstd::zstd_safe::get_frame_content_size(&compressed).ok(), Some(Some(state.len() as u64)));
+        let meta: serde_json::Value = serde_json::from_slice(&std::fs::read(system.join("run-meta.json")).unwrap()).unwrap();
+        assert_eq!(meta, json!({ "bootSeconds": 12.5, "stateBytes": 300_000, "snapshotBytes": compressed.len() }));
+        assert_eq!(std::fs::read(system.join("console.bin")).unwrap(), b"iex(1)> ready");
+        // Nowhere to write it
+        assert!(save(&system.join("missing"), &state, 0.0, b"").is_err());
+        assert!(write_json(&system.join("missing/x.json"), &json!({})).err().unwrap().contains("missing/x.json"));
+    }
+
+    /// An app on a machine that never runs, played by the test: each command typed is answered
+    /// by fetching `fetch` and printing the next answer.
+    fn app(board: Arc<armless::Board>, activity: Arc<Activity>, answers: Vec<(&'static str, &'static [u8])>) {
+        std::thread::spawn(move || {
+            let mut typed = 0;
+            for (fetch, answer) in answers {
+                let begun = Instant::now();
+                while board.console_pending() == typed {
+                    assert!(begun.elapsed() < Duration::from_secs(10), "nothing typed");
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                typed = board.console_pending();
+                activity.observe(&Event::Blob(fetch.into()));
+                activity.observe(&Event::Console(answer.to_vec()));
+            }
+        });
+    }
+
+    #[test]
+    fn exercises_record_what_each_command_printed_and_fetched() {
+        let (board, runner) = testing::machine("snapshot-exercise");
+        let activity = Activity::new(false);
+        activity.observe(&Event::Console(b"welcome\r\n~ $ ".to_vec()));
+        app(board.clone(), activity.clone(), vec![("a", b"ls\r\nbin\r\n~ $ "), ("b", b"pwd\r\n/root\r\n~ $ ")]);
+        let (mut transcript, mut reads) = (Vec::new(), BTreeMap::new());
+        let begun = Instant::now();
+        exercise(&board, &runner, &activity, &["ls".into(), "pwd".into()], &mut transcript, &mut reads);
+        // Done at the prompt, not after the long quiet
+        assert!(begun.elapsed() < EXERCISE_QUIET * 2, "{:?}", begun.elapsed());
+        assert_eq!(
+            transcript,
+            [json!({ "command": "ls", "output": "ls\r\nbin\r\n~ $ " }), json!({ "command": "pwd", "output": "pwd\r\n/root\r\n~ $ " })]
+        );
+        assert_eq!(reads["ls"], ["a"]);
+        assert_eq!(reads["pwd"], ["b"]);
+        // After the snapshot nothing records reads but the exercises
+        assert!(activity.reads.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn exercised_before_the_snapshot_what_they_fetch_counts_as_booting_too() {
+        let (board, runner) = testing::machine("snapshot-exercise-sandbox");
+        let activity = Activity::new(false);
+        activity.observe(&Event::Console(b"~ $ ".to_vec()));
+        *activity.reads.lock().unwrap() = Some(BTreeSet::from(["boot".to_string()]));
+        app(board.clone(), activity.clone(), vec![("lib", b"x\r\n~ $ ")]);
+        let (mut transcript, mut reads) = (Vec::new(), BTreeMap::new());
+        exercise(&board, &runner, &activity, &["x".into()], &mut transcript, &mut reads);
+        assert_eq!(reads["x"], ["lib"]);
+        let boot: Vec<String> = activity.reads.lock().unwrap().iter().flatten().cloned().collect();
+        assert_eq!(boot, ["boot", "lib"]);
+        // No exercises: nothing to do
+        exercise(&board, &runner, &activity, &[], &mut transcript, &mut reads);
+        assert_eq!(transcript.len(), 1);
+    }
 
     #[test]
     fn the_prompt_is_the_screens_last_line() {
