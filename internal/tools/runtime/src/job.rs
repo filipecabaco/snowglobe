@@ -119,11 +119,13 @@ fn quote(s: &str) -> String {
 /// The two scripts of a job in workspace `ws`: the launcher (typed `sh <ws>/.sg/job.sh`) and the
 /// command with its environment (`.sg/cmd`).
 pub fn scripts(id: &str, ws: &str, env: &[(String, String)], command: &str) -> Result<(String, String), String> {
-    // The app's environment: a login PATH, /etc/profile, the image's ENV
+    // The app's environment: a login PATH, /etc/profile, the image's ENV (from the file a build
+    // writes; a site built before there was one has it only in its console script)
     let mut cmd = String::from(
         "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root\n\
          [ -f /etc/profile ] && . /etc/profile >/dev/null 2>&1\n\
-         [ -f /usr/local/bin/snowglobe-console ] && eval \"$(grep '^export ' /usr/local/bin/snowglobe-console)\"\n",
+         if [ -f /etc/snowglobe/env ]; then . /etc/snowglobe/env\n\
+         elif [ -f /usr/local/bin/snowglobe-console ]; then eval \"$(grep '^export ' /usr/local/bin/snowglobe-console)\"; fi\n",
     );
     cmd += &format!("cd {} || exit 1\nmkdir -p in out\n", quote(ws));
     cmd += &format!("export EXCLAVE_WORKSPACE={}\n", quote(ws));

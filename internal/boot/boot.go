@@ -19,6 +19,19 @@ type Console struct {
 func Script(c Console) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
+	b.WriteString(Env(c))
+	if c.Workdir != "" {
+		fmt.Fprintf(&b, "cd %s\n", Quote(c.Workdir))
+	}
+	b.WriteString("clear\n")
+	fmt.Fprintf(&b, "exec %s\n", c.Command)
+	return b.String()
+}
+
+// Env is the image's environment as export lines, also kept in /etc/snowglobe/env: a job sources
+// it for the app's environment, without starting a process to pick it out of the console script.
+func Env(c Console) string {
+	var b strings.Builder
 	for _, kv := range c.Env {
 		key, value, ok := strings.Cut(kv, "=")
 		if !ok || key == "" {
@@ -26,11 +39,6 @@ func Script(c Console) string {
 		}
 		fmt.Fprintf(&b, "export %s=%s\n", key, Quote(value))
 	}
-	if c.Workdir != "" {
-		fmt.Fprintf(&b, "cd %s\n", Quote(c.Workdir))
-	}
-	b.WriteString("clear\n")
-	fmt.Fprintf(&b, "exec %s\n", c.Command)
 	return b.String()
 }
 
