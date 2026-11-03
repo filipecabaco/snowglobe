@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use armless::native::NativeHost;
 use armless::runner::Runner;
 use armless::Board;
 use serde_json::json;
@@ -116,9 +117,12 @@ fn command_output(output: &str, command: &str, prompt: &str) -> (Vec<u8>, Option
     (out, new_prompt)
 }
 
-struct Session {
+/// A running machine as its control socket serves it: exec, attach, jobs, connections to its ports.
+pub(crate) struct Session {
     board: Arc<Board>,
     runner: Arc<Runner>,
+    /// The host side of its network: what a `connect` is handed to
+    host: Arc<NativeHost>,
     /// The app's prompt, as exec last saw it on a line of its own
     prompt: Mutex<Option<String>>,
     activity: Arc<Activity>,
@@ -128,6 +132,18 @@ struct Session {
 }
 
 impl Session {
+    pub(crate) fn new(board: Arc<Board>, runner: Arc<Runner>, host: Arc<NativeHost>, activity: Arc<Activity>, site: &Site) -> Arc<Session> {
+        Arc::new(Session {
+            board,
+            runner,
+            host,
+            prompt: Mutex::new(None),
+            activity,
+            persisted: site.file("system/console.bin").map(|c| c.into_owned()).unwrap_or_default(),
+            exec_lock: Mutex::new(()),
+        })
+    }
+
     /// What the screen shows now: everything after the last clear.
     fn screen(&self) -> Vec<u8> {
         let mut all = self.persisted.clone();
@@ -329,14 +345,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     }
     log::event("restored", json!({ "ms": started.elapsed().as_millis() as u64 }));
 
-    let session = Arc::new(Session {
-        board: board.clone(),
-        runner: runner.clone(),
-        prompt: Mutex::new(None),
-        activity: activity.clone(),
-        persisted: site.file("system/console.bin").map(|c| c.into_owned()).unwrap_or_default(),
-        exec_lock: Mutex::new(()),
-    });
+    let session = Session::new(board.clone(), runner.clone(), host.clone(), activity.clone(), &site);
 
     // A job: the workspace in, the command run, out/ back, then the end (--workspace)
     if let Some(ws) = args.get("workspace") {
@@ -379,15 +388,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // The control socket: attach and exec from other sessions
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket).map_err(|e| format!("{socket}: {e}"))?;
-    {
-        let session = session.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let session = session.clone();
-                std::thread::spawn(move || serve(&session, stream));
-            }
-        });
-    }
+    listen(session.clone(), listener);
 
     // Port forwarding: host -> container -> guest. Each connection becomes a TCP connection from
     // the guest's router to the guest port, through the same network the guest's own requests use
@@ -538,6 +539,16 @@ fn forward(spec: &str) -> Result<(String, u16, u16), String> {
     Ok((addr.to_string(), listen, guest))
 }
 
+/// Serve the control socket on threads of its own, one per client.
+pub(crate) fn listen(session: Arc<Session>, listener: UnixListener) {
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let session = session.clone();
+            std::thread::spawn(move || serve(&session, stream));
+        }
+    });
+}
+
 /// One control-socket client.
 fn serve(session: &Session, stream: UnixStream) {
     let Ok(writer) = stream.try_clone() else { return };
@@ -596,6 +607,27 @@ fn serve(session: &Session, stream: UnixStream) {
             closed.store(true, Ordering::SeqCst);
             // Let go of its socket now, not at the app's next output
             session.activity.unwatch_done();
+        },
+        Some("connect") => {
+            // A connection to a guest port: what a forwarded port is, for whoever holds the host's
+            // listener (a fork's sandbox may bind no TCP port itself). The client waits for this
+            // answer before it sends, so nothing of the connection is in the reader's buffer
+            let Some(port) = request["port"].as_u64().and_then(|p| u16::try_from(p).ok()).filter(|&p| p > 0) else {
+                let _ = writer.write_all(format!("{}\n", json!({ "error": "connect: a port" })).as_bytes());
+                return;
+            };
+            if !reader.buffer().is_empty() {
+                let _ = writer.write_all(format!("{}\n", json!({ "error": "connect: send nothing before the answer" })).as_bytes());
+                return;
+            }
+            if writer.write_all(format!("{}\n", json!({ "connected": port })).as_bytes()).is_err() {
+                return;
+            }
+            // The host pumps a socket's reads and writes into the guest's connection: a Unix
+            // socket does all of that as a TCP one does (only TCP options fail, and are ignored)
+            let stream = std::net::TcpStream::from(std::os::fd::OwnedFd::from(reader.into_inner()));
+            session.host.forward(stream, port);
+            return;
         },
         _ => {
             let _ = writer.write_all(b"snowglobe: unknown request\n");
@@ -882,9 +914,12 @@ mod tests {
     fn session(name: &str, persisted: &[u8], answers: Vec<&'static [u8]>) -> Arc<Session> {
         let (board, runner) = testing::machine(name);
         let activity = Activity::new(false);
+        let (_, site) = testing::site(&format!("{name}-host"), &[("system/filesystem.json", testing::EMPTY_FS)]);
+        let host = Arc::new(machine::host(&board, &site, "none", machine::Net::default(), &activity));
         let s = Arc::new(Session {
             board: board.clone(),
             runner: Arc::new(runner),
+            host,
             prompt: Mutex::new(None),
             activity: activity.clone(),
             persisted: persisted.to_vec(),
@@ -963,6 +998,39 @@ mod tests {
         assert_eq!(&got, b"bin\r\n");
         drop(client);
         t.join().unwrap();
+    }
+
+    #[test]
+    fn connect_hands_the_socket_to_a_guest_port_after_answering() {
+        let s = session("run-connect", b"~ $ ", vec![]);
+        let ask = |request: &[u8]| -> (String, Vec<u8>) {
+            let (mut client, server) = UnixStream::pair().unwrap();
+            client.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let s = s.clone();
+            let t = std::thread::spawn(move || serve(&s, server));
+            client.write_all(request).unwrap();
+            let mut r = BufReader::new(client);
+            let mut answer = String::new();
+            r.read_line(&mut answer).unwrap();
+            // Then the connection itself: this guest has no network, so it ends at once
+            let mut rest = Vec::new();
+            r.read_to_end(&mut rest).unwrap();
+            t.join().unwrap();
+            (answer, rest)
+        };
+        let (answer, rest) = ask(b"{\"mode\":\"connect\",\"port\":8000}\n");
+        assert_eq!(answer, "{\"connected\":8000}\n");
+        assert!(rest.is_empty());
+        for (bad, why) in [
+            (&b"{\"mode\":\"connect\"}\n"[..], "connect: a port"),
+            (b"{\"mode\":\"connect\",\"port\":0}\n", "connect: a port"),
+            (b"{\"mode\":\"connect\",\"port\":70000}\n", "connect: a port"),
+            // Data before the answer would be lost in the reader's buffer: refused
+            (b"{\"mode\":\"connect\",\"port\":80}\nGET / HTTP/1.0\r\n\r\n", "connect: send nothing before the answer"),
+        ] {
+            let (answer, _) = ask(bad);
+            assert_eq!(answer, format!("{}\n", json!({ "error": why })), "{}", String::from_utf8_lossy(bad));
+        }
     }
 
     /// An attach client: the session's screen read, then `then` done with the connection.
