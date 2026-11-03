@@ -337,10 +337,9 @@ impl Load {
 pub fn enable_jit(runner: &armless::runner::Runner, cpus: usize) {
     if jit_wanted() {
         for i in 0..cpus {
+            // On already (a serving parent compiled before forking): compiling moves to a thread
             runner.with_cpu(i, |c| {
-                if !c.jit.enabled {
-                    c.enable_native_jit();
-                }
+                c.enable_native_jit();
             });
         }
     }

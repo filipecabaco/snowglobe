@@ -127,7 +127,7 @@ pub fn scripts(id: &str, ws: &str, env: &[(String, String)], command: &str) -> R
          if [ -f /etc/snowglobe/env ]; then . /etc/snowglobe/env\n\
          elif [ -f /usr/local/bin/snowglobe-console ]; then eval \"$(grep '^export ' /usr/local/bin/snowglobe-console)\"; fi\n",
     );
-    cmd += &format!("cd {} || exit 1\nmkdir -p in out\n", quote(ws));
+    cmd += &format!("cd {} || exit 1\n", quote(ws));
     cmd += &format!("export EXCLAVE_WORKSPACE={}\n", quote(ws));
     for (k, v) in env {
         if k.is_empty() || k.starts_with(|c: char| c.is_ascii_digit()) || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
@@ -254,6 +254,9 @@ pub fn run(board: &armless::Board, activity: &Arc<Activity>, req: &Request) -> R
         board.fs_write_file(&format!("{ws}/{rel}"), data, *mode)?;
         files += 1;
     }
+    // in/ and out/ made from here: a mkdir in the guest is a process started, for every job
+    board.fs_mkdir(&format!("{ws}/in"))?;
+    board.fs_mkdir(&format!("{ws}/out"))?;
     board.fs_write_file(&format!("{ws}/.sg/cmd"), cmd.as_bytes(), 0o755)?;
     board.fs_write_file(&format!("{ws}/.sg/job.sh"), launcher.as_bytes(), 0o755)?;
     log::event(
@@ -877,7 +880,10 @@ mod tests {
             fn start(name: &str, env: &[(String, String)], command: &str, path: Option<&Path>) -> Run {
                 let ws = std::env::temp_dir().join(format!("sgjob-{name}-{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&ws);
-                std::fs::create_dir_all(ws.join(".sg")).unwrap();
+                // As `run` makes them, from the host
+                for d in [".sg", "in", "out"] {
+                    std::fs::create_dir_all(ws.join(d)).unwrap();
+                }
                 let (launcher, cmd) = scripts("t", ws.to_str().unwrap(), env, command).unwrap();
                 std::fs::write(ws.join(".sg/cmd"), cmd).unwrap();
                 std::fs::write(ws.join(".sg/job.sh"), launcher).unwrap();
@@ -1022,7 +1028,7 @@ exit 7"#,
             let bin = std::env::temp_dir().join(format!("sgjob-bin-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&bin);
             std::fs::create_dir_all(&bin).unwrap();
-            for tool in ["sh", "sleep", "sync", "cat", "grep", "mkdir"] {
+            for tool in ["sh", "sleep", "sync", "cat", "grep"] {
                 let found = ["/bin", "/usr/bin"].iter().map(|d| Path::new(d).join(tool)).find(|p| p.exists()).unwrap();
                 std::os::unix::fs::symlink(found, bin.join(tool)).unwrap();
             }

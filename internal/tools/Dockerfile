@@ -21,8 +21,8 @@ WORKDIR /tools
 
 # The browser runtime, pinned and integrity-checked: armless (armless.js, armless.wasm,
 # armless-smp.wasm) from its release, and xterm.js from npm
-ADD --checksum=sha256:35c2f89c0b452ba09afd06a54e6871f55e368f21efa5d39c2e0518e0028b9ea6 \
-    https://github.com/filipecabaco/armless/releases/download/armless-v0.6.0/armless-web.tar.gz /tmp/armless-web.tar.gz
+ADD --checksum=sha256:33d6c48fe179715d3203daa06802314feb7caa94b1933f14f5b0aacb8b9c0c3a \
+    https://github.com/filipecabaco/armless/releases/download/armless-v0.7.0/armless-web.tar.gz /tmp/armless-web.tar.gz
 ADD --checksum=sha256:908e66e04af6c8dc6b00dd3b54de088e2e81e5ed866284fd6c2fb3c2d1c7a3f6 \
     https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz /tmp/xterm.tgz
 ADD --checksum=sha256:26003b4517a132b64e4ff228fd88a5fda3fff5e606c76093f6dcff772e9ecec0 \
