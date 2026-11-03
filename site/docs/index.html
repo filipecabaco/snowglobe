@@ -370,6 +370,16 @@ snowglobe template rm py                         <span class="dim"># and its mac
 snowglobe template add dist/python --name py --idle 30m
 snowglobe up py --ttl 1h</pre>
 
+          <h3 id="events-top">Events and top</h3>
+          <p><code>snowglobe top</code> shows the daemon live: memory against its budget, templates (awake or
+            asleep), services with their replicas and open connections, machines with what each takes and when it
+            stops, and the latest events. <code>snowglobe events</code> streams those events (machines up and
+            stopped, replicas started and stopped, templates asleep and awake, snapshots, admissions refused), the
+            last 200 first; <code>--json</code> for programs. The API is <code>/v1/events</code> (server-sent
+            events, <code>?after=SEQ</code> to resume) and <code>/v1/stats</code>.</p>
+          <pre>snowglobe top
+snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
+
           <h3 id="snapshots">Snapshots of running machines</h3>
           <p><code>snowglobe snapshot save</code> saves a machine whole: its memory, its running processes and the
             files it wrote. Machines start from it again with <code>up --snapshot</code>, or it becomes a template

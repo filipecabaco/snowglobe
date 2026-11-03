@@ -149,6 +149,12 @@ Usage:
                                                      milliseconds; --state keep saves the replica
                                                      first and the next one carries on from it
                                                      (one replica). service ls, service rm <name>
+  snowglobe events [--json] [--after SEQ]            the daemon's events: those it kept, then each
+                                                     as it happens (machines up and stopped,
+                                                     replicas, templates asleep and awake,
+                                                     snapshots, admissions refused)
+  snowglobe top [--once] [--every 1s]                the daemon live: memory against its budget,
+                                                     templates, services, machines, recent events
   snowglobe tools                                    build the tools image (or find it) and print its tag
   snowglobe version
 
@@ -279,6 +285,10 @@ func run(args []string) int {
 		err = runSnapshot(args[1:])
 	case "service":
 		err = runService(args[1:])
+	case "events":
+		err = runEvents(args[1:])
+	case "top":
+		err = runTop(args[1:])
 	case "tools":
 		if len(args) == 3 && args[1] == "kernel" {
 			// The kernel archive builds without Docker add (a release asset), built with Docker

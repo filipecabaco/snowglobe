@@ -95,6 +95,11 @@ https://github.com/filipecabaco/snowglobe/releases, or
   `--state keep` saves the replica before it stops and the next one carries on (max 1);
   `discard` starts each from the template. `service ls`, `service rm <name>`; API
   `/v1/services`, `/v1/services/{name}/jobs`.
+- `snowglobe events [--json] [--after SEQ]` streams the daemon's events (kind, subject, message:
+  machine.up, machine.stopped, machine.expired, service.replica_up, template.asleep,
+  template.awake, snapshot.saved, admission.refused, ...), the last 200 first; `snowglobe top
+  [--once]` shows it live (memory and budget, templates, services, machines, recent events). API:
+  `/v1/events` (server-sent events, `?after=SEQ`), `/v1/stats`.
 - `snowglobe attach <name>` joins a running instance (ctrl-] detaches); `snowglobe ps` lists them;
   `snowglobe stop <name>` stops one (natively: through its stop file, killing its job and logging
   why).
