@@ -446,6 +446,13 @@ func TestSnapshotsCarryAMachineOnward(t *testing.T) {
 	if ss, _ := c.Snapshots(); len(ss) != 1 || ss[0].Name != "s1" {
 		t.Errorf("snapshots: %+v", ss)
 	}
+	// Not while a template is made of it: it starts from it again after sleeping
+	if err := c.RemoveSnapshot("s1"); statusOf(err) != 409 || !strings.Contains(err.Error(), "t2") {
+		t.Errorf("removed under its template: %v", err)
+	}
+	if err := c.RemoveTemplate("t2"); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.RemoveSnapshot("s1"); err != nil {
 		t.Fatal(err)
 	}

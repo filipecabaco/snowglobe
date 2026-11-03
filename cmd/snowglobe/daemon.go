@@ -23,6 +23,8 @@ func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	listen := fs.String("listen", "", "")
 	tokenFile := fs.String("token-file", "", "")
+	memory := fs.String("memory", "", "")
+	wait := fs.Duration("wait", 30*time.Second, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	if _, err := parse(fs, args); err != nil {
 		return err
@@ -37,6 +39,13 @@ func runDaemon(args []string) error {
 			return fmt.Errorf("%s: a token of 16 characters or more", *tokenFile)
 		}
 	}
+	var budget int64
+	if *memory != "" {
+		var err error
+		if budget, err = daemon.ParseSize(*memory); err != nil {
+			return fmt.Errorf("--memory: %w", err)
+		}
+	}
 	vm, err := native.VM(version, tools.NativeSource(version))
 	if err != nil {
 		return err
@@ -46,7 +55,7 @@ func runDaemon(args []string) error {
 		return err
 	}
 	logger := log.New(os.Stderr, "snowglobe daemon: ", log.LstdFlags)
-	s, err := daemon.New(daemon.Options{Dir: dir, VM: vm, Listen: *listen, Token: token, Logf: logger.Printf})
+	s, err := daemon.New(daemon.Options{Dir: dir, VM: vm, Listen: *listen, Token: token, Memory: budget, Wait: *wait, Logf: logger.Printf})
 	if err != nil {
 		return err
 	}
@@ -80,6 +89,11 @@ func runTemplate(args []string) error {
 		fs.StringVar(&req.Name, "name", "", "")
 		fs.IntVar(&req.MaxMachines, "max-machines", 0, "")
 		fs.StringVar(&req.Snapshot, "snapshot", "", "")
+		fs.Func("idle", "", func(v string) error {
+			d, err := time.ParseDuration(v)
+			req.Idle = daemon.Duration(d)
+			return err
+		})
 		positional, err := parse(fs, args[1:])
 		if err != nil {
 			return err
@@ -106,9 +120,16 @@ func runTemplate(args []string) error {
 			fmt.Println("no templates")
 			return nil
 		}
-		fmt.Println("NAME\tSITE\tSERVER PID")
+		fmt.Println("NAME\tSITE\tSERVER")
 		for _, t := range ts {
-			fmt.Printf("%s\t%s\t%d\n", t.Name, t.Site, t.Pid)
+			server := fmt.Sprintf("pid %d", t.Pid)
+			if t.Asleep {
+				server = "asleep"
+			}
+			if t.Idle > 0 {
+				server += fmt.Sprintf(" (sleeps after %s idle)", time.Duration(t.Idle))
+			}
+			fmt.Printf("%s\t%s\t%s\n", t.Name, t.Site, server)
 		}
 	case "rm":
 		if len(args) != 2 {
@@ -127,6 +148,11 @@ func runUp(args []string) error {
 	var req daemon.Up
 	fs.StringVar(&req.Name, "name", "", "")
 	fs.StringVar(&req.Snapshot, "snapshot", "", "")
+	fs.Func("ttl", "", func(v string) error {
+		d, err := time.ParseDuration(v)
+		req.TTL = daemon.Duration(d)
+		return err
+	})
 	port := func(v string) error { req.Ports = append(req.Ports, v); return nil }
 	fs.Func("p", "", port)
 	fs.Func("publish", "", port)

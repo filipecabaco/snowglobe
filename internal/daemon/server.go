@@ -32,6 +32,12 @@ type Options struct {
 	// Listen, when set, also serves the API on this TCP address, to requests bearing Token
 	Listen string
 	Token  string
+	// Memory, when set, is the most the template servers and machines may take together (bytes):
+	// a machine that doesn't fit waits up to Wait (30 s) for room, then is refused
+	Memory int64
+	Wait   time.Duration
+	// What a process costs the host (nil: processMemory); for tests
+	memOf func(pid int) int64
 	// Logf reports what the daemon does (nil: nothing)
 	Logf func(format string, a ...any)
 }
@@ -50,6 +56,10 @@ type Server struct {
 	// How often stopped machines and idle replicas are looked for (taken from reapEvery and
 	// scaleEvery when it starts)
 	reapEvery, scaleEvery time.Duration
+	// Limits and lifecycle: admissions, templates waking and sleeping
+	life *lifecycleState
+	// What a process costs the host (processMemory; tests replace it)
+	memOf func(pid int) int64
 }
 
 // How long a template gets to restore, and a machine or server to go once asked
@@ -68,10 +78,18 @@ func New(o Options) (*Server, error) {
 	if err := os.MkdirAll(o.Dir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery}
+	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery,
+		life: newLifecycle(), memOf: processMemory}
+	if o.memOf != nil {
+		s.memOf = o.memOf
+	}
+	if s.o.Wait <= 0 {
+		s.o.Wait = 30 * time.Second
+	}
 	s.st = loadState(s.statePath)
 	for name, t := range s.st.Templates {
-		if !alive(t.Pid) {
+		// Asleep: it starts on its next use
+		if !t.Asleep && !alive(t.Pid) {
 			o.Logf("template %s: its server is gone", name)
 			delete(s.st.Templates, name)
 			os.RemoveAll(t.SocketDir)
@@ -195,6 +213,9 @@ type AddTemplate struct {
 	Site        string `json:"site"`
 	Name        string `json:"name,omitempty"`
 	MaxMachines int    `json:"max_machines,omitempty"`
+	// How long it may serve no machine before its server stops (0: never); the next use starts it
+	// again
+	Idle Duration `json:"idle,omitempty"`
 	// A snapshot to restore instead of the site's own state (its site, unless Site says it)
 	Snapshot string `json:"snapshot,omitempty"`
 }
@@ -241,6 +262,9 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	if max <= 0 {
 		max = 256
 	}
+	if req.Idle != 0 && req.Idle < Duration(time.Second) {
+		return nil, errStatus(400, "idle %s: 0 (never), or a second or more", time.Duration(req.Idle))
+	}
 	s.mu.Lock()
 	_, taken := s.st.Templates[name]
 	s.mu.Unlock()
@@ -252,29 +276,60 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	sockDir, err := shortDir()
-	if err != nil {
-		return nil, err
-	}
 	t := &Template{
-		Name: name, Site: site, SocketDir: sockDir, Server: filepath.Join(sockDir, "_server.sock"),
-		JobsRoot: filepath.Join(dir, "jobs"), Log: filepath.Join(dir, "log"), MaxMachines: max, VM: s.o.VM, Started: time.Now(),
+		Name: name, Site: site, JobsRoot: filepath.Join(dir, "jobs"), Log: filepath.Join(dir, "log"),
+		MaxMachines: max, VM: s.o.VM, Idle: req.Idle, Started: time.Now(),
 	}
-	args := []string{"run", site, "--serve", t.Server, "--jobs-root", t.JobsRoot, "--max-machines", fmt.Sprint(max)}
 	if snap != nil {
 		t.Snapshot = snap.Name
+	}
+	if err := s.startServer(t); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, taken := s.st.Templates[name]; taken {
+		syscall.Kill(-t.Pid, syscall.SIGKILL)
+		os.RemoveAll(t.SocketDir)
+		return nil, errStatus(409, "a template called %s exists", name)
+	}
+	s.st.Templates[name] = t
+	s.save()
+	s.o.Logf("template %s: %s", name, t.Ready)
+	return t, nil
+}
+
+// startServer starts a template's fork server and waits for it to have restored: its socket in a
+// new short directory, its log appended to.
+func (s *Server) startServer(t *Template) error {
+	sockDir, err := shortDir()
+	if err != nil {
+		return err
+	}
+	t.SocketDir, t.Server = sockDir, filepath.Join(sockDir, "_server.sock")
+	args := []string{"run", t.Site, "--serve", t.Server, "--jobs-root", t.JobsRoot, "--max-machines", fmt.Sprint(t.MaxMachines)}
+	if t.Snapshot != "" {
+		s.mu.Lock()
+		snap, ok := s.st.Snapshots[t.Snapshot]
+		s.mu.Unlock()
+		if !ok {
+			os.RemoveAll(sockDir)
+			return errStatus(409, "template %s: its snapshot %s is gone", t.Name, t.Snapshot)
+		}
 		args = append(args, "--state", snap.Path)
 	}
 	// A pooled site keeps its blobs in the directory next to it
-	if _, err := os.Stat(filepath.Join(site, "system", "filesystem")); err != nil {
-		args = append(args, "--blobs", filepath.Join(filepath.Dir(site), "blobs"))
+	if _, err := os.Stat(filepath.Join(t.Site, "system", "filesystem")); err != nil {
+		args = append(args, "--blobs", filepath.Join(filepath.Dir(t.Site), "blobs"))
 	}
-	log, err := os.Create(t.Log)
+	log, err := os.OpenFile(t.Log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		os.RemoveAll(sockDir)
-		return nil, err
+		return err
 	}
 	defer log.Close()
+	// Where this start's lines begin: the restore line is looked for after it
+	from, _ := log.Seek(0, io.SeekEnd)
 	cmd := exec.Command(s.o.VM, args...)
 	cmd.Stdout, cmd.Stderr = log, log
 	// A process group (and session) of its own: it and its machines outlive the daemon, and go
@@ -282,39 +337,28 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		os.RemoveAll(sockDir)
-		return nil, err
+		return err
 	}
 	t.Pid = cmd.Process.Pid
 	exited := make(chan struct{})
 	go func() { cmd.Wait(); close(exited) }()
 	for deadline := time.Now().Add(restoreTimeout); ; time.Sleep(50 * time.Millisecond) {
-		if line := lineWith(t.Log, "serving jobs"); line != "" {
+		if line := lineWithFrom(t.Log, from, "serving jobs"); line != "" {
 			t.Ready = line
-			break
+			return nil
 		}
 		select {
 		case <-exited:
 			os.RemoveAll(sockDir)
-			return nil, fmt.Errorf("template %s stopped while restoring: %s", name, lastLines(t.Log, 5))
+			return fmt.Errorf("template %s stopped while restoring: %s", t.Name, lastLines(t.Log, 5))
 		default:
 		}
 		if time.Now().After(deadline) {
 			syscall.Kill(-t.Pid, syscall.SIGKILL)
 			os.RemoveAll(sockDir)
-			return nil, fmt.Errorf("template %s did not restore within %s: %s", name, restoreTimeout, lastLines(t.Log, 5))
+			return fmt.Errorf("template %s did not restore within %s: %s", t.Name, restoreTimeout, lastLines(t.Log, 5))
 		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, taken := s.st.Templates[name]; taken {
-		syscall.Kill(-t.Pid, syscall.SIGKILL)
-		os.RemoveAll(sockDir)
-		return nil, errStatus(409, "a template called %s exists", name)
-	}
-	s.st.Templates[name] = t
-	s.save()
-	s.o.Logf("template %s: %s", name, t.Ready)
-	return t, nil
 }
 
 // RemoveTemplate removes a template's machines, then the template.
@@ -343,9 +387,11 @@ func (s *Server) RemoveTemplate(name string) error {
 		s.RemoveMachine(m)
 	}
 	// The server's process group: the server and anything of it still running
-	syscall.Kill(-t.Pid, syscall.SIGTERM)
-	if !gone(t.Pid, stopGrace) {
-		syscall.Kill(-t.Pid, syscall.SIGKILL)
+	if !t.Asleep {
+		syscall.Kill(-t.Pid, syscall.SIGTERM)
+		if !gone(t.Pid, stopGrace) {
+			syscall.Kill(-t.Pid, syscall.SIGKILL)
+		}
 	}
 	os.RemoveAll(t.SocketDir)
 	os.RemoveAll(filepath.Join(s.o.Dir, "templates", name))
@@ -371,12 +417,11 @@ func (s *Server) Templates() []Template {
 
 // TemplateJob runs one job on a fresh fork of a template, which ends with it.
 func (s *Server) TemplateJob(name string, req control.JobRequest) (*control.JobResult, error) {
-	s.mu.Lock()
-	t, ok := s.st.Templates[name]
-	s.mu.Unlock()
-	if !ok {
-		return nil, errStatus(404, "no template called %s", name)
+	t, err := s.awake(name)
+	if err != nil {
+		return nil, err
 	}
+	defer s.used(name)
 	return control.Job(t.Server, name, req)
 }
 
@@ -426,6 +471,8 @@ type Up struct {
 	Labels   map[string]string `json:"labels,omitempty"`
 	// A snapshot to start from instead of the template's state (of the same site)
 	Snapshot string `json:"snapshot,omitempty"`
+	// How long it lives, whatever it does (0: until it is removed)
+	TTL Duration `json:"ttl,omitempty"`
 }
 
 // Up forks a machine from a template: it lasts until it is removed, with its ports forwarded.
@@ -445,8 +492,11 @@ func (s *Server) Up(req Up) (*Machine, error) {
 		}
 		ports = append(ports, p)
 	}
+	if req.TTL < 0 {
+		return nil, errStatus(400, "ttl: 0 or more")
+	}
 	s.mu.Lock()
-	t, ok := s.st.Templates[req.Template]
+	_, ok := s.st.Templates[req.Template]
 	_, taken := s.st.Machines[name]
 	s.mu.Unlock()
 	if !ok {
@@ -455,6 +505,12 @@ func (s *Server) Up(req Up) (*Machine, error) {
 	if taken {
 		return nil, errStatus(409, "a machine called %s exists", name)
 	}
+	// Asleep: started again first
+	t, err := s.awake(req.Template)
+	if err != nil {
+		return nil, err
+	}
+	defer s.used(t.Name)
 	if len(ports) > 0 {
 		if err := needsNetwork(t); err != nil {
 			return nil, err
@@ -468,11 +524,21 @@ func (s *Server) Up(req Up) (*Machine, error) {
 		}
 		defer os.Remove(state)
 	}
+	// Room in the memory budget, held until it is up
+	release, err := s.admit(t.Name)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	spawned, err := control.Spawn(t.Server, name, state)
 	if err != nil {
 		return nil, errStatus(409, "%v", err)
 	}
 	m := &Machine{Name: name, Template: t.Name, Pid: spawned.Pid, Socket: spawned.Socket, Ports: ports, Labels: req.Labels, Snapshot: req.Snapshot, Created: time.Now()}
+	if req.TTL > 0 {
+		expires := m.Created.Add(time.Duration(req.TTL))
+		m.Expires = &expires
+	}
 	if !filepath.IsAbs(m.Socket) {
 		m.Socket = filepath.Join(t.SocketDir, filepath.Base(m.Socket))
 	}
@@ -506,6 +572,7 @@ func (s *Server) RemoveMachine(name string) error {
 	delete(s.st.Machines, name)
 	s.save()
 	s.mu.Unlock()
+	s.used(m.Template)
 	s.o.Logf("machine %s: removed", name)
 	return nil
 }
@@ -629,7 +696,7 @@ func (s *Server) reap(ctx context.Context) {
 		}
 		var deadMachines, deadTemplates []string
 		for _, tm := range s.Templates() {
-			if !alive(tm.Pid) {
+			if !tm.Asleep && !alive(tm.Pid) {
 				deadTemplates = append(deadTemplates, tm.Name)
 			}
 		}
@@ -656,7 +723,7 @@ func (s *Server) reap(ctx context.Context) {
 		}
 		for _, n := range deadTemplates {
 			t, ok := s.st.Templates[n]
-			if !ok || alive(t.Pid) {
+			if !ok || t.Asleep || alive(t.Pid) {
 				continue
 			}
 			for mn, m := range s.st.Machines {
@@ -750,6 +817,11 @@ func (s *Server) RemoveSnapshot(name string) error {
 	sn, ok := s.st.Snapshots[name]
 	if !ok {
 		return errStatus(404, "no snapshot called %s", name)
+	}
+	for _, t := range s.st.Templates {
+		if t.Snapshot == name {
+			return errStatus(409, "template %s is made of snapshot %s: remove it first", t.Name, name)
+		}
 	}
 	os.Remove(sn.Path)
 	delete(s.st.Snapshots, name)
@@ -936,12 +1008,15 @@ func gone(pid int, d time.Duration) bool {
 	return !alive(pid)
 }
 
-func lineWith(path, s string) string {
+func lineWith(path, s string) string { return lineWithFrom(path, 0, s) }
+
+func lineWithFrom(path string, from int64, s string) string {
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
+	f.Seek(from, io.SeekStart)
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		if strings.Contains(sc.Text(), s) {

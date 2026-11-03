@@ -40,8 +40,12 @@ type Template struct {
 	VM          string `json:"vm"`
 	MaxMachines int    `json:"max_machines"`
 	// The snapshot it was made of, if any (else the site's own state)
-	Snapshot string    `json:"snapshot,omitempty"`
-	Started  time.Time `json:"started"`
+	Snapshot string `json:"snapshot,omitempty"`
+	// How long it may serve no machine before its server stops (0: never), and whether it has:
+	// asleep, it starts again on its next use
+	Idle    Duration  `json:"idle,omitempty"`
+	Asleep  bool      `json:"asleep,omitempty"`
+	Started time.Time `json:"started"`
 }
 
 // Machine is a machine forked from a template, lasting until it is removed.
@@ -55,6 +59,8 @@ type Machine struct {
 	// The snapshot it started from, if any
 	Snapshot string    `json:"snapshot,omitempty"`
 	Created  time.Time `json:"created"`
+	// When it stops, whatever it is doing (up --ttl)
+	Expires *time.Time `json:"expires,omitempty"`
 }
 
 // Snapshot is a machine saved whole (RAM, CPUs, devices, the files its guest wrote): machines start

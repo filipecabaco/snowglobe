@@ -406,6 +406,7 @@ func (s *Server) scaler(ctx context.Context) {
 			return
 		case <-t.C:
 			s.scale()
+			s.lifecycle()
 		}
 	}
 }

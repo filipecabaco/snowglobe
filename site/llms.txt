@@ -73,8 +73,12 @@ https://github.com/filipecabaco/snowglobe/releases, or
   `/v1/templates/{name}/jobs` for a job on a fresh fork), and over TCP for requests bearing the
   token with `--listen`. `SNOWGLOBE_DAEMON=http://HOST:PORT` and `SNOWGLOBE_DAEMON_TOKEN` point
   the CLI at a remote one. A daemon started again takes back what still runs.
-- `snowglobe template add <site> [--name T] [--max-machines N]`, `template ls`, `template rm T`
-  (removes its machines too).
+- `snowglobe template add <site> [--name T] [--max-machines N] [--idle 30m]`, `template ls`,
+  `template rm T` (removes its machines too). `--idle` stops the template's server after that long
+  with no machine; the next `up` or job restores it (about a second).
+- `snowglobe daemon --memory 8G [--wait 30s]` caps what templates and machines take together: a
+  machine that doesn't fit waits for room, then is refused (429) with the reason. `up --ttl 1h`
+  stops a machine after that long.
 - `snowglobe up <template> [--name N] [-p [IP:][HOST:]GUEST]... [--label K=V]...` forks a machine
   in tens of milliseconds, sharing the template's memory: it lasts until stopped, keeps what it
   writes, and the daemon forwards its ports (-p 8000 picks a host port). `sh`, `cp`, `exec`,

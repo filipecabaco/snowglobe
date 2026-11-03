@@ -358,6 +358,18 @@ snowglobe template rm py                         <span class="dim"># and its mac
             with <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it. A daemon started again takes back the
             templates and machines that are still running.</p>
 
+          <h3 id="limits-lifecycle">Limits and lifecycle</h3>
+          <p><code>snowglobe daemon --memory 8G</code> caps what its template servers and machines take together.
+            A machine that doesn't fit waits up to <code>--wait</code> (30 s) for room, then is refused with the
+            reason. Linux measures each process's proportional share; macOS its resident memory, which counts
+            pages shared with the template in full, so the cap is reached sooner. No cap unless asked.
+            <code>up --ttl 1h</code> stops a machine after that long, whatever it is doing.
+            <code>template add --idle 30m</code> stops a template's server after that long without a machine; the
+            next <code>up</code> (or job) restores it first, in about a second.</p>
+          <pre>snowglobe daemon --memory 8G --wait 30s &amp;
+snowglobe template add dist/python --name py --idle 30m
+snowglobe up py --ttl 1h</pre>
+
           <h3 id="snapshots">Snapshots of running machines</h3>
           <p><code>snowglobe snapshot save</code> saves a machine whole: its memory, its running processes and the
             files it wrote. Machines start from it again with <code>up --snapshot</code>, or it becomes a template
