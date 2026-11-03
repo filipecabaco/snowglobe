@@ -15,6 +15,8 @@ browser. Measured against Firecracker in `bench/machines/README.md`.
 | #40 | `snowglobe daemon`, `template`, `up`, and the HTTP/JSON API |
 | #41 | Snapshots of running machines: `snapshot save`, `up --snapshot`, `template add --snapshot` |
 | #42 | Services: replicas on demand behind ports the daemon holds, scale to zero |
+| #44 | Ports only on templates whose guest has a network |
+| next | Memory budget with a queue, machine TTL, templates that sleep when idle |
 
 ### The primitive: machines forked from one restore
 
@@ -79,19 +81,27 @@ to an answer when the template is a snapshot with its server listening). `--stat
 replica) saves the replica before it stops and starts the next one from that save; `discard`
 starts each from the template.
 
+### Limits and lifecycle
+
+- **Memory budget** (`daemon --memory`, none by default): template servers' and machines' memory
+  (Linux: each process's PSS; macOS: RSS, which counts shared pages in full) plus a new machine's
+  estimate (the median of its template's machines, else 64 MB) must fit. Admissions go one at a
+  time, each held until its machine is up; one that doesn't fit waits up to `--wait` (30 s), then
+  is refused with a 429 saying what is used, the budget, and the estimate.
+- **Time to live** (`up --ttl`): the machine is stopped when it is up, whatever it is doing.
+- **Templates that sleep** (`template add --idle`, off by default): with no machine and no job for
+  that long, the server stops (asleep in `template ls`); the next `up`, job or replica restores it
+  first (~1.4 s for the curl example, prewarm included). A snapshot a template is made of can't be
+  removed under it.
+
 ## Not built yet
 
-1. **Admission and limits.** A memory budget for the daemon (`--memory 8G`, default a share of
-   what the host has), checked against machines' private memory plus a new one's estimate (a probe
-   fork's), with a FIFO queue and a 429 after a wait.
-2. **Lifecycle.** A `ttl` for plain machines; templates that scale to zero (a template with no
-   machines for a while stops its server, ~100–200 MB a site, and restores on the next `up`).
-3. **Visibility.** `GET /v1/events` (server-sent events: created, up, stopped, crashed, reaped,
+1. **Visibility.** `GET /v1/events` (server-sent events: created, up, stopped, crashed, reaped,
    scaled) and `snowglobe top`.
-4. **Declarative fleets.** `snowglobe apply|diff|down [-f snowglobe.toml]`: templates (a site, a
+2. **Declarative fleets.** `snowglobe apply|diff|down [-f snowglobe.toml]`: templates (a site, a
    URL, or a Dockerfile directory built first), snapshots and services with the fields above, and
    the daemon converging to them.
-5. Later: several hosts (a daemon per host, one scheduling), per-machine networks, metrics.
+3. Later: several hosts (a daemon per host, one scheduling), per-machine networks, metrics.
 
 ## Decisions
 

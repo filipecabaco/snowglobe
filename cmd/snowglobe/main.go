@@ -114,23 +114,30 @@ Usage:
                                                      kills its job and logs why it stopped first)
   snowglobe ps                                       list running instances (and the daemon's machines)
   snowglobe daemon [--listen ADDR --token-file F]    the orchestrator: keeps templates and the
+                   [--memory 8G] [--wait 30s]
                                                      machines forked from them, with an HTTP/JSON
                                                      API on a Unix socket in the user cache (and
                                                      on ADDR for requests bearing the token). sh,
                                                      cp, exec, attach, stop and ps reach its
                                                      machines through it (SNOWGLOBE_DAEMON points
                                                      at another: http://HOST:PORT, with
-                                                     SNOWGLOBE_DAEMON_TOKEN)
+                                                     SNOWGLOBE_DAEMON_TOKEN). --memory caps what
+                                                     its servers and machines take together: a
+                                                     machine that doesn't fit waits --wait for
+                                                     room, then is refused
   snowglobe template add <site> [--name T]           restore a site once, for machines to be forked
                      [--max-machines N]              from; template ls lists them, template rm T
-                     [--snapshot S]                  removes one and its machines. --snapshot
-                                                     restores a saved machine instead of the site
+                     [--snapshot S] [--idle 30m]     removes one and its machines. --snapshot
+                                                     restores a saved machine instead of the site;
+                                                     --idle stops its server after that long with
+                                                     no machine, and the next use restores it
   snowglobe up <template> [--name N] [-p PORT]...    a machine forked from a template in tens of
                 [--label K=V]...                     milliseconds, sharing its memory: it lasts
                                                      until stopped, keeps what it writes, and its
                                                      ports are forwarded (-p 8000 picks a host
                                                      port, -p 8080:8000 or IP:8080:8000 names one);
-                                                     --snapshot S starts it from a saved machine
+                                                     --snapshot S starts it from a saved machine;
+                                                     --ttl 1h stops it after that long
   snowglobe snapshot save <machine> [--name S]       save a machine whole (memory, processes, the
                                                      files it wrote), to start machines from again;
                                                      snapshot ls, snapshot rm S

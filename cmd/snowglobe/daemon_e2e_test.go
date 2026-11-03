@@ -16,13 +16,13 @@ import (
 // The orchestrator, driven as a user does: a daemon, a template of the site, machines forked from
 // it with a port forwarded, and sh, cp, ps and stop reaching them through the daemon.
 // startDaemon runs `snowglobe daemon` in a directory of its own until the test ends.
-func (e *e2e) startDaemon(t *testing.T) {
+func (e *e2e) startDaemon(t *testing.T, flags ...string) {
 	dir, err := os.MkdirTemp("", "sgd-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SNOWGLOBE_DAEMON_DIR", dir)
-	d := exec.Command(e.bin, "daemon")
+	d := exec.Command(e.bin, append([]string{"daemon"}, flags...)...)
 	log, _ := os.Create(filepath.Join(dir, "daemon.log"))
 	d.Stdout, d.Stderr = log, log
 	if err := d.Start(); err != nil {
@@ -218,4 +218,41 @@ func (e *e2e) scaleToZero(t *testing.T) {
 	if out := e.must(t, 0, "sh", "kv", "echo x >> /root/n; wc -l < /root/n"); strings.TrimSpace(out) != "2" {
 		t.Errorf("kv after zero: %q", out)
 	}
+}
+
+// Limits and lifecycle on a real site: a memory budget that has no room refuses a machine and says
+// why; a template idle for a while sleeps and wakes on the next machine; a machine's time to live.
+func (e *e2e) lifecycle(t *testing.T) {
+	t.Run("budget", func(t *testing.T) {
+		e.startDaemon(t, "--memory", "1M", "--wait", "1s")
+		e.must(t, 0, "template", "add", e.site, "--name", "tight")
+		defer e.run(t, nil, "template", "rm", "tight")
+		out, code := e.run(t, nil, "up", "tight")
+		if code == 0 || !strings.Contains(out, "no room in the memory budget") {
+			t.Errorf("up over the budget: %d %q", code, out)
+		}
+	})
+	t.Run("idle template and ttl", func(t *testing.T) {
+		e.startDaemon(t)
+		e.must(t, 0, "template", "add", e.site, "--name", "sleepy", "--idle", "2s")
+		defer e.run(t, nil, "template", "rm", "sleepy")
+		for deadline := time.Now().Add(30 * time.Second); !strings.Contains(e.must(t, 0, "template", "ls"), "sleepy\t"+e.site+"\tasleep"); time.Sleep(200 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("not asleep")
+			}
+		}
+		begun := time.Now()
+		e.must(t, 0, "up", "sleepy", "--name", "woke")
+		t.Logf("up on an asleep template: %s", time.Since(begun))
+		if out := e.must(t, 0, "sh", "woke", "echo up"); out != "up\n" {
+			t.Errorf("a machine of a woken template: %q", out)
+		}
+		e.must(t, 0, "stop", "woke")
+		e.must(t, 0, "up", "sleepy", "--name", "brief", "--ttl", "2s")
+		for deadline := time.Now().Add(30 * time.Second); strings.Contains(e.must(t, 0, "ps"), "brief\t"); time.Sleep(200 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("brief outlived its ttl")
+			}
+		}
+	})
 }
