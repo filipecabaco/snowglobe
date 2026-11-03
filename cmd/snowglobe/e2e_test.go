@@ -141,6 +141,7 @@ func TestE2E(t *testing.T) {
 	t.Run("mcp", e.mcp)
 	t.Run("bundle", e.bundle)
 	t.Run("fork machines", e.forkMachines)
+	t.Run("daemon", e.daemonFleet)
 	if os.Getenv("SNOWGLOBE_E2E_BUILD") == "1" {
 		t.Run("build stall", e.buildStall)
 	}

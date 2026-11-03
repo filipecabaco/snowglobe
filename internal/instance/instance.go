@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/filipecabaco/snowglobe/internal/daemon"
 	"github.com/filipecabaco/snowglobe/internal/docker"
 	"github.com/filipecabaco/snowglobe/internal/native"
 	"github.com/filipecabaco/snowglobe/internal/tools"
@@ -258,6 +259,12 @@ func Exec(name string, command []string) error {
 		}
 		return execNative(st, command)
 	}
+	if st, err := daemonMachine(name); st != nil || err != nil {
+		if err != nil {
+			return err
+		}
+		return execNative(st, command)
+	}
 	if !inContainer(name) {
 		return fmt.Errorf("no instance called %s (snowglobe ps lists them)", name)
 	}
@@ -269,6 +276,12 @@ func Attach(name string) error {
 	if st, _, ok := loadNative(name); ok {
 		if st.Fork {
 			return forkOnlySh(name)
+		}
+		return attachNative(st)
+	}
+	if st, err := daemonMachine(name); st != nil || err != nil {
+		if err != nil {
+			return err
 		}
 		return attachNative(st)
 	}
@@ -286,6 +299,11 @@ func Attach(name string) error {
 func Stop(name string) error {
 	if st, dir, ok := loadNative(name); ok {
 		return stopNative(st, dir)
+	}
+	if d, ok := daemon.Find(); ok {
+		if err := d.RemoveMachine(name); !daemon.NotFound(err) {
+			return err
+		}
 	}
 	if !inContainer(name) {
 		return fmt.Errorf("no instance called %s (snowglobe ps lists them)", name)
@@ -322,10 +340,56 @@ func List() error {
 			}
 		}
 	}
+	if d, ok := daemon.Find(); ok {
+		ms, err := d.Machines(nil)
+		if err != nil {
+			return err
+		}
+		for _, m := range ms {
+			if n == 0 {
+				fmt.Println("NAME\tSITE\tSTARTED\tRUNTIME")
+			}
+			ports := ""
+			for _, p := range m.Ports {
+				ports += " " + p.String()
+			}
+			fmt.Printf("%s\ttemplate %s\t%s ago\tdaemon (pid %d)%s\n", m.Name, m.Template, time.Since(m.Created).Round(time.Second), m.Pid, ports)
+			n++
+		}
+	}
 	if n == 0 {
 		fmt.Println("no instances running")
 	}
 	return nil
+}
+
+// daemonMachine is the daemon's machine called name as an instance exec and attach can reach: on
+// this host, through its control socket. Nil if the daemon has none (or there is no daemon).
+func daemonMachine(name string) (*nativeState, error) {
+	d, ok := daemon.Find()
+	if !ok {
+		return nil, nil
+	}
+	m, err := d.Machine(name)
+	if daemon.NotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(m.Socket); err != nil {
+		return nil, fmt.Errorf("%s is the daemon's at %s, not on this host: exec and attach need it here (sh and cp don't)", name, d.Addr)
+	}
+	ts, err := d.Templates()
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range ts {
+		if t.Name == m.Template {
+			return &nativeState{Pid: m.Pid, VM: t.VM, Socket: m.Socket}, nil
+		}
+	}
+	return nil, fmt.Errorf("%s: its template %s is gone", name, m.Template)
 }
 
 func isTerminal(f *os.File) bool {

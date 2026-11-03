@@ -337,6 +337,27 @@ snowglobe cp box:/root/project/out ./out</pre>
 snowglobe sh tpl 'python3 untrusted.py'         <span class="dim"># many at once, each on its own copy</span>
 snowglobe stop tpl</pre>
 
+          <h3 id="daemon">Templates and machines: the daemon</h3>
+          <p><code>snowglobe daemon</code> keeps templates (a site restored once) and the machines forked from them.
+            <code>snowglobe up</code> forks a machine from a template in tens of milliseconds. The machine shares
+            the template's memory, lasts until it is stopped, keeps what it writes, and has its ports forwarded
+            by the daemon. <code>sh</code>, <code>cp</code>, <code>exec</code>, <code>attach</code>,
+            <code>ps</code> and <code>stop</code> reach the daemon's machines as they reach instances.</p>
+          <pre>snowglobe daemon &amp;
+snowglobe template add dist/python --name py     <span class="dim"># restored once, its JIT code compiled once</span>
+snowglobe up py --name web -p 8080:8000 --label app=web
+snowglobe up py --name worker                    <span class="dim"># another machine, its own state</span>
+snowglobe sh web 'python3 -m http.server 8000 &amp;'
+snowglobe ps
+snowglobe stop worker
+snowglobe template rm py                         <span class="dim"># and its machines</span></pre>
+          <p>The API is HTTP/JSON on a Unix socket in the user cache (<code>curl --unix-socket</code> works):
+            <code>/v1/templates</code>, <code>/v1/machines</code>, <code>/v1/machines/{name}/jobs</code> and
+            <code>/v1/templates/{name}/jobs</code> (a job on a fresh fork). <code>--listen ADDR --token-file F</code>
+            also serves it over TCP, to requests bearing the token, and <code>SNOWGLOBE_DAEMON=http://HOST:PORT</code>
+            with <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it. A daemon started again takes back the
+            templates and machines that are still running.</p>
+
           <h3 id="mcp">MCP</h3>
           <p><code>snowglobe mcp &lt;site&gt;</code> serves a site to an agent as an MCP server over stdio: an isolated
             Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code> tools. It

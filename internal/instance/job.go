@@ -2,18 +2,18 @@ package instance
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/filipecabaco/snowglobe/internal/control"
+	"github.com/filipecabaco/snowglobe/internal/daemon"
 )
 
 // Jobs on a running native instance, over its control socket: files in, a command run on the
@@ -21,25 +21,11 @@ import (
 // `snowglobe sh`, `snowglobe cp` and `snowglobe mcp` are made of.
 
 // JobRequest is a job: files written into its workspace, the command, its environment.
-type JobRequest struct {
-	Files   map[string][]byte `json:"files,omitempty"`
-	Cmd     string            `json:"cmd"`
-	Env     map[string]string `json:"env,omitempty"`
-	Timeout float64           `json:"timeout"`
-}
+type JobRequest = control.JobRequest
 
 // JobResult is what a job left: its exit status (nil: out of time, or the instance stopped), output
 // and out/. Out of time or stopped, Killed says the guest killed everything the command started.
-type JobResult struct {
-	Status    *int              `json:"status"`
-	Output    []byte            `json:"output"`
-	Out       map[string][]byte `json:"out"`
-	TimedOut  bool              `json:"timed_out"`
-	Cancelled bool              `json:"cancelled"`
-	Killed    bool              `json:"killed"`
-	Ms        int64             `json:"ms"`
-	Error     string            `json:"error"`
-}
+type JobResult = control.JobResult
 
 // Job runs a job on the native instance called name.
 func Job(name string, req JobRequest) (*JobResult, error) {
@@ -57,6 +43,13 @@ func forkOnlySh(name string) error {
 func job(name string, req JobRequest, fresh bool) (*JobResult, error) {
 	st, _, ok := loadNative(name)
 	if !ok {
+		// A machine of the daemon's (snowglobe up), through its API
+		if d, found := daemon.Find(); found {
+			res, err := d.Job(name, req)
+			if !daemon.NotFound(err) {
+				return res, err
+			}
+		}
 		if inContainer(name) {
 			return nil, fmt.Errorf("%s runs in a container: jobs, sh, cp and mcp need a native instance (--runtime native)", name)
 		}
@@ -65,41 +58,7 @@ func job(name string, req JobRequest, fresh bool) (*JobResult, error) {
 	if st.Fork && !fresh {
 		return nil, forkOnlySh(name)
 	}
-	if req.Timeout < 0 {
-		return nil, fmt.Errorf("timeout %v: 0 or more seconds", req.Timeout)
-	}
-	if req.Timeout == 0 {
-		req.Timeout = 300
-	}
-	conn, err := net.Dial("unix", st.Socket)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
-	}
-	defer conn.Close()
-	body := map[string]any{"mode": "job", "cmd": req.Cmd, "env": req.Env, "timeout": req.Timeout, "files": req.Files}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := conn.Write(append(data, '\n')); err != nil {
-		return nil, err
-	}
-	conn.SetReadDeadline(time.Now().Add(time.Duration(req.Timeout+30) * time.Second))
-	line, err := bufio.NewReaderSize(conn, 1<<20).ReadBytes('\n')
-	if errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("%s stopped while the job ran (its logs say why)", name)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("%s: no answer: %w", name, err)
-	}
-	var res JobResult
-	if err := json.Unmarshal(line, &res); err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
-	}
-	if res.Error != "" {
-		return nil, errors.New(res.Error)
-	}
-	return &res, nil
+	return control.Job(st.Socket, name, req)
 }
 
 // Shell runs a command on a native instance's shell and prints its output, ending with its exit
