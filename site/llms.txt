@@ -67,6 +67,18 @@ https://github.com/filipecabaco/snowglobe/releases, or
   writes DIR into a fresh machine, runs the command, and returns its output, exit status and
   `out/`. `--serve SOCKET --jobs-root DIR` restores once and forks per job; `--server SOCKET` is
   its client.
+- `snowglobe daemon [--listen ADDR --token-file F]` is the orchestrator: it keeps templates (a
+  site restored once) and machines forked from them, with an HTTP/JSON API on a Unix socket in the
+  user cache (`/v1/templates`, `/v1/machines`, `/v1/machines/{name}/jobs`,
+  `/v1/templates/{name}/jobs` for a job on a fresh fork), and over TCP for requests bearing the
+  token with `--listen`. `SNOWGLOBE_DAEMON=http://HOST:PORT` and `SNOWGLOBE_DAEMON_TOKEN` point
+  the CLI at a remote one. A daemon started again takes back what still runs.
+- `snowglobe template add <site> [--name T] [--max-machines N]`, `template ls`, `template rm T`
+  (removes its machines too).
+- `snowglobe up <template> [--name N] [-p [IP:][HOST:]GUEST]... [--label K=V]...` forks a machine
+  in tens of milliseconds, sharing the template's memory: it lasts until stopped, keeps what it
+  writes, and the daemon forwards its ports (-p 8000 picks a host port). `sh`, `cp`, `exec`,
+  `attach`, `ps` and `stop` reach the daemon's machines like instances.
 - `snowglobe attach <name>` joins a running instance (ctrl-] detaches); `snowglobe ps` lists them;
   `snowglobe stop <name>` stops one (natively: through its stop file, killing its job and logging
   why).

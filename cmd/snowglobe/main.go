@@ -112,7 +112,23 @@ Usage:
   snowglobe attach <name>                            join a running instance (ctrl-] detaches)
   snowglobe stop <name>                              throw a running instance away (native: it
                                                      kills its job and logs why it stopped first)
-  snowglobe ps                                       list running instances
+  snowglobe ps                                       list running instances (and the daemon's machines)
+  snowglobe daemon [--listen ADDR --token-file F]    the orchestrator: keeps templates and the
+                                                     machines forked from them, with an HTTP/JSON
+                                                     API on a Unix socket in the user cache (and
+                                                     on ADDR for requests bearing the token). sh,
+                                                     cp, exec, attach, stop and ps reach its
+                                                     machines through it (SNOWGLOBE_DAEMON points
+                                                     at another: http://HOST:PORT, with
+                                                     SNOWGLOBE_DAEMON_TOKEN)
+  snowglobe template add <site> [--name T]           restore a site once, for machines to be forked
+                     [--max-machines N]              from; template ls lists them, template rm T
+                                                     removes one and its machines
+  snowglobe up <template> [--name N] [-p PORT]...    a machine forked from a template in tens of
+                [--label K=V]...                     milliseconds, sharing its memory: it lasts
+                                                     until stopped, keeps what it writes, and its
+                                                     ports are forwarded (-p 8000 picks a host
+                                                     port, -p 8080:8000 or IP:8080:8000 names one)
   snowglobe tools                                    build the tools image (or find it) and print its tag
   snowglobe version
 
@@ -233,6 +249,12 @@ func run(args []string) int {
 		}
 	case "ps":
 		err = instance.List()
+	case "daemon":
+		err = runDaemon(args[1:])
+	case "template":
+		err = runTemplate(args[1:])
+	case "up":
+		err = runUp(args[1:])
 	case "tools":
 		if len(args) == 3 && args[1] == "kernel" {
 			// The kernel archive builds without Docker add (a release asset), built with Docker

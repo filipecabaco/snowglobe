@@ -100,6 +100,10 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
             },
         };
         let _ = conn.set_read_timeout(None);
+        // A connection that asks nothing (a check that something listens) gets no fork
+        if line.trim().is_empty() {
+            continue;
+        }
         let spawn = match spawn_request(&line, socket) {
             Ok(s) => s,
             Err(e) => {
