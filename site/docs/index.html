@@ -371,6 +371,22 @@ snowglobe up py-ready -p 8000                     <span class="dim"># installed,
 snowglobe snapshot ls
 snowglobe snapshot rm ready</pre>
 
+          <h3 id="services">Services and scale to zero</h3>
+          <p>A service puts a template's machines behind host ports that the daemon holds. Each connection (or
+            <code>snowglobe sh &lt;service&gt;</code>) goes to one of its replicas, started on demand.
+            With <code>--min 0</code> it scales to zero: replicas with no connection or job for <code>--idle</code>
+            stop, and the next request forks one again. Made of a snapshot whose server was already listening, a
+            service at zero answers its first request in about 20 ms. <code>--state keep</code> saves the replica
+            before it stops, and the next one carries on from that save (one replica); <code>--state
+            discard</code>, the default, starts every replica from the template.</p>
+          <pre>snowglobe service add web --template py-ready -p 8080:8000 --min 0 --max 3 --idle 5m --concurrency 10
+snowglobe service add db --template pg --state keep --idle 10m
+snowglobe service ls                              <span class="dim"># replicas running now, of each</span>
+snowglobe service rm web</pre>
+          <p>A replica takes <code>--concurrency</code> connections before another is started, up to
+            <code>--max</code>; under <code>--min</code>, replicas that stop are replaced. The API is
+            <code>/v1/services</code> and <code>/v1/services/{name}/jobs</code>.</p>
+
           <h3 id="mcp">MCP</h3>
           <p><code>snowglobe mcp &lt;site&gt;</code> serves a site to an agent as an MCP server over stdio: an isolated
             Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code> tools. It

@@ -572,7 +572,7 @@ func TestFindUsesSNOWGLOBE_DAEMON(t *testing.T) {
 		t.Error("found a daemon where none runs")
 	}
 	// And the health check over HTTP
-	srv := &http.Server{Handler: (&Server{o: Options{Logf: t.Logf}, forwards: map[string][]net.Listener{}, st: state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}}}).Handler()}
+	srv := &http.Server{Handler: (&Server{o: Options{Logf: t.Logf}, forwards: map[string][]net.Listener{}, svc: newServices(), st: emptyState()}).Handler()}
 	l, _ := net.Listen("tcp", "127.0.0.1:0")
 	go srv.Serve(l)
 	defer srv.Close()

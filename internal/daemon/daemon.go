@@ -160,10 +160,11 @@ type state struct {
 	Templates map[string]*Template `json:"templates"`
 	Machines  map[string]*Machine  `json:"machines"`
 	Snapshots map[string]*Snapshot `json:"snapshots"`
+	Services  map[string]*Service  `json:"services"`
 }
 
 func emptyState() state {
-	return state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}, Snapshots: map[string]*Snapshot{}}
+	return state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}, Snapshots: map[string]*Snapshot{}, Services: map[string]*Service{}}
 }
 
 func loadState(path string) state {
@@ -183,6 +184,9 @@ func loadState(path string) state {
 	}
 	if st.Snapshots == nil {
 		st.Snapshots = map[string]*Snapshot{}
+	}
+	if st.Services == nil {
+		st.Services = map[string]*Service{}
 	}
 	return st
 }

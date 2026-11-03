@@ -153,3 +153,30 @@ func TestAlive(t *testing.T) {
 		t.Error("no socket is alive")
 	}
 }
+
+func TestSaveAsksForAPathAndSaysWhatWasWritten(t *testing.T) {
+	var got map[string]any
+	sock := listen(t, func(req map[string]any, c net.Conn, _ *bufio.Reader) {
+		got = req
+		answer(c, `{"saved":"/j/s.zst","bytes":17,"ms":4}`)
+	})
+	s, err := Save(sock, "/j/s.zst")
+	if err != nil || s.Bytes != 17 || s.Ms != 4 || got["mode"] != "save" || got["path"] != "/j/s.zst" {
+		t.Fatalf("%+v %v %v", s, err, got)
+	}
+	refused := listen(t, func(_ map[string]any, c net.Conn, _ *bufio.Reader) { answer(c, `{"error":"read-only"}`) })
+	if _, err := Save(refused, "/x"); err == nil || err.Error() != "read-only" {
+		t.Errorf("refused: %v", err)
+	}
+	if _, err := Save("/nonexistent/s.sock", "/x"); err == nil || !strings.HasPrefix(err.Error(), "save: ") {
+		t.Errorf("no socket: %v", err)
+	}
+	// A spawn with a state names it
+	sock = listen(t, func(req map[string]any, c net.Conn, _ *bufio.Reader) {
+		got = req
+		answer(c, `{"pid":7,"socket":"/r/m.sock"}`)
+	})
+	if _, err := Spawn(sock, "m", "/j/s.zst"); err != nil || got["state"] != "/j/s.zst" {
+		t.Errorf("spawn with a state: %v %v", got, err)
+	}
+}

@@ -189,6 +189,30 @@ func (c *Client) RemoveSnapshot(name string) error {
 	return c.call("DELETE", "/v1/snapshots/"+url.PathEscape(name), nil, nil)
 }
 
+func (c *Client) Services() ([]ServiceStatus, error) {
+	var ss []ServiceStatus
+	return ss, c.call("GET", "/v1/services", nil, &ss)
+}
+
+func (c *Client) AddService(req Service) (*ServiceStatus, error) {
+	var s ServiceStatus
+	return &s, c.call("POST", "/v1/services", req, &s)
+}
+
+func (c *Client) Service(name string) (*ServiceStatus, error) {
+	var s ServiceStatus
+	return &s, c.call("GET", "/v1/services/"+url.PathEscape(name), nil, &s)
+}
+
+func (c *Client) RemoveService(name string) error {
+	return c.call("DELETE", "/v1/services/"+url.PathEscape(name), nil, nil)
+}
+
+func (c *Client) ServiceJob(name string, req control.JobRequest) (*control.JobResult, error) {
+	var res control.JobResult
+	return &res, c.call("POST", "/v1/services/"+url.PathEscape(name)+"/jobs", req, &res)
+}
+
 func (c *Client) TemplateJob(name string, req control.JobRequest) (*control.JobResult, error) {
 	var res control.JobResult
 	return &res, c.call("POST", "/v1/templates/"+url.PathEscape(name)+"/jobs", req, &res)

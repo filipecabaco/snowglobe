@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/filipecabaco/snowglobe/internal/daemon"
 	"github.com/filipecabaco/snowglobe/internal/native"
@@ -210,6 +211,87 @@ func runSnapshot(args []string) error {
 		return c.RemoveSnapshot(args[1])
 	default:
 		return fmt.Errorf("snapshot %s: save, ls or rm", args[0])
+	}
+	return nil
+}
+
+// runService: service add <name> --template T [-p PORT]... [--min N] [--max N] [--idle D]
+// [--concurrency N] [--state discard|keep] | ls | rm <name>
+func runService(args []string) error {
+	if len(args) == 0 {
+		return errors.New("service takes add, ls or rm")
+	}
+	c, err := daemonClient()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "add":
+		fs := flag.NewFlagSet("service add", flag.ContinueOnError)
+		var req daemon.Service
+		var ports []string
+		var idle time.Duration
+		fs.StringVar(&req.Template, "template", "", "")
+		port := func(v string) error { ports = append(ports, v); return nil }
+		fs.Func("p", "", port)
+		fs.Func("publish", "", port)
+		fs.IntVar(&req.Min, "min", 0, "")
+		fs.IntVar(&req.Max, "max", 0, "")
+		fs.DurationVar(&idle, "idle", 5*time.Minute, "")
+		fs.IntVar(&req.Concurrency, "concurrency", 0, "")
+		fs.StringVar(&req.State, "state", "discard", "")
+		fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+		positional, err := parse(fs, args[1:])
+		if err != nil {
+			return err
+		}
+		if len(positional) != 1 || req.Template == "" {
+			return errors.New("service add takes a name and --template T")
+		}
+		req.Name = positional[0]
+		req.Idle = daemon.Duration(idle)
+		for _, spec := range ports {
+			p, err := daemon.ParsePort(spec)
+			if err != nil {
+				return err
+			}
+			req.Ports = append(req.Ports, p)
+		}
+		s, err := c.AddService(req)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s: %d to %d replicas of %s, idle %s, state %s\n", s.Name, s.Min, s.Max, s.Template, time.Duration(s.Idle), s.State)
+		for _, p := range s.Ports {
+			fmt.Printf("  port %s\n", p)
+		}
+	case "ls":
+		ss, err := c.Services()
+		if err != nil {
+			return err
+		}
+		if len(ss) == 0 {
+			fmt.Println("no services")
+			return nil
+		}
+		fmt.Println("NAME\tTEMPLATE\tRUNNING\tREPLICAS\tIDLE\tSTATE\tPORTS")
+		for _, s := range ss {
+			ports := ""
+			for i, p := range s.Ports {
+				if i > 0 {
+					ports += ", "
+				}
+				ports += p.String()
+			}
+			fmt.Printf("%s\t%s\t%d\t%d-%d\t%s\t%s\t%s\n", s.Name, s.Template, len(s.Replicas), s.Min, s.Max, time.Duration(s.Idle), s.State, ports)
+		}
+	case "rm":
+		if len(args) != 2 {
+			return errors.New("service rm takes a service's name")
+		}
+		return c.RemoveService(args[1])
+	default:
+		return fmt.Errorf("service %s: add, ls or rm", args[0])
 	}
 	return nil
 }

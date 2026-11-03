@@ -49,6 +49,10 @@ func job(name string, req JobRequest, fresh bool) (*JobResult, error) {
 			if !daemon.NotFound(err) {
 				return res, err
 			}
+			// A service: one of its replicas (started, if it is at zero)
+			if res, err = d.ServiceJob(name, req); !daemon.NotFound(err) {
+				return res, err
+			}
 		}
 		if inContainer(name) {
 			return nil, fmt.Errorf("%s runs in a container: jobs, sh, cp and mcp need a native instance (--runtime native)", name)

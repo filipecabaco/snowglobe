@@ -45,6 +45,11 @@ type Server struct {
 	st state
 	// The listeners forwarding each machine's ports, closed when it goes
 	forwards map[string][]net.Listener
+	// Services' ports and replicas' activity
+	svc *services
+	// How often stopped machines and idle replicas are looked for (taken from reapEvery and
+	// scaleEvery when it starts)
+	reapEvery, scaleEvery time.Duration
 }
 
 // How long a template gets to restore, and a machine or server to go once asked
@@ -63,7 +68,7 @@ func New(o Options) (*Server, error) {
 	if err := os.MkdirAll(o.Dir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}}
+	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery}
 	s.st = loadState(s.statePath)
 	for name, t := range s.st.Templates {
 		if !alive(t.Pid) {
@@ -80,6 +85,17 @@ func New(o Options) (*Server, error) {
 		}
 		if err := s.forward(m); err != nil {
 			o.Logf("machine %s: its ports: %v", name, err)
+		}
+	}
+	// Services: their ports held again (their replicas were taken back with the machines)
+	for name, svc := range s.st.Services {
+		if _, ok := s.st.Templates[svc.Template]; !ok {
+			o.Logf("service %s: its template %s is gone", name, svc.Template)
+			delete(s.st.Services, name)
+			continue
+		}
+		if err := s.listenService(svc); err != nil {
+			o.Logf("service %s: %v", name, err)
 		}
 	}
 	if err := saveState(s.statePath, s.st); err != nil {
@@ -119,6 +135,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	s.o.Logf("serving the API on %s", sock)
 	go s.reap(ctx)
+	go s.scaler(ctx)
 	errs := make(chan error, len(servers))
 	for i, srv := range servers {
 		go func() { errs <- srv.Serve(listeners[i]) }()
@@ -138,6 +155,13 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 	}
 	s.mu.Unlock()
+	s.svc.mu.Lock()
+	for _, ls := range s.svc.listeners {
+		for _, l := range ls {
+			l.Close()
+		}
+	}
+	s.svc.mu.Unlock()
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
@@ -307,6 +331,14 @@ func (s *Server) RemoveTemplate(name string) error {
 	if !ok {
 		return errStatus(404, "no template called %s", name)
 	}
+	s.mu.Lock()
+	for _, svc := range s.st.Services {
+		if svc.Template == name {
+			s.mu.Unlock()
+			return errStatus(409, "service %s runs on template %s: remove it first", svc.Name, name)
+		}
+	}
+	s.mu.Unlock()
 	for _, m := range machines {
 		s.RemoveMachine(m)
 	}
@@ -521,6 +553,11 @@ func (s *Server) Job(name string, req control.JobRequest) (*control.JobResult, e
 	if err != nil {
 		return nil, err
 	}
+	// A service's replica is busy while the job runs
+	if m.Labels[serviceLabel] != "" {
+		s.touch(name, 1)
+		defer s.touch(name, -1)
+	}
 	return control.Job(m.Socket, name, req)
 }
 
@@ -577,7 +614,7 @@ func splice(c net.Conn, sock string, guest int) {
 
 // reap forgets machines that stopped and templates whose server did (with their machines).
 func (s *Server) reap(ctx context.Context) {
-	t := time.NewTicker(reapEvery)
+	t := time.NewTicker(s.reapEvery)
 	defer t.Stop()
 	for {
 		select {
@@ -812,6 +849,34 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		v, err := s.Snapshot(r.PathValue("name"), req.Name)
+		reply(w, v, err)
+	})
+	mux.HandleFunc("GET /v1/services", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, s.Services(), nil)
+	})
+	mux.HandleFunc("POST /v1/services", func(w http.ResponseWriter, r *http.Request) {
+		var req Service
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.AddService(req)
+		reply(w, v, err)
+	})
+	mux.HandleFunc("GET /v1/services/{name}", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.ServiceStatus(r.PathValue("name"))
+		reply(w, v, err)
+	})
+	mux.HandleFunc("DELETE /v1/services/{name}", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveService(r.PathValue("name")))
+	})
+	mux.HandleFunc("POST /v1/services/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
+		var req control.JobRequest
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.ServiceJob(r.PathValue("name"), req)
 		reply(w, v, err)
 	})
 	mux.HandleFunc("GET /v1/snapshots", func(w http.ResponseWriter, r *http.Request) {
