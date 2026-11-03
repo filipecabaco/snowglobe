@@ -83,6 +83,14 @@ https://github.com/filipecabaco/snowglobe/releases, or
   the files it wrote); `up <template> --snapshot S` starts a machine from it, and
   `template add --snapshot S [--name T]` makes it a template, every machine of which starts there.
   `snapshot ls`, `snapshot rm S`.
+- `snowglobe service add <name> --template T [-p [IP:]HOST:GUEST]... [--min 0] [--max 1]
+  [--idle 5m] [--concurrency 10] [--state discard|keep]` puts a template's machines behind host
+  ports the daemon holds: each connection (or `sh <name>`) goes to a replica started on demand.
+  `--min 0` scales to zero: replicas idle for `--idle` stop, and the next request forks one (about
+  20 ms to the first answer when the template is a snapshot with its server listening).
+  `--state keep` saves the replica before it stops and the next one carries on (max 1);
+  `discard` starts each from the template. `service ls`, `service rm <name>`; API
+  `/v1/services`, `/v1/services/{name}/jobs`.
 - `snowglobe attach <name>` joins a running instance (ctrl-] detaches); `snowglobe ps` lists them;
   `snowglobe stop <name>` stops one (natively: through its stop file, killing its job and logging
   why).

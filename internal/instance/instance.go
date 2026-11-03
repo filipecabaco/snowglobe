@@ -341,6 +341,22 @@ func List() error {
 		}
 	}
 	if d, ok := daemon.Find(); ok {
+		svcs, err := d.Services()
+		if err != nil {
+			return err
+		}
+		for _, s := range svcs {
+			if n == 0 {
+				fmt.Println("NAME\tSITE\tSTARTED\tRUNTIME")
+			}
+			ports := ""
+			for _, p := range s.Ports {
+				ports += " " + p.String()
+			}
+			fmt.Printf("%s\ttemplate %s\t%s ago\tservice (%d running, %d to %d, idle %s, state %s)%s\n", s.Name, s.Template,
+				time.Since(s.Created).Round(time.Second), len(s.Replicas), s.Min, s.Max, time.Duration(s.Idle), s.State, ports)
+			n++
+		}
 		ms, err := d.Machines(nil)
 		if err != nil {
 			return err

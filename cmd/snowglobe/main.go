@@ -134,6 +134,14 @@ Usage:
   snowglobe snapshot save <machine> [--name S]       save a machine whole (memory, processes, the
                                                      files it wrote), to start machines from again;
                                                      snapshot ls, snapshot rm S
+  snowglobe service add <name> --template T          a template's machines behind host ports the
+                [-p [IP:]HOST:GUEST]... [--min 0]    daemon holds: each connection (or sh <name>)
+                [--max 1] [--idle 5m]                goes to a replica, started on demand. --min 0
+                [--concurrency 10]                   scales to zero: replicas idle for --idle stop,
+                [--state discard|keep]               and the next connection starts one in tens of
+                                                     milliseconds; --state keep saves the replica
+                                                     first and the next one carries on from it
+                                                     (one replica). service ls, service rm <name>
   snowglobe tools                                    build the tools image (or find it) and print its tag
   snowglobe version
 
@@ -262,6 +270,8 @@ func run(args []string) int {
 		err = runUp(args[1:])
 	case "snapshot":
 		err = runSnapshot(args[1:])
+	case "service":
+		err = runService(args[1:])
 	case "tools":
 		if len(args) == 3 && args[1] == "kernel" {
 			// The kernel archive builds without Docker add (a release asset), built with Docker
