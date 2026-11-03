@@ -177,8 +177,14 @@ func (c *Client) Job(name string, req control.JobRequest) (*control.JobResult, e
 }
 
 func (c *Client) Snapshot(machine, name string) (*Snapshot, error) {
+	return c.SnapshotWith(machine, name, nil)
+}
+
+// SnapshotWith is Snapshot, with labels.
+func (c *Client) SnapshotWith(machine, name string, labels map[string]string) (*Snapshot, error) {
 	var s Snapshot
-	return &s, c.call("POST", "/v1/machines/"+url.PathEscape(machine)+"/snapshots", map[string]string{"name": name}, &s)
+	req := map[string]any{"name": name, "labels": labels}
+	return &s, c.call("POST", "/v1/machines/"+url.PathEscape(machine)+"/snapshots", req, &s)
 }
 
 func (c *Client) Snapshots() ([]Snapshot, error) {

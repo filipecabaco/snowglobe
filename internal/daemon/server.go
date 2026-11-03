@@ -217,7 +217,8 @@ type AddTemplate struct {
 	MaxMachines int    `json:"max_machines,omitempty"`
 	// How long it may serve no machine before its server stops (0: never); the next use starts it
 	// again
-	Idle Duration `json:"idle,omitempty"`
+	Idle   Duration          `json:"idle,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
 	// A snapshot to restore instead of the site's own state (its site, unless Site says it)
 	Snapshot string `json:"snapshot,omitempty"`
 }
@@ -280,7 +281,7 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	}
 	t := &Template{
 		Name: name, Site: site, JobsRoot: filepath.Join(dir, "jobs"), Log: filepath.Join(dir, "log"),
-		MaxMachines: max, VM: s.o.VM, Idle: req.Idle, Started: time.Now(),
+		MaxMachines: max, VM: s.o.VM, Idle: req.Idle, Labels: req.Labels, Started: time.Now(),
 	}
 	if snap != nil {
 		t.Snapshot = snap.Name
@@ -753,6 +754,11 @@ func (s *Server) reap(ctx context.Context) {
 // Snapshot saves a running machine whole as name: the machine writes it under its template's
 // jobs root (all its sandbox lets it write), and the daemon keeps it with its own.
 func (s *Server) Snapshot(machine, name string) (*Snapshot, error) {
+	return s.SnapshotWith(machine, name, nil)
+}
+
+// SnapshotWith is Snapshot, with labels.
+func (s *Server) SnapshotWith(machine, name string, labels map[string]string) (*Snapshot, error) {
 	m, err := s.Machine(machine)
 	if err != nil {
 		return nil, err
@@ -787,7 +793,7 @@ func (s *Server) Snapshot(machine, name string) (*Snapshot, error) {
 		return nil, err
 	}
 	snap := &Snapshot{Name: name, Site: t.Site, Template: t.Name, Machine: machine, Path: filepath.Join(kept, name+".zst"),
-		Bytes: saved.Bytes, Ms: saved.Ms, Created: time.Now()}
+		Bytes: saved.Bytes, Ms: saved.Ms, Labels: labels, Created: time.Now()}
 	if err := os.Rename(written, snap.Path); err != nil {
 		os.Remove(written)
 		return nil, err
@@ -926,13 +932,14 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /v1/machines/{name}/snapshots", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Name string `json:"name"`
+			Name   string            `json:"name"`
+			Labels map[string]string `json:"labels"`
 		}
 		if err := decode(r, &req); err != nil {
 			reply(w, nil, err)
 			return
 		}
-		v, err := s.Snapshot(r.PathValue("name"), req.Name)
+		v, err := s.SnapshotWith(r.PathValue("name"), req.Name, req.Labels)
 		reply(w, v, err)
 	})
 	mux.HandleFunc("GET /v1/services", func(w http.ResponseWriter, r *http.Request) {

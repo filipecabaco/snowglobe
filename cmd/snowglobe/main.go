@@ -155,6 +155,15 @@ Usage:
                                                      snapshots, admissions refused)
   snowglobe top [--once] [--every 1s]                the daemon live: memory against its budget,
                                                      templates, services, machines, recent events
+  snowglobe apply [-f snowglobe.toml]                get the daemon to what a fleet file says:
+                                                     templates (a site, a URL, or a Dockerfile
+                                                     directory built first), snapshots (a machine
+                                                     set up by commands, saved once ready),
+                                                     services and machines; what changed is
+                                                     replaced with what is made from it, what is
+                                                     gone from the file is removed
+  snowglobe diff [-f snowglobe.toml]                 what apply would do
+  snowglobe down [-f snowglobe.toml | --name F]      remove everything of the fleet
   snowglobe tools                                    build the tools image (or find it) and print its tag
   snowglobe version
 
@@ -287,6 +296,12 @@ func run(args []string) int {
 		err = runService(args[1:])
 	case "events":
 		err = runEvents(args[1:])
+	case "apply":
+		err = runApply(args[1:])
+	case "diff":
+		err = runDiff(args[1:])
+	case "down":
+		err = runDown(args[1:])
 	case "top":
 		err = runTop(args[1:])
 	case "tools":
