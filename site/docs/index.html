@@ -328,6 +328,15 @@ snowglobe cp box:/root/project/out ./out</pre>
             started are killed (exit 124). What the guest sends back through <code>cp</code> can't write outside the
             destination.</p>
 
+          <h3 id="fork">A fresh machine per command: --fork</h3>
+          <p><code>--fork</code> makes a detached native instance a template. It restores once, and every
+            <code>snowglobe sh</code> on it runs in a copy of that machine, forked in milliseconds and sharing its
+            memory. Nothing one command does is seen by the next, so <code>sh</code> is all a fork instance takes:
+            <code>cp</code>, <code>exec</code>, <code>attach</code> and <code>mcp</code> need a machine that lasts.</p>
+          <pre>snowglobe run dist/python --name tpl --detach --runtime native --fork
+snowglobe sh tpl 'python3 untrusted.py'         <span class="dim"># many at once, each on its own copy</span>
+snowglobe stop tpl</pre>
+
           <h3 id="mcp">MCP</h3>
           <p><code>snowglobe mcp &lt;site&gt;</code> serves a site to an agent as an MCP server over stdio: an isolated
             Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code> tools. It
@@ -503,6 +512,7 @@ snowglobe cp box:/root/project/out ./out</pre>
               <tbody>
                 <tr><td>--name N · --detach</td><td class="wrap-cell">name the instance · run it in the background</td></tr>
                 <tr><td>--runtime docker|native</td><td class="wrap-cell">in a container (default) or natively</td></tr>
+                <tr><td>--fork</td><td class="wrap-cell">every <code>sh</code> on a fresh copy of the machine (see <a href="#fork">--fork</a>)</td></tr>
                 <tr><td>-p [IP:]HOST:GUEST</td><td class="wrap-cell">forward a host port to a guest port (needs <code>--network fetch</code>)</td></tr>
                 <tr><td>--record-reads FILE</td><td class="wrap-cell">write every file the guest reads, for <code>warm</code></td></tr>
                 <tr><td>--tunnel · --allow-private</td><td class="wrap-cell">replace the site's tunnels · let the guest reach this machine</td></tr>

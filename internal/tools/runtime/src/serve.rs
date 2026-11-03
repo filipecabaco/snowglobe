@@ -16,6 +16,9 @@
 //! "env_file", "timeout"}` (paths under the jobs root), answered by one JSON line, `{"status": N
 //! or null (out of time), "out": files}`, then what the command printed. `--server SOCKET` with
 //! the job's flags is the client: it behaves like a one-shot job (output, exit status, out/).
+//! A line `{"mode": "job", ...}`, as an instance's control socket takes it (`job::from_json`), is
+//! answered as that socket answers it: `snowglobe run --detach --fork` is such an instance, whose
+//! `snowglobe sh` commands each run on a fresh copy of the machine.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -60,7 +63,8 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket).map_err(|e| format!("{socket}: {e}"))?;
     eprintln!(
-        "{title}: restored in {:.1}s, serving jobs on {socket} (workspaces under {}, {max} at once; {sandboxed})",
+        // "restored " first, as a detached run says it: what `snowglobe run --detach` waits for
+        "restored {title} in {:.1}s, serving jobs on {socket} (workspaces under {}, {max} at once; {sandboxed})",
         started.elapsed().as_secs_f64(),
         root.display()
     );
@@ -119,7 +123,17 @@ fn child(
     conn: UnixStream,
 ) -> Result<(), String> {
     let line = read_request(BufReader::new(conn.try_clone().map_err(|e| e.to_string())?))?;
-    let job = request(&line, root)?;
+    let mut w = conn;
+    let ask = match ask(&line, root) {
+        Ok(a) => a,
+        Err(e) => {
+            // A control-socket job is answered, even when it can't run
+            if is_control_job(&line) {
+                let _ = w.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
+            }
+            return Err(e);
+        },
+    };
 
     // The rest of the sandbox, before any thread
     sandbox::apply_stage(policy, sandbox::Stage::Child)?;
@@ -138,11 +152,21 @@ fn child(
     let _host = machine::host(board, site, &spec.network, net, &activity);
     runner.start();
 
-    let (done, out) = job::run_workspace(board, &activity, &job)?;
-    let mut w = conn;
-    let header = json!({ "status": done.status, "out": out, "timed_out": done.timed_out, "killed": done.killed, "ms": done.ms });
-    w.write_all(format!("{header}\n").as_bytes()).map_err(|e| e.to_string())?;
-    w.write_all(&done.output).map_err(|e| e.to_string())?;
+    match ask {
+        Ask::Workspace(job) => {
+            let (done, out) = job::run_workspace(board, &activity, &job)?;
+            let header = json!({ "status": done.status, "out": out, "timed_out": done.timed_out, "killed": done.killed, "ms": done.ms });
+            w.write_all(format!("{header}\n").as_bytes()).map_err(|e| e.to_string())?;
+            w.write_all(&done.output).map_err(|e| e.to_string())?;
+        },
+        Ask::Job(req) => {
+            let answer = match job::run(board, &activity, &req) {
+                Ok(done) => job::to_json(&done),
+                Err(e) => json!({ "error": e }),
+            };
+            w.write_all(format!("{answer}\n").as_bytes()).map_err(|e| e.to_string())?;
+        },
+    }
     let _ = w.flush();
     if let Some(l) = learned {
         l.learn(runner);
@@ -161,6 +185,28 @@ fn read_request(r: impl BufRead) -> Result<String, String> {
         return Err(format!("request: longer than {MAX_REQUEST} bytes"));
     }
     Ok(line)
+}
+
+/// What a connection asks for.
+enum Ask {
+    /// A workspace under the jobs root (`--server`)
+    Workspace(job::Workspace),
+    /// A job as an instance's control socket takes it (`{"mode": "job", ...}`, files inline):
+    /// what `snowglobe sh` sends, so a serving process is an instance whose every command runs
+    /// on a fresh copy of the machine
+    Job(job::Request),
+}
+
+fn is_control_job(line: &str) -> bool {
+    serde_json::from_str::<Value>(line).is_ok_and(|v| v["mode"] == "job")
+}
+
+fn ask(line: &str, root: &Path) -> Result<Ask, String> {
+    if is_control_job(line) {
+        let v: Value = serde_json::from_str(line).map_err(|e| format!("request: {e}"))?;
+        return job::from_json(&v).map(Ask::Job);
+    }
+    request(line, root).map(Ask::Workspace)
 }
 
 /// A job's request: its workspace (and env file) must be under the jobs root, wherever their
@@ -310,6 +356,22 @@ mod tests {
         let e = err(json!({ "workspace": root.join("ws"), "cmd": "true", "env_file": outside.join("env.json") }));
         assert!(e.starts_with("env_file ") && e.contains("is not under the jobs root"), "{e}");
         assert!(err(json!({ "workspace": root.join("missing"), "cmd": "true" })).starts_with("workspace "));
+    }
+
+    #[test]
+    fn a_control_socket_job_needs_no_workspace() {
+        let (root, _) = root("serve-ask");
+        let line = json!({ "mode": "job", "cmd": "make", "env": { "A": "1" }, "files": { "in/x": "aGk=" }, "timeout": 5 }).to_string();
+        let Ok(Ask::Job(req)) = ask(&line, &root) else { panic!("not a job") };
+        assert_eq!(req.command, "make");
+        assert_eq!(req.env, [("A".to_string(), "1".to_string())]);
+        assert_eq!(req.files, [("in/x".to_string(), b"hi".to_vec(), 0o644)]);
+        assert_eq!(req.timeout, Duration::from_secs(5));
+        // One without a command is answered with what is wrong; anything else is a workspace job
+        assert!(is_control_job(r#"{"mode":"job"}"#));
+        assert_eq!(ask(r#"{"mode":"job"}"#, &root).err().unwrap(), "no cmd");
+        assert!(matches!(ask(&json!({ "workspace": root.join("ws"), "cmd": "x" }).to_string(), &root), Ok(Ask::Workspace(_))));
+        assert!(!is_control_job("{"));
     }
 
     #[test]

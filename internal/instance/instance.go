@@ -49,6 +49,9 @@ type Options struct {
 	// LogDir keeps durable logs: console.log, serial.log, events.jsonl. A named native instance
 	// keeps them in LogsDir(name) unless this says otherwise
 	LogDir string
+	// Fork makes a detached native instance a template: every job (snowglobe sh) runs in a fresh
+	// copy of the restored machine, forked from it, and leaves nothing behind for the next
+	Fork bool
 }
 
 // Port is one forwarded port.
@@ -128,6 +131,9 @@ func Run(o Options, version string) error {
 		if !native.DockerAvailable() {
 			runtime = "native" // nothing else could run it
 		}
+	}
+	if o.Fork && runtime != "native" {
+		return errors.New("--fork needs --runtime native")
 	}
 	switch runtime {
 	case "native":
@@ -247,6 +253,9 @@ func Run(o Options, version string) error {
 // Exec types one command into a running instance and prints what it printed.
 func Exec(name string, command []string) error {
 	if st, _, ok := loadNative(name); ok {
+		if st.Fork {
+			return forkOnlySh(name)
+		}
 		return execNative(st, command)
 	}
 	if !inContainer(name) {
@@ -258,6 +267,9 @@ func Exec(name string, command []string) error {
 // Attach joins a running instance's session; ctrl-] detaches.
 func Attach(name string) error {
 	if st, _, ok := loadNative(name); ok {
+		if st.Fork {
+			return forkOnlySh(name)
+		}
 		return attachNative(st)
 	}
 	if !inContainer(name) {
