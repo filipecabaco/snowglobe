@@ -60,6 +60,8 @@ type Server struct {
 	life *lifecycleState
 	// What a process costs the host (processMemory; tests replace it)
 	memOf func(pid int) int64
+	// What happened, for /v1/events
+	ev *events
 }
 
 // How long a template gets to restore, and a machine or server to go once asked
@@ -79,7 +81,7 @@ func New(o Options) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery,
-		life: newLifecycle(), memOf: processMemory}
+		life: newLifecycle(), memOf: processMemory, ev: newEvents()}
 	if o.memOf != nil {
 		s.memOf = o.memOf
 	}
@@ -295,7 +297,7 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	}
 	s.st.Templates[name] = t
 	s.save()
-	s.o.Logf("template %s: %s", name, t.Ready)
+	s.note("template.added", "template "+name, "%s", t.Ready)
 	return t, nil
 }
 
@@ -399,7 +401,7 @@ func (s *Server) RemoveTemplate(name string) error {
 	delete(s.st.Templates, name)
 	s.save()
 	s.mu.Unlock()
-	s.o.Logf("template %s: removed", name)
+	s.note("template.removed", "template "+name, "removed")
 	return nil
 }
 
@@ -550,7 +552,7 @@ func (s *Server) Up(req Up) (*Machine, error) {
 	s.st.Machines[name] = m
 	s.save()
 	s.mu.Unlock()
-	s.o.Logf("machine %s: up from %s (pid %d)", name, t.Name, m.Pid)
+	s.note("machine.up", "machine "+name, "up from %s (pid %d)", t.Name, m.Pid)
 	return m, nil
 }
 
@@ -573,7 +575,7 @@ func (s *Server) RemoveMachine(name string) error {
 	s.save()
 	s.mu.Unlock()
 	s.used(m.Template)
-	s.o.Logf("machine %s: removed", name)
+	s.note("machine.removed", "machine "+name, "removed")
 	return nil
 }
 
@@ -718,7 +720,7 @@ func (s *Server) reap(ctx context.Context) {
 				delete(s.st.Machines, n)
 				syscall.Kill(m.Pid, syscall.SIGKILL)
 				os.Remove(m.Socket)
-				s.o.Logf("machine %s: stopped", n)
+				s.note("machine.stopped", "machine "+n, "stopped (its process is gone)")
 			}
 		}
 		for _, n := range deadTemplates {
@@ -739,7 +741,7 @@ func (s *Server) reap(ctx context.Context) {
 			syscall.Kill(-t.Pid, syscall.SIGKILL)
 			os.RemoveAll(t.SocketDir)
 			delete(s.st.Templates, n)
-			s.o.Logf("template %s: its server stopped", n)
+			s.note("template.stopped", "template "+n, "its server stopped, and its machines with it")
 		}
 		s.save()
 		s.mu.Unlock()
@@ -794,7 +796,7 @@ func (s *Server) Snapshot(machine, name string) (*Snapshot, error) {
 	s.st.Snapshots[name] = snap
 	s.save()
 	s.mu.Unlock()
-	s.o.Logf("snapshot %s: of %s, %d bytes in %d ms", name, machine, saved.Bytes, saved.Ms)
+	s.note("snapshot.saved", "snapshot "+name, "of %s, %d bytes in %d ms", machine, saved.Bytes, saved.Ms)
 	return snap, nil
 }
 
@@ -826,6 +828,7 @@ func (s *Server) RemoveSnapshot(name string) error {
 	os.Remove(sn.Path)
 	delete(s.st.Snapshots, name)
 	s.save()
+	s.ev.publish(Event{Time: time.Now(), Kind: "snapshot.removed", Subject: "snapshot " + name, Message: "removed"})
 	return nil
 }
 
@@ -859,6 +862,10 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"ok": true}, nil)
+	})
+	mux.HandleFunc("GET /v1/events", s.serveEvents)
+	mux.HandleFunc("GET /v1/stats", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, s.Stats(), nil)
 	})
 	mux.HandleFunc("GET /v1/templates", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Templates(), nil)

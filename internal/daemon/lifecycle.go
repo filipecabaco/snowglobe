@@ -100,12 +100,13 @@ func (s *Server) admit(t string) (release func(), err error) {
 		used, need := s.MemoryUsed(), s.estimate(t)
 		if used+need <= s.o.Memory {
 			if waited := time.Since(begun); waited > 100*time.Millisecond {
-				s.o.Logf("admitted a machine of %s after waiting %s for memory", t, waited.Round(time.Millisecond))
+				s.note("admission.waited", "template "+t, "a machine admitted after waiting %s for memory", waited.Round(time.Millisecond))
 			}
 			return s.life.admit.Unlock, nil
 		}
 		if time.Since(begun) >= s.o.Wait {
 			s.life.admit.Unlock()
+			s.note("admission.refused", "template "+t, "no room for a machine: %s used of %s, about %s needed", mb(used), mb(s.o.Memory), mb(need))
 			return nil, errStatus(429, "no room in the memory budget: %s used of %s, and a machine of %s takes about %s (waited %s)",
 				mb(used), mb(s.o.Memory), t, mb(need), s.o.Wait)
 		}
@@ -149,7 +150,7 @@ func (s *Server) awake(name string) (*Template, error) {
 	}
 	s.mu.Unlock()
 	s.used(name)
-	s.o.Logf("template %s: awake in %d ms", name, time.Since(begun).Milliseconds())
+	s.note("template.awake", "template "+name, "awake in %d ms", time.Since(begun).Milliseconds())
 	return &c, nil
 }
 
@@ -160,7 +161,7 @@ func (s *Server) lifecycle() {
 	for _, m := range s.Machines(nil) {
 		if m.Expires != nil && now.After(*m.Expires) {
 			s.RemoveMachine(m.Name)
-			s.o.Logf("machine %s: its time to live is up", m.Name)
+			s.note("machine.expired", "machine "+m.Name, "its time to live is up")
 		}
 	}
 	busy := map[string]bool{}
@@ -218,5 +219,5 @@ func (s *Server) sleep(name string) {
 		syscall.Kill(-pid, syscall.SIGKILL)
 	}
 	os.RemoveAll(dir)
-	s.o.Logf("template %s: asleep, idle %s", name, time.Duration(t.Idle))
+	s.note("template.asleep", "template "+name, "asleep, idle %s", time.Duration(t.Idle))
 }

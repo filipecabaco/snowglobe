@@ -16,7 +16,8 @@ browser. Measured against Firecracker in `bench/machines/README.md`.
 | #41 | Snapshots of running machines: `snapshot save`, `up --snapshot`, `template add --snapshot` |
 | #42 | Services: replicas on demand behind ports the daemon holds, scale to zero |
 | #44 | Ports only on templates whose guest has a network |
-| next | Memory budget with a queue, machine TTL, templates that sleep when idle |
+| #45 | Memory budget with a queue, machine TTL, templates that sleep when idle |
+| next | Events (`/v1/events`, `snowglobe events`), `/v1/stats` and `snowglobe top` |
 
 ### The primitive: machines forked from one restore
 
@@ -94,14 +95,21 @@ starts each from the template.
   first (~1.4 s for the curl example, prewarm included). A snapshot a template is made of can't be
   removed under it.
 
+### Events and top
+
+Everything the daemon does is an event (`Kind`, `Subject`, `Message`, a sequence number): the last
+200 are kept, and `/v1/events` streams them as server-sent events, those kept after `?after=SEQ`
+first; a listener that doesn't keep up misses events rather than holding the daemon up.
+`/v1/stats` counts templates (awake), machines, services and snapshots, and measures memory by
+template server and machine against the budget. `snowglobe events` prints the stream and
+`snowglobe top` redraws the daemon every second from both.
+
 ## Not built yet
 
-1. **Visibility.** `GET /v1/events` (server-sent events: created, up, stopped, crashed, reaped,
-   scaled) and `snowglobe top`.
-2. **Declarative fleets.** `snowglobe apply|diff|down [-f snowglobe.toml]`: templates (a site, a
+1. **Declarative fleets.** `snowglobe apply|diff|down [-f snowglobe.toml]`: templates (a site, a
    URL, or a Dockerfile directory built first), snapshots and services with the fields above, and
    the daemon converging to them.
-3. Later: several hosts (a daemon per host, one scheduling), per-machine networks, metrics.
+2. Later: several hosts (a daemon per host, one scheduling), per-machine networks, metrics.
 
 ## Decisions
 

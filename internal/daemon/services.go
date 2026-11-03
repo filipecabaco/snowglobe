@@ -172,7 +172,7 @@ func (s *Server) AddService(req Service) (*ServiceStatus, error) {
 			return nil, err
 		}
 	}
-	s.o.Logf("service %s: on %s, %d to %d replicas of %s, idle %s, state %s", svc.Name, portList(svc.Ports), svc.Min, svc.Max,
+	s.note("service.added", "service "+svc.Name, "on %s, %d to %d replicas of %s, idle %s, state %s", portList(svc.Ports), svc.Min, svc.Max,
 		svc.Template, time.Duration(svc.Idle), svc.State)
 	return s.ServiceStatus(svc.Name)
 }
@@ -221,7 +221,7 @@ func (s *Server) acceptService(name string, l net.Listener, guest int) {
 		go func() {
 			m, err := s.pickReplica(name)
 			if err != nil {
-				s.o.Logf("service %s: %v", name, err)
+				s.note("service.error", "service "+name, "%v", err)
 				c.Close()
 				return
 			}
@@ -312,7 +312,7 @@ func (s *Server) startReplica(name string) (*Machine, error) {
 	if req.Snapshot != "" {
 		from = "its last state"
 	}
-	s.o.Logf("service %s: replica %s up from %s in %d ms", name, m.Name, from, time.Since(begun).Milliseconds())
+	s.note("service.replica_up", "service "+name, "replica %s up from %s in %d ms", m.Name, from, time.Since(begun).Milliseconds())
 	return m, nil
 }
 
@@ -373,7 +373,7 @@ func (s *Server) stopReplica(svc Service, m Machine) {
 		snap, err := s.Snapshot(m.Name, randomName(svc.Name+"-state"))
 		if err != nil {
 			// Not stopped: its state would be lost
-			s.o.Logf("service %s: saving %s before it stops: %v", svc.Name, m.Name, err)
+			s.note("service.error", "service "+svc.Name, "saving %s before it stops: %v", m.Name, err)
 			return
 		}
 		s.mu.Lock()
@@ -391,7 +391,7 @@ func (s *Server) stopReplica(svc Service, m Machine) {
 	s.svc.mu.Lock()
 	delete(s.svc.activity, m.Name)
 	s.svc.mu.Unlock()
-	s.o.Logf("service %s: replica %s stopped, idle %s", svc.Name, m.Name, time.Duration(svc.Idle))
+	s.note("service.replica_stopped", "service "+svc.Name, "replica %s stopped, idle %s", m.Name, time.Duration(svc.Idle))
 }
 
 // scaleEvery is how often idle replicas are looked for
@@ -435,7 +435,7 @@ func (s *Server) RemoveService(name string) error {
 	delete(s.st.Services, name)
 	s.save()
 	s.mu.Unlock()
-	s.o.Logf("service %s: removed", name)
+	s.note("service.removed", "service "+name, "removed")
 	return nil
 }
 

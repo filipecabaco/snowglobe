@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"os"
@@ -114,6 +115,20 @@ func (e *e2e) daemonFleet(t *testing.T) {
 
 	if out := e.must(t, 0, "ps"); !strings.Contains(out, "m1\ttemplate e2e") || !strings.Contains(out, "m2\ttemplate e2e") {
 		t.Errorf("ps: %q", out)
+	}
+	// top: the template, its machines and what they take
+	if out := e.must(t, 0, "top", "--once"); !strings.Contains(out, "1 templates (1 awake), 2 machines") ||
+		!regexp.MustCompile(`(?m)^m1\s+e2e\s+\d+ MB`).MatchString(out) {
+		t.Errorf("top: %q", out)
+	}
+	// events: what happened so far, as it streams
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	evs, _ := exec.CommandContext(ctx, e.bin, "events").Output()
+	for _, want := range []string{"template.added", "machine.up               machine m1", "machine.up               machine m2"} {
+		if !strings.Contains(string(evs), want) {
+			t.Errorf("events lack %q: %q", want, evs)
+		}
 	}
 
 	// A snapshot carries the whole machine on: the file it wrote, and a process still running

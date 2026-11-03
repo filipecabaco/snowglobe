@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -211,6 +212,49 @@ func (c *Client) RemoveService(name string) error {
 func (c *Client) ServiceJob(name string, req control.JobRequest) (*control.JobResult, error) {
 	var res control.JobResult
 	return &res, c.call("POST", "/v1/services/"+url.PathEscape(name)+"/jobs", req, &res)
+}
+
+func (c *Client) Stats() (*Stats, error) {
+	var s Stats
+	return &s, c.call("GET", "/v1/stats", nil, &s)
+}
+
+// Events calls f with each event the daemon has kept after seq after, then with each as it
+// happens, until ctx is done, the daemon goes, or f returns false.
+func (c *Client) Events(ctx context.Context, after int64, f func(Event) bool) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/v1/events?after=%d", c.base, after), nil)
+	if err != nil {
+		return err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	// No timeout: the stream lasts
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("daemon %s: %w", c.Addr, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		data, _ := io.ReadAll(resp.Body)
+		return &apiError{status: resp.StatusCode, msg: strings.TrimSpace(string(data))}
+	}
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	for sc.Scan() {
+		data, ok := strings.CutPrefix(sc.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var ev Event
+		if json.Unmarshal([]byte(data), &ev) == nil && !f(ev) {
+			return nil
+		}
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	return sc.Err()
 }
 
 func (c *Client) TemplateJob(name string, req control.JobRequest) (*control.JobResult, error) {
