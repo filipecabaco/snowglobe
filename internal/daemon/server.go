@@ -455,6 +455,11 @@ func (s *Server) Up(req Up) (*Machine, error) {
 	if taken {
 		return nil, errStatus(409, "a machine called %s exists", name)
 	}
+	if len(ports) > 0 {
+		if err := needsNetwork(t); err != nil {
+			return nil, err
+		}
+	}
 	state := ""
 	if req.Snapshot != "" {
 		var err error
@@ -953,4 +958,20 @@ func lastLines(path string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// needsNetwork refuses ports on a template whose site was built without a network: its guest has
+// no network device, so there is nothing a forwarded connection could reach (as `run -p` says).
+func needsNetwork(t *Template) error {
+	var run struct {
+		Network string `json:"network"`
+	}
+	data, err := os.ReadFile(filepath.Join(t.Site, "run.json"))
+	if err != nil {
+		return err
+	}
+	if json.Unmarshal(data, &run) != nil || run.Network != "fetch" {
+		return errStatus(400, "ports need a guest with a network: template %s's site was built without one (build it with --network fetch)", t.Name)
+	}
+	return nil
 }

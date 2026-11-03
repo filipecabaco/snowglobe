@@ -200,7 +200,7 @@ func fakeSite(t *testing.T) string {
 	t.Helper()
 	site := filepath.Join(t.TempDir(), "py")
 	os.MkdirAll(filepath.Join(site, "system", "filesystem"), 0o755)
-	os.WriteFile(filepath.Join(site, "run.json"), []byte(`{}`), 0o644)
+	os.WriteFile(filepath.Join(site, "run.json"), []byte(`{"network":"fetch"}`), 0o644)
 	return site
 }
 
@@ -584,4 +584,35 @@ func TestFindUsesSNOWGLOBE_DAEMON(t *testing.T) {
 	if ts, err := c.Templates(); err != nil || len(ts) != 0 {
 		t.Errorf("templates: %v %v", ts, err)
 	}
+}
+
+func TestPortsNeedASiteWithANetwork(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	d := startDaemon(t, shortTemp(t), Options{})
+	defer d.stop(t)
+	offline := fakeSite(t)
+	os.WriteFile(filepath.Join(offline, "run.json"), []byte(`{"network":"none"}`), 0o644)
+	if _, err := d.c.AddTemplate(AddTemplate{Site: offline, Name: "off"}); err != nil {
+		t.Fatal(err)
+	}
+	defer d.c.RemoveTemplate("off")
+	for what, err := range map[string]error{
+		"up": func() error { _, err := d.c.Up(Up{Template: "off", Ports: []string{"8000"}}); return err }(),
+		"service add": func() error {
+			_, err := d.c.AddService(Service{Name: "web", Template: "off", Ports: []Port{{IP: "127.0.0.1", Guest: 80}}})
+			return err
+		}(),
+	} {
+		if statusOf(err) != 400 || !strings.Contains(err.Error(), "--network fetch") {
+			t.Errorf("%s with a port: %v", what, err)
+		}
+	}
+	// Without ports, the same template serves
+	if _, err := d.c.Up(Up{Template: "off", Name: "m"}); err != nil {
+		t.Errorf("up without ports: %v", err)
+	}
+	if _, err := d.c.AddService(Service{Name: "jobs", Template: "off"}); err != nil {
+		t.Errorf("a service without ports: %v", err)
+	}
+	d.c.RemoveService("jobs")
 }
