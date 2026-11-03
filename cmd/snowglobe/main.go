@@ -123,12 +123,17 @@ Usage:
                                                      SNOWGLOBE_DAEMON_TOKEN)
   snowglobe template add <site> [--name T]           restore a site once, for machines to be forked
                      [--max-machines N]              from; template ls lists them, template rm T
-                                                     removes one and its machines
+                     [--snapshot S]                  removes one and its machines. --snapshot
+                                                     restores a saved machine instead of the site
   snowglobe up <template> [--name N] [-p PORT]...    a machine forked from a template in tens of
                 [--label K=V]...                     milliseconds, sharing its memory: it lasts
                                                      until stopped, keeps what it writes, and its
                                                      ports are forwarded (-p 8000 picks a host
-                                                     port, -p 8080:8000 or IP:8080:8000 names one)
+                                                     port, -p 8080:8000 or IP:8080:8000 names one);
+                                                     --snapshot S starts it from a saved machine
+  snowglobe snapshot save <machine> [--name S]       save a machine whole (memory, processes, the
+                                                     files it wrote), to start machines from again;
+                                                     snapshot ls, snapshot rm S
   snowglobe tools                                    build the tools image (or find it) and print its tag
   snowglobe version
 
@@ -255,6 +260,8 @@ func run(args []string) int {
 		err = runTemplate(args[1:])
 	case "up":
 		err = runUp(args[1:])
+	case "snapshot":
+		err = runSnapshot(args[1:])
 	case "tools":
 		if len(args) == 3 && args[1] == "kernel" {
 			// The kernel archive builds without Docker add (a release asset), built with Docker

@@ -83,6 +83,11 @@ func fakeServer() {
 			self, _ := os.Executable()
 			cmd := exec.Command(self)
 			cmd.Env = append(os.Environ(), "SNOWGLOBE_FAKE_MACHINE="+msock)
+			if st, _ := req["state"].(string); st != "" {
+				cmd.Env = append(cmd.Env, "SNOWGLOBE_FAKE_STATE="+st)
+			} else if st := flagOf("state"); st != "" {
+				cmd.Env = append(cmd.Env, "SNOWGLOBE_FAKE_STATE="+st)
+			}
 			cmd.Start()
 			go cmd.Wait()
 			for i := 0; i < 200 && !control.Alive(msock); i++ {
@@ -103,6 +108,11 @@ func fakeMachine(sock string) {
 		os.Exit(1)
 	}
 	jobs := 0
+	// Started from a saved machine: its count
+	if st := os.Getenv("SNOWGLOBE_FAKE_STATE"); st != "" {
+		data, _ := os.ReadFile(st)
+		fmt.Sscan(string(data), &jobs)
+	}
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -116,6 +126,14 @@ func fakeMachine(sock string) {
 		case "job":
 			jobs++
 			send(c, control.JobResult{Status: new(int), Output: fmt.Appendf(nil, "%s: %d\n", req["cmd"], jobs)})
+			c.Close()
+		case "save":
+			path, _ := req["path"].(string)
+			if err := os.WriteFile(path, fmt.Append(nil, jobs), 0o600); err != nil {
+				send(c, map[string]any{"error": err.Error()})
+			} else {
+				send(c, map[string]any{"bytes": 1, "ms": 1})
+			}
 			c.Close()
 		case "connect":
 			send(c, map[string]any{"connected": req["port"]})
@@ -353,6 +371,93 @@ func TestStoppedMachinesAndServersAreReaped(t *testing.T) {
 		t.Errorf("machines of a dead template: %+v", ms)
 	}
 	waitFor(t, func() bool { return !control.Alive(b.Socket) })
+}
+
+func TestSnapshotsCarryAMachineOnward(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	d := startDaemon(t, shortTemp(t), Options{})
+	defer d.stop(t)
+	c := d.c
+	site := fakeSite(t)
+	tpl, err := c.AddTemplate(AddTemplate{Site: site, Name: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.RemoveTemplate("t")
+	c.Up(Up{Template: "t", Name: "a"})
+	c.Job("a", control.JobRequest{Cmd: "x"})
+	c.Job("a", control.JobRequest{Cmd: "x"})
+
+	s1, err := c.Snapshot("a", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s1.Site != site || s1.Machine != "a" || s1.Template != "t" || !strings.HasPrefix(s1.Path, filepath.Join(d.dir, "snapshots")) {
+		t.Errorf("snapshot: %+v", s1)
+	}
+	if _, err := c.Snapshot("a", "s1"); statusOf(err) != 409 {
+		t.Errorf("the same name twice: %v", err)
+	}
+	if _, err := c.Snapshot("nope", ""); !NotFound(err) {
+		t.Errorf("a snapshot of no machine: %v", err)
+	}
+
+	// The machine goes; one started from its snapshot carries on where it was
+	c.RemoveMachine("a")
+	if _, err := c.Up(Up{Template: "t", Name: "b", Snapshot: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if out := output(t)(c.Job("b", control.JobRequest{Cmd: "x"})); out != "x: 3\n" {
+		t.Errorf("from the snapshot: %q", out)
+	}
+	if m, _ := c.Machine("b"); m.Snapshot != "s1" {
+		t.Errorf("b's snapshot: %+v", m)
+	}
+	// Not from it: the template's state
+	c.Up(Up{Template: "t", Name: "fresh"})
+	if out := output(t)(c.Job("fresh", control.JobRequest{Cmd: "x"})); out != "x: 1\n" {
+		t.Errorf("not from it: %q", out)
+	}
+	// The link the machine read it through is gone; the snapshot stays
+	if left, _ := os.ReadDir(filepath.Join(tpl.JobsRoot, ".restore")); len(left) != 0 {
+		t.Errorf("left in .restore: %v", left)
+	}
+
+	// A template made of the snapshot: every machine of it starts there
+	t2, err := c.AddTemplate(AddTemplate{Snapshot: "s1", Name: "t2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.RemoveTemplate("t2")
+	if t2.Snapshot != "s1" || t2.Site != site {
+		t.Errorf("template of a snapshot: %+v", t2)
+	}
+	c.Up(Up{Template: "t2", Name: "d"})
+	if out := output(t)(c.Job("d", control.JobRequest{Cmd: "x"})); out != "x: 3\n" {
+		t.Errorf("a machine of t2: %q", out)
+	}
+
+	// A snapshot only goes onto a template of its site
+	other, _ := c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "other"})
+	defer c.RemoveTemplate("other")
+	if _, err := c.Up(Up{Template: other.Name, Snapshot: "s1"}); statusOf(err) != 400 {
+		t.Errorf("onto another site's template: %v", err)
+	}
+	if ss, _ := c.Snapshots(); len(ss) != 1 || ss[0].Name != "s1" {
+		t.Errorf("snapshots: %+v", ss)
+	}
+	if err := c.RemoveSnapshot("s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s1.Path); err == nil {
+		t.Error("its file stays")
+	}
+	if _, err := c.Up(Up{Template: "t", Snapshot: "s1"}); !NotFound(err) {
+		t.Errorf("up from a removed snapshot: %v", err)
+	}
+	if err := c.RemoveSnapshot("s1"); !NotFound(err) {
+		t.Errorf("removed twice: %v", err)
+	}
 }
 
 func waitFor(t *testing.T, f func() bool) {

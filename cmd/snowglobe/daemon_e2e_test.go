@@ -93,6 +93,27 @@ func (e *e2e) daemonFleet(t *testing.T) {
 	if out := e.must(t, 0, "ps"); !strings.Contains(out, "m1\ttemplate e2e") || !strings.Contains(out, "m2\ttemplate e2e") {
 		t.Errorf("ps: %q", out)
 	}
+
+	// A snapshot carries the whole machine on: the file it wrote, and a process still running
+	e.must(t, 0, "sh", "m1", `(while true; do sleep 1; done) >/dev/null 2>&1 & echo $! > /root/pid`)
+	if out := e.must(t, 0, "snapshot", "save", "m1", "--name", "s1"); !strings.Contains(out, "s1: m1 saved") {
+		t.Errorf("snapshot save: %q", out)
+	}
+	defer e.run(t, nil, "snapshot", "rm", "s1")
+	e.must(t, 0, "up", "e2e", "--name", "m3", "--snapshot", "s1")
+	if out := e.must(t, 0, "sh", "m3", "cat /root/f; kill -0 $(cat /root/pid) && echo running"); out != "kept\nrunning\n" {
+		t.Errorf("m3, from the snapshot: %q", out)
+	}
+	// A template made of it: every machine of it starts there
+	e.must(t, 0, "template", "add", "--snapshot", "s1", "--name", "e2e-s1")
+	defer e.run(t, nil, "template", "rm", "e2e-s1")
+	e.must(t, 0, "up", "e2e-s1", "--name", "m4")
+	if out := e.must(t, 0, "sh", "m4", "cat /root/f"); out != "kept\n" {
+		t.Errorf("m4, of the snapshot's template: %q", out)
+	}
+	if out := e.must(t, 0, "snapshot", "ls"); !strings.Contains(out, "s1\tm1\te2e\t") {
+		t.Errorf("snapshot ls: %q", out)
+	}
 	e.must(t, 0, "stop", "m1")
 	if out := e.must(t, 0, "ps"); strings.Contains(out, "m1\t") {
 		t.Errorf("ps after stop: %q", out)

@@ -358,6 +358,19 @@ snowglobe template rm py                         <span class="dim"># and its mac
             with <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it. A daemon started again takes back the
             templates and machines that are still running.</p>
 
+          <h3 id="snapshots">Snapshots of running machines</h3>
+          <p><code>snowglobe snapshot save</code> saves a machine whole: its memory, its running processes and the
+            files it wrote. Machines start from it again with <code>up --snapshot</code>, or it becomes a template
+            of its own with <code>template add --snapshot</code>. Set a machine up once (dependencies installed, a
+            server started, data loaded), then fork as many as you want, already set up.</p>
+          <pre>snowglobe up py --name base
+snowglobe sh base 'pip install httpx &amp;&amp; python3 -m http.server 8000 &amp;'
+snowglobe snapshot save base --name ready        <span class="dim"># tens of milliseconds</span>
+snowglobe template add --snapshot ready --name py-ready
+snowglobe up py-ready -p 8000                     <span class="dim"># installed, its server already listening</span>
+snowglobe snapshot ls
+snowglobe snapshot rm ready</pre>
+
           <h3 id="mcp">MCP</h3>
           <p><code>snowglobe mcp &lt;site&gt;</code> serves a site to an agent as an MCP server over stdio: an isolated
             Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code> tools. It

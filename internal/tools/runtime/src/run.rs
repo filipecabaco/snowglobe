@@ -539,6 +539,26 @@ fn forward(spec: &str) -> Result<(String, u16, u16), String> {
     Ok((addr.to_string(), listen, guest))
 }
 
+/// Save a running machine's state to `path` (zstd, as a site's state.bin.zst): its CPUs pause
+/// while it is taken. The bytes written and the milliseconds it took.
+pub(crate) fn save_machine(runner: &Runner, path: &std::path::Path) -> Result<(u64, u64), String> {
+    let begun = Instant::now();
+    let state = runner.save_state();
+    let mut e = zstd::stream::Encoder::new(Vec::with_capacity(state.len() / 4), 3).map_err(|e| e.to_string())?;
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()) as u32;
+    e.multithread(threads).map_err(|e| e.to_string())?;
+    e.include_contentsize(true).map_err(|e| e.to_string())?;
+    e.set_pledged_src_size(Some(state.len() as u64)).map_err(|e| e.to_string())?;
+    e.write_all(&state).map_err(|e| e.to_string())?;
+    let data = e.finish().map_err(|e| e.to_string())?;
+    drop(state);
+    // Whole or not at all: a reader never sees half a state
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::write(&tmp, &data).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((data.len() as u64, begun.elapsed().as_millis() as u64))
+}
+
 /// Serve the control socket on threads of its own, one per client.
 pub(crate) fn listen(session: Arc<Session>, listener: UnixListener) {
     std::thread::spawn(move || {
@@ -607,6 +627,18 @@ fn serve(session: &Session, stream: UnixStream) {
             closed.store(true, Ordering::SeqCst);
             // Let go of its socket now, not at the app's next output
             session.activity.unwatch_done();
+        },
+        Some("save") => {
+            // The whole machine (RAM, CPUs, devices, the files its guest wrote) to a file, from
+            // which a fork server can start a machine again (`spawn` with a `state`)
+            let answer = match request["path"].as_str() {
+                Some(path) => match save_machine(&session.runner, std::path::Path::new(path)) {
+                    Ok((bytes, ms)) => json!({ "saved": path, "bytes": bytes, "ms": ms }),
+                    Err(e) => json!({ "error": e }),
+                },
+                None => json!({ "error": "save: a path" }),
+            };
+            let _ = writer.write_all(format!("{answer}\n").as_bytes());
         },
         Some("connect") => {
             // A connection to a guest port: what a forwarded port is, for whoever holds the host's

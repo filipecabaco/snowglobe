@@ -78,14 +78,19 @@ func runTemplate(args []string) error {
 		var req daemon.AddTemplate
 		fs.StringVar(&req.Name, "name", "", "")
 		fs.IntVar(&req.MaxMachines, "max-machines", 0, "")
+		fs.StringVar(&req.Snapshot, "snapshot", "", "")
 		positional, err := parse(fs, args[1:])
 		if err != nil {
 			return err
 		}
-		if len(positional) != 1 {
-			return errors.New("template add takes a site (a directory, tarball or URL)")
+		switch {
+		case len(positional) == 1:
+			req.Site = positional[0]
+		case len(positional) == 0 && req.Snapshot != "":
+			// The snapshot's site
+		default:
+			return errors.New("template add takes a site (a directory, tarball or URL), or --snapshot S")
 		}
-		req.Site = positional[0]
 		t, err := c.AddTemplate(req)
 		if err != nil {
 			return err
@@ -120,6 +125,7 @@ func runUp(args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	var req daemon.Up
 	fs.StringVar(&req.Name, "name", "", "")
+	fs.StringVar(&req.Snapshot, "snapshot", "", "")
 	port := func(v string) error { req.Ports = append(req.Ports, v); return nil }
 	fs.Func("p", "", port)
 	fs.Func("publish", "", port)
@@ -154,6 +160,56 @@ func runUp(args []string) error {
 	fmt.Println(m.Name)
 	for _, p := range m.Ports {
 		fmt.Fprintf(os.Stderr, "  port %s\n", p)
+	}
+	return nil
+}
+
+// runSnapshot: snapshot save <machine> [--name S] | ls | rm <S>
+func runSnapshot(args []string) error {
+	if len(args) == 0 {
+		return errors.New("snapshot takes save, ls or rm")
+	}
+	c, err := daemonClient()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "save":
+		fs := flag.NewFlagSet("snapshot save", flag.ContinueOnError)
+		name := fs.String("name", "", "")
+		positional, err := parse(fs, args[1:])
+		if err != nil {
+			return err
+		}
+		if len(positional) != 1 {
+			return errors.New("snapshot save takes a machine's name")
+		}
+		s, err := c.Snapshot(positional[0], *name)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s: %s saved, %.1f MB in %d ms\n  snowglobe up %s --snapshot %s   (or template add --snapshot %s)\n",
+			s.Name, s.Machine, float64(s.Bytes)/(1<<20), s.Ms, s.Template, s.Name, s.Name)
+	case "ls":
+		ss, err := c.Snapshots()
+		if err != nil {
+			return err
+		}
+		if len(ss) == 0 {
+			fmt.Println("no snapshots")
+			return nil
+		}
+		fmt.Println("NAME\tOF\tTEMPLATE\tSIZE\tTAKEN")
+		for _, s := range ss {
+			fmt.Printf("%s\t%s\t%s\t%.1f MB\t%s\n", s.Name, s.Machine, s.Template, float64(s.Bytes)/(1<<20), s.Created.Format("2006-01-02 15:04:05"))
+		}
+	case "rm":
+		if len(args) != 2 {
+			return errors.New("snapshot rm takes a snapshot's name")
+		}
+		return c.RemoveSnapshot(args[1])
+	default:
+		return fmt.Errorf("snapshot %s: save, ls or rm", args[0])
 	}
 	return nil
 }
