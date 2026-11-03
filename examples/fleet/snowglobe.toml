@@ -1,0 +1,35 @@
+# A fleet: `snowglobe daemon &`, then `snowglobe apply` here. `snowglobe diff` says what apply
+# would do, `snowglobe down` removes it all, and `snowglobe top` shows it running.
+name = "python-demo"
+
+# The python example, built for running natively (with a network: its ports are forwarded)
+[templates.py]
+build = "../python"
+network = "fetch"
+idle = "30m"            # its server stops after 30 minutes with no machine
+
+# A machine of it, set up once and saved when ready: a web server listening
+[snapshots.serving]
+template = "py"
+run = ["mkdir -p /srv && echo 'hello from a snowglobe fleet' > /srv/index.html",
+       "cd /srv && python3 -m http.server 8000 >/dev/null 2>&1 &"]
+ready = "wget -q -O /dev/null http://127.0.0.1:8000/"
+timeout = "2m"
+
+# Every machine of this template starts with that server already listening
+[templates.serving]
+snapshot = "serving"
+
+# Behind localhost:8080, scaled to zero: the first request wakes a replica in about 20 ms
+[services.web]
+template = "serving"
+ports = ["8080:8000"]
+min = 0
+max = 3
+idle = "5m"
+concurrency = 10
+
+# A scratch machine to run commands on (snowglobe sh scratch '...'), gone after a day
+[machines.scratch]
+template = "py"
+ttl = "24h"

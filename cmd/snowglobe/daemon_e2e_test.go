@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -270,4 +271,80 @@ func (e *e2e) lifecycle(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A fleet file applied on a real site: a template, a snapshot set up by a command (a server) and
+// checked ready, a template of it, a service at zero on it, and machines; diff then has nothing to
+// do; a change replaces only what changed; down removes it all.
+func (e *e2e) fleetApply(t *testing.T) {
+	e.startDaemon(t)
+	dir := t.TempDir()
+	file := filepath.Join(dir, "snowglobe.toml")
+	fleetFile := func(count int) string {
+		return fmt.Sprintf(`name = "e2e-fleet"
+
+[templates.base]
+site = %q
+
+[snapshots.serving]
+template = "base"
+run = ['(while true; do printf "HTTP/1.0 200 OK\r\n\r\nfrom the fleet\n" | nc -l -p 8000; done) >/dev/null 2>&1 &']
+ready = "curl -sf -m 2 http://127.0.0.1:8000/"
+
+[templates.serving]
+snapshot = "serving"
+
+[services.web]
+template = "serving"
+ports = ["0:8000"]
+idle = "2s"
+
+[machines.worker]
+template = "base"
+count = %d
+`, e.site, count)
+	}
+	os.WriteFile(file, []byte(fleetFile(2)), 0o644)
+	out := e.must(t, 0, "apply", "-f", file)
+	for _, want := range []string{"+ template base", "+ snapshot serving", "+ template serving", "+ service web", "+ machine worker"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("apply lacks %q: %q", want, out)
+		}
+	}
+	defer e.run(t, nil, "down", "-f", file)
+	if out := e.must(t, 0, "diff", "-f", file); !strings.Contains(out, "as the file says (5 entries)") {
+		t.Errorf("diff after apply: %q", out)
+	}
+	if out := e.must(t, 0, "sh", "worker-2", "echo working"); out != "working\n" {
+		t.Errorf("worker-2: %q", out)
+	}
+	port := regexp.MustCompile(`127\.0\.0\.1:(\d+)→8000`).FindStringSubmatch(e.must(t, 0, "service", "ls"))
+	if port == nil {
+		t.Fatal("no port for web")
+	}
+	if body, _ := get("http://127.0.0.1:"+port[1]+"/", "from the fleet"); !strings.Contains(body, "from the fleet") {
+		t.Errorf("web: %q", body)
+	}
+
+	// A count changed: the workers only
+	os.WriteFile(file, []byte(fleetFile(3)), 0o644)
+	if out := e.must(t, 0, "diff", "-f", file); !strings.Contains(out, "~ machine worker (changed)") || strings.Contains(out, "service") {
+		t.Errorf("diff after a change: %q", out)
+	}
+	e.must(t, 0, "apply", "-f", file)
+	if out := e.must(t, 0, "ps"); !strings.Contains(out, "worker-3\t") {
+		t.Errorf("ps: %q", out)
+	}
+
+	// Something outside the fleet stays when it goes
+	e.must(t, 0, "template", "add", e.site, "--name", "outsider")
+	defer e.run(t, nil, "template", "rm", "outsider")
+	e.must(t, 0, "down", "-f", file)
+	ls := e.must(t, 0, "template", "ls")
+	if strings.Contains(ls, "base\t") || strings.Contains(ls, "serving\t") || !strings.Contains(ls, "outsider\t") {
+		t.Errorf("templates after down: %q", ls)
+	}
+	if out := e.must(t, 0, "ps"); strings.Contains(out, "worker") || strings.Contains(out, "web\t") {
+		t.Errorf("ps after down: %q", out)
+	}
 }

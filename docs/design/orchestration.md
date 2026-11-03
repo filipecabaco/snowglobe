@@ -17,7 +17,8 @@ browser. Measured against Firecracker in `bench/machines/README.md`.
 | #42 | Services: replicas on demand behind ports the daemon holds, scale to zero |
 | #44 | Ports only on templates whose guest has a network |
 | #45 | Memory budget with a queue, machine TTL, templates that sleep when idle |
-| next | Events (`/v1/events`, `snowglobe events`), `/v1/stats` and `snowglobe top` |
+| #46 | Events (`/v1/events`, `snowglobe events`), `/v1/stats` and `snowglobe top` |
+| next | Fleets: `snowglobe apply`, `diff` and `down` with a `snowglobe.toml` |
 
 ### The primitive: machines forked from one restore
 
@@ -104,12 +105,22 @@ first; a listener that doesn't keep up misses events rather than holding the dae
 template server and machine against the budget. `snowglobe events` prints the stream and
 `snowglobe top` redraws the daemon every second from both.
 
+### Fleets
+
+`snowglobe apply` reads a `snowglobe.toml` (`internal/fleet`): templates (`site`, `build` of a
+Dockerfile directory into `.snowglobe/<fleet>/<template>` beside the file, or `snapshot`),
+snapshots (a machine of a template, `run` commands that must succeed, a `ready` command retried
+until it does, then saved), services and machines (`count` of them). Everything it makes carries
+`snowglobe.fleet` (the fleet's name) and `snowglobe.spec` (a hash of its entry and of what it is
+made from), so a plan is: create what is missing, replace what has another hash (a rebuilt base
+changes the hashes of everything made from it), remove what carries the fleet's label and is no
+longer in the file, and refuse names that are someone else's. Removals go first, what is made
+from something before it; creations follow in dependency order. `diff` prints the plan; `down`
+removes everything with the fleet's label.
+
 ## Not built yet
 
-1. **Declarative fleets.** `snowglobe apply|diff|down [-f snowglobe.toml]`: templates (a site, a
-   URL, or a Dockerfile directory built first), snapshots and services with the fields above, and
-   the daemon converging to them.
-2. Later: several hosts (a daemon per host, one scheduling), per-machine networks, metrics.
+1. Several hosts (a daemon per host, one scheduling), per-machine networks, metrics.
 
 ## Decisions
 

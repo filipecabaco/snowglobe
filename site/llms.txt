@@ -100,6 +100,14 @@ https://github.com/filipecabaco/snowglobe/releases, or
   template.awake, snapshot.saved, admission.refused, ...), the last 200 first; `snowglobe top
   [--once]` shows it live (memory and budget, templates, services, machines, recent events). API:
   `/v1/events` (server-sent events, `?after=SEQ`), `/v1/stats`.
+- `snowglobe apply [-f snowglobe.toml]` gets the daemon to what a fleet file says: `[templates.N]`
+  (`site`, or `build` = a Dockerfile directory built first with optional `network`, or `snapshot`;
+  `idle`, `max_machines`), `[snapshots.N]` (`template`, `run` = commands that must succeed, `ready`
+  = a command retried until it succeeds, `timeout`), `[services.N]` (`template`, `ports`, `min`,
+  `max`, `idle`, `concurrency`, `state`, `labels`), `[machines.N]` (`template`, `count`, `ports`,
+  `ttl`, `labels`). What changed is replaced with what is made from it; what left the file is
+  removed. `snowglobe diff` shows the plan; `snowglobe down [-f F | --name FLEET]` removes it all.
+  Example: examples/fleet/snowglobe.toml.
 - `snowglobe attach <name>` joins a running instance (ctrl-] detaches); `snowglobe ps` lists them;
   `snowglobe stop <name>` stops one (natively: through its stop file, killing its job and logging
   why).

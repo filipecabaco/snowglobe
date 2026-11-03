@@ -163,6 +163,7 @@ internal/instance/    run, exec, attach, ps, stop, sh, cp: in a container or nat
 internal/daemon/      the orchestrator: templates, machines forked from them, snapshots, services
                       that scale to zero, and its HTTP/JSON API (snowglobe daemon)
 internal/control/     snowglobe-vm's control sockets: jobs, spawn, save, connect
+internal/fleet/       fleet files (snowglobe.toml): the plan apply, diff and down carry out
 internal/bundle/      a site and snowglobe-vm in one executable
 internal/mcp/         the MCP server
 internal/site/        each built site's run page (the terminal, saves, the service worker)
@@ -173,7 +174,7 @@ internal/pack/, internal/remote/
 bench/                end-to-end benchmarks of built sites (Playwright); bench/machines/: as a
                       machine runtime, against Firecracker too
 docs/design/          designs, and what of them is built
-examples/             one Dockerfile per demo language
+examples/             one Dockerfile per demo language; examples/fleet/: a fleet file
 site/                 the demo index page and the docs (site/docs/)
 ```
 

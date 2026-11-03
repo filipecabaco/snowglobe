@@ -43,9 +43,10 @@ type Template struct {
 	Snapshot string `json:"snapshot,omitempty"`
 	// How long it may serve no machine before its server stops (0: never), and whether it has:
 	// asleep, it starts again on its next use
-	Idle    Duration  `json:"idle,omitempty"`
-	Asleep  bool      `json:"asleep,omitempty"`
-	Started time.Time `json:"started"`
+	Idle    Duration          `json:"idle,omitempty"`
+	Asleep  bool              `json:"asleep,omitempty"`
+	Labels  map[string]string `json:"labels,omitempty"`
+	Started time.Time         `json:"started"`
 }
 
 // Machine is a machine forked from a template, lasting until it is removed.
@@ -66,14 +67,15 @@ type Machine struct {
 // Snapshot is a machine saved whole (RAM, CPUs, devices, the files its guest wrote): machines start
 // from it again (up --snapshot), on any template of the same site, or a template is made of it.
 type Snapshot struct {
-	Name     string    `json:"name"`
-	Site     string    `json:"site"`
-	Template string    `json:"template"`
-	Machine  string    `json:"machine"`
-	Path     string    `json:"path"`
-	Bytes    int64     `json:"bytes"`
-	Ms       int64     `json:"ms"`
-	Created  time.Time `json:"created"`
+	Name     string            `json:"name"`
+	Site     string            `json:"site"`
+	Template string            `json:"template"`
+	Machine  string            `json:"machine"`
+	Path     string            `json:"path"`
+	Bytes    int64             `json:"bytes"`
+	Ms       int64             `json:"ms"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	Created  time.Time         `json:"created"`
 }
 
 // Port is a host port the daemon forwards to a machine's guest port.
@@ -229,3 +231,7 @@ func statusOf(err error) int {
 	}
 	return 500
 }
+
+// ErrNotFound is the error the daemon answers with for what it doesn't have (NotFound says yes to
+// it): for programs standing in for the daemon.
+func ErrNotFound(what string) error { return errStatus(404, "no %s", what) }

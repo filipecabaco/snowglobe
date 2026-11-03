@@ -380,6 +380,36 @@ snowglobe up py --ttl 1h</pre>
           <pre>snowglobe top
 snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
 
+          <h3 id="fleets">Fleets: snowglobe apply</h3>
+          <p>A <code>snowglobe.toml</code> says what the daemon should have, and <code>snowglobe apply</code>
+            gets it there: templates (a built site, a URL, or a Dockerfile directory built first), snapshots (a
+            machine of a template set up by commands, saved once a readiness command succeeds), templates of those
+            snapshots, services and machines. <code>snowglobe diff</code> says what apply would do;
+            <code>snowglobe down</code> removes all of it. An entry that changed is replaced, with what is made
+            from it; one gone from the file is removed; names something else uses are refused. One file goes from
+            source to running services (<code>examples/fleet/snowglobe.toml</code>):</p>
+          <pre>[templates.py]
+build = "../python"                <span class="dim"># built first, for running natively</span>
+network = "fetch"
+
+[snapshots.serving]
+template = "py"
+run = ["cd /srv &amp;&amp; python3 -m http.server 8000 &gt;/dev/null 2&gt;&amp;1 &amp;"]
+ready = "wget -q -O /dev/null http://127.0.0.1:8000/"
+
+[templates.serving]
+snapshot = "serving"
+
+[services.web]
+template = "serving"
+ports = ["8080:8000"]
+min = 0                            <span class="dim"># scaled to zero, woken by a request</span>
+idle = "5m"
+
+[machines.scratch]
+template = "py"
+ttl = "24h"</pre>
+
           <h3 id="snapshots">Snapshots of running machines</h3>
           <p><code>snowglobe snapshot save</code> saves a machine whole: its memory, its running processes and the
             files it wrote. Machines start from it again with <code>up --snapshot</code>, or it becomes a template
