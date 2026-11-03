@@ -63,6 +63,8 @@ cd /root 2>/dev/null
 exec /usr/local/bin/snowglobe-console
 `)},
 		{Name: "usr/local/bin/snowglobe-console", Mode: 0o755, Data: []byte(Script(console))},
+		{Name: "etc/snowglobe", Dir: true, Mode: 0o755},
+		{Name: "etc/snowglobe/env", Mode: 0o644, Data: []byte(Env(console))},
 	}
 	if network != "none" {
 		// DHCP on the virtio NIC, which armless answers; HTTPS is terminated by armless's web relay

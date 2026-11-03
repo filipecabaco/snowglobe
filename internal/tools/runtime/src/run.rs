@@ -270,7 +270,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     let board = vm.board.clone();
     let mut runner = Runner::new(vm, clock, false);
     let state = site.need("system/state.bin.zst")?;
-    let mut reader = armless::zstd::reader(&state[..]).map_err(|e| e.to_string())?;
+    let mut reader = zstd::stream::read::Decoder::with_buffer(&state[..]).map_err(|e| e.to_string())?;
     runner.load_state_from(&mut reader)?;
     drop(reader);
     let timing = std::env::var_os("SNOWGLOBE_TIMING").is_some();

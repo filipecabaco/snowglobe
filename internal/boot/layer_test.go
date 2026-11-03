@@ -8,7 +8,7 @@ import (
 func TestFilesBootWithBusyBox(t *testing.T) {
 	byName := func(network string) map[string]string {
 		m := map[string]string{}
-		for _, f := range Files(Console{Command: "'python3'", Workdir: "/root"}, network, []byte("CA")) {
+		for _, f := range Files(Console{Command: "'python3'", Workdir: "/root", Env: []string{"LANG=C.UTF-8"}}, network, []byte("CA")) {
 			m[f.Name] = string(f.Data)
 		}
 		return m
@@ -20,6 +20,9 @@ func TestFilesBootWithBusyBox(t *testing.T) {
 	}
 	if !strings.Contains(off["usr/local/bin/snowglobe-console"], "exec 'python3'") {
 		t.Fatalf("console: %q", off["usr/local/bin/snowglobe-console"])
+	}
+	if off["etc/snowglobe/env"] != "export LANG='C.UTF-8'\n" {
+		t.Fatalf("env: %q", off["etc/snowglobe/env"])
 	}
 	if strings.Contains(off["usr/local/sbin/snowglobe-init"], "udhcpc") || off["usr/local/share/ca-certificates/snowglobe-sandbox.crt"] != "" {
 		t.Fatal("a site without a network gets one")
