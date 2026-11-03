@@ -59,13 +59,15 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     let mut reader = zstd::stream::read::Decoder::with_buffer(&state[..]).map_err(|e| e.to_string())?;
     runner.load_state_from(&mut reader)?;
     drop(reader);
+    let restored = started.elapsed();
+    let (compiled, learned) = prewarm(&runner, &site, spec.cpus);
 
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket).map_err(|e| format!("{socket}: {e}"))?;
     eprintln!(
         // "restored " first, as a detached run says it: what `snowglobe run --detach` waits for
-        "restored {title} in {:.1}s, serving jobs on {socket} (workspaces under {}, {max} at once; {sandboxed})",
-        started.elapsed().as_secs_f64(),
+        "restored {title} in {:.1}s{compiled}, serving jobs on {socket} (workspaces under {}, {max} at once; {sandboxed})",
+        restored.as_secs_f64(),
         root.display()
     );
     let mut running = 0usize;
@@ -80,7 +82,7 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
         match sys::fork() {
             Ok(sys::Forked::Child) => {
                 drop(listener);
-                let code = match child(&board, &mut runner, &site, &policy, &root, &spec, net, conn) {
+                let code = match child(&board, &mut runner, &site, &policy, &root, &spec, net, conn, learned.as_ref()) {
                     Ok(()) => 0,
                     Err(e) => {
                         eprintln!("snowglobe: job: {e}");
@@ -95,6 +97,26 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
         }
     }
     Ok(0)
+}
+
+/// Compile the snapshot's JIT profile (what its runs, and the build, compiled) here, before any
+/// fork and with no thread: every job then starts with that code, sharing it, instead of
+/// interpreting what it runs until each page gets hot and compiling it anew in every job. A job
+/// compiles what is new to it on a thread, into a module of its own (`enable_jit`).
+/// ARMLESS_JIT_PREWARM=off (or ARMLESS_JIT=off) skips it. What it did, for the log, and the
+/// profile, for jobs to add what they compile to.
+fn prewarm(runner: &Runner, site: &Site, cpus: usize) -> (String, Option<profile::Learned>) {
+    if !machine::jit_wanted() || std::env::var("ARMLESS_JIT_PREWARM").is_ok_and(|v| v == "off") {
+        return (String::new(), None);
+    }
+    let began = std::time::Instant::now();
+    if !(0..cpus).all(|i| runner.with_cpu(i, |c| c.enable_native_jit_here())) {
+        return (String::new(), None);
+    }
+    let learned = profile::Learned::open(site);
+    let modules = runner.jit_prewarm(&learned.prewarm());
+    let kb = (0..cpus).map(|i| runner.with_cpu(i, |c| c.native_jit_code_bytes())).sum::<usize>() >> 10;
+    (format!(", compiled {modules} modules ({kb} KB) in {:.1}s", began.elapsed().as_secs_f64()), Some(learned))
 }
 
 /// What a serving process and its jobs may touch: the site and the jobs root, the JIT profile
@@ -121,6 +143,7 @@ fn child(
     spec: &machine::Spec,
     net: machine::Net,
     conn: UnixStream,
+    learned: Option<&profile::Learned>,
 ) -> Result<(), String> {
     let line = read_request(BufReader::new(conn.try_clone().map_err(|e| e.to_string())?))?;
     let mut w = conn;
@@ -139,15 +162,9 @@ fn child(
     sandbox::apply_stage(policy, sandbox::Stage::Child)?;
     // This copy of the machine gets randomness of its own
     board.seed(&armless::runner::os_entropy());
+    // Compiling moves to a thread, and a module, of this job's own; what the parent compiled
+    // before forking stays (`prewarm`)
     machine::enable_jit(runner, spec.cpus);
-    // No prewarm here unless asked (ARMLESS_JIT_PREWARM=on): each child would compile the whole
-    // profile for itself, ~48 MB private and no faster for the jobs measured; what a job runs hot
-    // compiles as it runs
-    let learned = std::env::var("ARMLESS_JIT_PREWARM").is_ok_and(|v| v == "on").then(|| {
-        let l = profile::Learned::open(site);
-        runner.jit_prewarm(&l.prewarm());
-        l
-    });
     let activity = Activity::new(false);
     let _host = machine::host(board, site, &spec.network, net, &activity);
     runner.start();
@@ -168,6 +185,8 @@ fn child(
         },
     }
     let _ = w.flush();
+    // What this job compiled joins the profile, for the next serving process (it has answered:
+    // this costs the client nothing)
     if let Some(l) = learned {
         l.learn(runner);
     }
