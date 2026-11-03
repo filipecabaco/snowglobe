@@ -142,13 +142,18 @@ func (s *Server) AddService(req Service) (*ServiceStatus, error) {
 	}
 	s.mu.Lock()
 	_, taken := s.st.Services[req.Name]
-	_, ok := s.st.Templates[req.Template]
+	t, ok := s.st.Templates[req.Template]
 	s.mu.Unlock()
 	if taken {
 		return nil, errStatus(409, "a service called %s exists", req.Name)
 	}
 	if !ok {
 		return nil, errStatus(404, "no template called %s", req.Template)
+	}
+	if len(req.Ports) > 0 {
+		if err := needsNetwork(t); err != nil {
+			return nil, err
+		}
 	}
 	svc := req
 	svc.Saved = ""
