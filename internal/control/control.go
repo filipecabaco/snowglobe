@@ -115,10 +115,15 @@ type Spawned struct {
 }
 
 // Spawn asks the fork server on server for a machine called name (letters, digits, - and _),
-// which serves its control socket beside the server's.
-func Spawn(server, name string) (*Spawned, error) {
+// which serves its control socket beside the server's. With state (a machine's Save, under the
+// server's jobs root) the machine starts from that instead of the template.
+func Spawn(server, name, state string) (*Spawned, error) {
 	var s Spawned
-	conn, _, err := ask(server, map[string]any{"mode": "spawn", "name": name}, &s, 2*time.Minute)
+	req := map[string]any{"mode": "spawn", "name": name}
+	if state != "" {
+		req["state"] = state
+	}
+	conn, _, err := ask(server, req, &s, 2*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("spawn %s: %w", name, err)
 	}
@@ -130,6 +135,30 @@ func Spawn(server, name string) (*Spawned, error) {
 		return nil, fmt.Errorf("spawn %s: no machine in the answer", name)
 	}
 	return &s, nil
+}
+
+// Saved is what a machine's Save wrote.
+type Saved struct {
+	Bytes int64 `json:"bytes"`
+	Ms    int64 `json:"ms"`
+}
+
+// Save writes the whole machine whose control socket is sock (RAM, CPUs, devices, the files its
+// guest wrote) to path, which its sandbox must let it write. Its CPUs pause meanwhile.
+func Save(sock, path string) (*Saved, error) {
+	var answer struct {
+		Saved
+		Error string `json:"error"`
+	}
+	conn, _, err := ask(sock, map[string]any{"mode": "save", "path": path}, &answer, 5*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("save: %w", err)
+	}
+	conn.Close()
+	if answer.Error != "" {
+		return nil, errors.New(answer.Error)
+	}
+	return &answer.Saved, nil
 }
 
 // Connect opens a connection to port on the machine whose control socket is sock: once it

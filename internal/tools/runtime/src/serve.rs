@@ -46,6 +46,9 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
         Some(n) => n.parse().map_err(|_| "--max-machines: a number")?,
         None => 256,
     };
+    // A machine's saved state in place of the site's (a template made from a machine), read
+    // before the sandbox
+    let saved = args.get("state").map(|p| std::fs::read(p).map_err(|e| format!("--state {p}: {e}"))).transpose()?;
     let policy = policy(&site, &root, socket, spec.network == "fetch");
     let sandboxed = sandbox::apply_stage(&policy, sandbox::Stage::Parent)?;
     if std::env::var_os("ARMLESS_JIT_CODE_MB").is_none() {
@@ -59,10 +62,11 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     let (vm, clock) = machine::new_vm_jit(&spec, &site, false)?;
     let board = vm.board.clone();
     let runner = Runner::new(vm, clock, false);
-    let state = site.need("system/state.bin.zst")?;
-    let mut reader = zstd::stream::read::Decoder::with_buffer(&state[..]).map_err(|e| e.to_string())?;
-    runner.load_state_from(&mut reader)?;
-    drop(reader);
+    match &saved {
+        Some(state) => load(&runner, state)?,
+        None => load(&runner, &site.need("system/state.bin.zst")?)?,
+    }
+    drop(saved);
     let restored = started.elapsed();
     let (compiled, learned) = prewarm(&runner, &site, spec.cpus);
 
@@ -104,7 +108,7 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
         if line.trim().is_empty() {
             continue;
         }
-        let spawn = match spawn_request(&line, socket) {
+        let spawn = match spawn_request(&line, socket, &root) {
             Ok(s) => s,
             Err(e) => {
                 let _ = conn.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
@@ -112,8 +116,8 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
             },
         };
         // A name in use is refused, not taken over: its machine still answers on that socket
-        if let Some(sock) = spawn.as_ref().filter(|s| UnixStream::connect(s).is_ok()) {
-            let e = format!("a machine is running on {} already", sock.display());
+        if let Some(s) = spawn.as_ref().filter(|s| UnixStream::connect(&s.sock).is_ok()) {
+            let e = format!("a machine is running on {} already", s.sock.display());
             let _ = conn.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
             continue;
         }
@@ -136,7 +140,7 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
                 drop(listener);
                 let runner = runner.take().expect("the restored machine");
                 let code = match &spawn {
-                    Some(sock) => machine_child(&board, runner, &site, &policy, &spec, net, sock, conn).map_err(|e| format!("machine: {e}")),
+                    Some(s) => machine_child(&board, runner, &site, &policy, &spec, net, s, conn).map_err(|e| format!("machine: {e}")),
                     None => {
                         let mut runner = runner;
                         child(&board, &mut runner, &site, &policy, &root, &spec, net, &line, conn, learned.as_ref())
@@ -169,9 +173,24 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
 /// How long a client gets to send its request line
 const REQUEST_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// A request for a machine (`{"mode": "spawn", "name": N}`): the control socket it will have,
-/// `N.sock` beside this server's own. None for any other request.
-fn spawn_request(line: &str, socket: &str) -> Result<Option<PathBuf>, String> {
+/// A restored machine into `runner`, from a zstd state (a site's, or a machine's `save`).
+fn load(runner: &Runner, state: &[u8]) -> Result<(), String> {
+    let mut reader = zstd::stream::read::Decoder::with_buffer(state).map_err(|e| e.to_string())?;
+    runner.load_state_from(&mut reader)
+}
+
+/// A machine asked for: its control socket, and the saved state it starts from (else the
+/// template's).
+#[derive(Debug, PartialEq)]
+struct Spawn {
+    sock: PathBuf,
+    state: Option<PathBuf>,
+}
+
+/// A request for a machine (`{"mode": "spawn", "name": N, "state": PATH}`): the control socket it
+/// will have, `N.sock` beside this server's own, and a state saved under the jobs root to start
+/// from. None for any other request.
+fn spawn_request(line: &str, socket: &str, root: &Path) -> Result<Option<Spawn>, String> {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return Ok(None) };
     if v["mode"] != "spawn" {
         return Ok(None);
@@ -180,7 +199,17 @@ fn spawn_request(line: &str, socket: &str) -> Result<Option<PathBuf>, String> {
     if name.is_empty() || name.len() > 64 || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(format!("spawn: name {name:?}: 1 to 64 letters, digits, - or _"));
     }
-    Ok(Some(Path::new(socket).with_file_name(format!("{name}.sock"))))
+    let state = match v["state"].as_str() {
+        Some(p) => {
+            let p = Path::new(p).canonicalize().map_err(|e| format!("spawn: state {p}: {e}"))?;
+            if !p.starts_with(root) {
+                return Err(format!("spawn: state {}: not under the jobs root {}", p.display(), root.display()));
+            }
+            Some(p)
+        },
+        None => None,
+    };
+    Ok(Some(Spawn { sock: Path::new(socket).with_file_name(format!("{name}.sock")), state }))
 }
 
 /// A machine: a fork that, instead of running one job, serves its own control socket (exec,
@@ -194,14 +223,22 @@ fn machine_child(
     policy: &sandbox::Policy,
     spec: &machine::Spec,
     net: machine::Net,
-    sock: &Path,
+    spawn: &Spawn,
     mut conn: UnixStream,
 ) -> Result<(), String> {
+    let sock = spawn.sock.as_path();
     let refuse = |conn: &mut UnixStream, e: String| {
         let _ = conn.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
         e
     };
     sandbox::apply_stage(policy, sandbox::Stage::Child).map_err(|e| refuse(&mut conn, e))?;
+    if let Some(state) = &spawn.state {
+        // A machine saved before, over this copy of the template's: the code compiled from the
+        // template's memory doesn't hold for it
+        let data = std::fs::read(state).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
+        load(&runner, &data).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
+        runner.jit_flush();
+    }
     board.seed(&armless::runner::os_entropy());
     machine::enable_jit(&runner, spec.cpus);
     let activity = Activity::new(false);
@@ -515,10 +552,19 @@ mod tests {
 
     #[test]
     fn a_machine_is_asked_for_by_name_and_gets_its_socket_beside_the_servers() {
-        let spawn = |line: &str, socket: &str| spawn_request(line, socket);
-        assert_eq!(spawn(r#"{"mode":"spawn","name":"m-1_a"}"#, "/run/t/s.sock"), Ok(Some(PathBuf::from("/run/t/m-1_a.sock"))));
+        let (root, outside) = root("serve-spawn");
+        let spawn = |line: &str, socket: &str| spawn_request(line, socket, &root);
+        let at = |sock: &str| Ok(Some(Spawn { sock: PathBuf::from(sock), state: None }));
+        assert_eq!(spawn(r#"{"mode":"spawn","name":"m-1_a"}"#, "/run/t/s.sock"), at("/run/t/m-1_a.sock"));
         // A relative server socket: the machine's is relative to the same directory
-        assert_eq!(spawn(r#"{"mode":"spawn","name":"web"}"#, "s.sock"), Ok(Some(PathBuf::from("web.sock"))));
+        assert_eq!(spawn(r#"{"mode":"spawn","name":"web"}"#, "s.sock"), at("web.sock"));
+        // A saved state to start from: under the jobs root, wherever its path leads
+        let line = json!({ "mode": "spawn", "name": "w", "state": root.join("env.json") }).to_string();
+        assert_eq!(spawn(&line, "s.sock").unwrap().unwrap().state, Some(root.join("env.json")));
+        for state in [outside.join("env.json"), root.join("../outside/env.json"), root.join("missing")] {
+            let line = json!({ "mode": "spawn", "name": "w", "state": state }).to_string();
+            assert!(spawn(&line, "s.sock").unwrap_err().starts_with("spawn: state "), "{}", state.display());
+        }
         // Not a machine: a job, a workspace, or not JSON at all
         for line in [r#"{"mode":"job","cmd":"x"}"#, r#"{"workspace":"/w","cmd":"x"}"#, "{"] {
             assert_eq!(spawn(line, "s.sock"), Ok(None), "{line}");

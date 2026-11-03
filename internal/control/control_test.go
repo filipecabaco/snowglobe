@@ -95,7 +95,7 @@ func TestSpawnAsksByNameAndChecksTheAnswer(t *testing.T) {
 		got = req
 		answer(c, `{"pid":42,"socket":"/run/m.sock"}`)
 	})
-	s, err := Spawn(sock, "web")
+	s, err := Spawn(sock, "web", "")
 	if err != nil || s.Pid != 42 || s.Socket != "/run/m.sock" || got["mode"] != "spawn" || got["name"] != "web" {
 		t.Fatalf("%+v %v %v", s, err, got)
 	}
@@ -111,7 +111,7 @@ func TestSpawnAsksByNameAndChecksTheAnswer(t *testing.T) {
 			}
 			answer(c, reply)
 		})
-		if _, err := Spawn(sock, "web"); err == nil || !strings.Contains(err.Error(), want) {
+		if _, err := Spawn(sock, "web", ""); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v", reply, err)
 		}
 	}

@@ -175,6 +175,20 @@ func (c *Client) Job(name string, req control.JobRequest) (*control.JobResult, e
 	return &res, c.call("POST", "/v1/machines/"+url.PathEscape(name)+"/jobs", req, &res)
 }
 
+func (c *Client) Snapshot(machine, name string) (*Snapshot, error) {
+	var s Snapshot
+	return &s, c.call("POST", "/v1/machines/"+url.PathEscape(machine)+"/snapshots", map[string]string{"name": name}, &s)
+}
+
+func (c *Client) Snapshots() ([]Snapshot, error) {
+	var ss []Snapshot
+	return ss, c.call("GET", "/v1/snapshots", nil, &ss)
+}
+
+func (c *Client) RemoveSnapshot(name string) error {
+	return c.call("DELETE", "/v1/snapshots/"+url.PathEscape(name), nil, nil)
+}
+
 func (c *Client) TemplateJob(name string, req control.JobRequest) (*control.JobResult, error) {
 	var res control.JobResult
 	return &res, c.call("POST", "/v1/templates/"+url.PathEscape(name)+"/jobs", req, &res)

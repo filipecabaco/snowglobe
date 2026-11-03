@@ -171,13 +171,35 @@ type AddTemplate struct {
 	Site        string `json:"site"`
 	Name        string `json:"name,omitempty"`
 	MaxMachines int    `json:"max_machines,omitempty"`
+	// A snapshot to restore instead of the site's own state (its site, unless Site says it)
+	Snapshot string `json:"snapshot,omitempty"`
 }
 
 // AddTemplate restores a site once, in a fork server of its own, for machines to be forked from.
 func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
+	var snap *Snapshot
+	if req.Snapshot != "" {
+		s.mu.Lock()
+		found, ok := s.st.Snapshots[req.Snapshot]
+		s.mu.Unlock()
+		if !ok {
+			return nil, errStatus(404, "no snapshot called %s", req.Snapshot)
+		}
+		c := *found
+		snap = &c
+		if req.Site == "" {
+			req.Site = snap.Site
+		}
+		if req.Name == "" {
+			req.Name = snap.Name
+		}
+	}
 	site, err := resolveSite(req.Site)
 	if err != nil {
 		return nil, errStatus(400, "%v", err)
+	}
+	if snap != nil && site != snap.Site {
+		return nil, errStatus(400, "snapshot %s is of %s, not %s", snap.Name, snap.Site, site)
 	}
 	name := req.Name
 	if name == "" {
@@ -215,6 +237,10 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 		JobsRoot: filepath.Join(dir, "jobs"), Log: filepath.Join(dir, "log"), MaxMachines: max, VM: s.o.VM, Started: time.Now(),
 	}
 	args := []string{"run", site, "--serve", t.Server, "--jobs-root", t.JobsRoot, "--max-machines", fmt.Sprint(max)}
+	if snap != nil {
+		t.Snapshot = snap.Name
+		args = append(args, "--state", snap.Path)
+	}
 	// A pooled site keeps its blobs in the directory next to it
 	if _, err := os.Stat(filepath.Join(site, "system", "filesystem")); err != nil {
 		args = append(args, "--blobs", filepath.Join(filepath.Dir(site), "blobs"))
@@ -366,6 +392,8 @@ type Up struct {
 	Name     string            `json:"name,omitempty"`
 	Ports    []string          `json:"ports,omitempty"`
 	Labels   map[string]string `json:"labels,omitempty"`
+	// A snapshot to start from instead of the template's state (of the same site)
+	Snapshot string `json:"snapshot,omitempty"`
 }
 
 // Up forks a machine from a template: it lasts until it is removed, with its ports forwarded.
@@ -395,11 +423,19 @@ func (s *Server) Up(req Up) (*Machine, error) {
 	if taken {
 		return nil, errStatus(409, "a machine called %s exists", name)
 	}
-	spawned, err := control.Spawn(t.Server, name)
+	state := ""
+	if req.Snapshot != "" {
+		var err error
+		if state, err = s.restorable(req.Snapshot, t); err != nil {
+			return nil, err
+		}
+		defer os.Remove(state)
+	}
+	spawned, err := control.Spawn(t.Server, name, state)
 	if err != nil {
 		return nil, errStatus(409, "%v", err)
 	}
-	m := &Machine{Name: name, Template: t.Name, Pid: spawned.Pid, Socket: spawned.Socket, Ports: ports, Labels: req.Labels, Created: time.Now()}
+	m := &Machine{Name: name, Template: t.Name, Pid: spawned.Pid, Socket: spawned.Socket, Ports: ports, Labels: req.Labels, Snapshot: req.Snapshot, Created: time.Now()}
 	if !filepath.IsAbs(m.Socket) {
 		m.Socket = filepath.Join(t.SocketDir, filepath.Base(m.Socket))
 	}
@@ -601,6 +637,107 @@ func (s *Server) reap(ctx context.Context) {
 	}
 }
 
+// --- snapshots
+
+// Snapshot saves a running machine whole as name: the machine writes it under its template's
+// jobs root (all its sandbox lets it write), and the daemon keeps it with its own.
+func (s *Server) Snapshot(machine, name string) (*Snapshot, error) {
+	m, err := s.Machine(machine)
+	if err != nil {
+		return nil, err
+	}
+	if name == "" {
+		name = randomName(machine)
+	}
+	if err := validName(name); err != nil {
+		return nil, errStatus(400, "%v", err)
+	}
+	s.mu.Lock()
+	t, ok := s.st.Templates[m.Template]
+	_, taken := s.st.Snapshots[name]
+	s.mu.Unlock()
+	if !ok {
+		return nil, errStatus(404, "%s: its template %s is gone", machine, m.Template)
+	}
+	if taken {
+		return nil, errStatus(409, "a snapshot called %s exists", name)
+	}
+	staging := filepath.Join(t.JobsRoot, ".snapshots")
+	kept := filepath.Join(s.o.Dir, "snapshots")
+	for _, d := range []string{staging, kept} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return nil, err
+		}
+	}
+	written := filepath.Join(staging, name+".zst")
+	saved, err := control.Save(m.Socket, written)
+	if err != nil {
+		os.Remove(written)
+		return nil, err
+	}
+	snap := &Snapshot{Name: name, Site: t.Site, Template: t.Name, Machine: machine, Path: filepath.Join(kept, name+".zst"),
+		Bytes: saved.Bytes, Ms: saved.Ms, Created: time.Now()}
+	if err := os.Rename(written, snap.Path); err != nil {
+		os.Remove(written)
+		return nil, err
+	}
+	s.mu.Lock()
+	s.st.Snapshots[name] = snap
+	s.save()
+	s.mu.Unlock()
+	s.o.Logf("snapshot %s: of %s, %d bytes in %d ms", name, machine, saved.Bytes, saved.Ms)
+	return snap, nil
+}
+
+// Snapshots lists the snapshots, by name.
+func (s *Server) Snapshots() []Snapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Snapshot, 0, len(s.st.Snapshots))
+	for _, sn := range s.st.Snapshots {
+		out = append(out, *sn)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// RemoveSnapshot deletes a snapshot.
+func (s *Server) RemoveSnapshot(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sn, ok := s.st.Snapshots[name]
+	if !ok {
+		return errStatus(404, "no snapshot called %s", name)
+	}
+	os.Remove(sn.Path)
+	delete(s.st.Snapshots, name)
+	s.save()
+	return nil
+}
+
+// restorable puts snapshot name where template t's machines may read it (its jobs root: their
+// sandbox reads nothing else of the daemon's), as a link, and returns that path for the spawn.
+func (s *Server) restorable(name string, t *Template) (string, error) {
+	s.mu.Lock()
+	sn, ok := s.st.Snapshots[name]
+	s.mu.Unlock()
+	if !ok {
+		return "", errStatus(404, "no snapshot called %s", name)
+	}
+	if sn.Site != t.Site {
+		return "", errStatus(400, "snapshot %s is of %s, and template %s of %s", name, sn.Site, t.Name, t.Site)
+	}
+	dir := filepath.Join(t.JobsRoot, ".restore")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	link := filepath.Join(dir, randomName(name)+".zst")
+	if err := os.Link(sn.Path, link); err != nil {
+		return "", err
+	}
+	return link, nil
+}
+
 // --- HTTP
 
 // Handler is the API.
@@ -665,6 +802,23 @@ func (s *Server) Handler() http.Handler {
 		}
 		v, err := s.Job(r.PathValue("name"), req)
 		reply(w, v, err)
+	})
+	mux.HandleFunc("POST /v1/machines/{name}/snapshots", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.Snapshot(r.PathValue("name"), req.Name)
+		reply(w, v, err)
+	})
+	mux.HandleFunc("GET /v1/snapshots", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, s.Snapshots(), nil)
+	})
+	mux.HandleFunc("DELETE /v1/snapshots/{name}", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveSnapshot(r.PathValue("name")))
 	})
 	return mux
 }

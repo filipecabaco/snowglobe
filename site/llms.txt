@@ -79,6 +79,10 @@ https://github.com/filipecabaco/snowglobe/releases, or
   in tens of milliseconds, sharing the template's memory: it lasts until stopped, keeps what it
   writes, and the daemon forwards its ports (-p 8000 picks a host port). `sh`, `cp`, `exec`,
   `attach`, `ps` and `stop` reach the daemon's machines like instances.
+- `snowglobe snapshot save <machine> [--name S]` saves a machine whole (memory, running processes,
+  the files it wrote); `up <template> --snapshot S` starts a machine from it, and
+  `template add --snapshot S [--name T]` makes it a template, every machine of which starts there.
+  `snapshot ls`, `snapshot rm S`.
 - `snowglobe attach <name>` joins a running instance (ctrl-] detaches); `snowglobe ps` lists them;
   `snowglobe stop <name>` stops one (natively: through its stop file, killing its job and logging
   why).

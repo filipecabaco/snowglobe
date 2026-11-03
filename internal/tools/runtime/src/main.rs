@@ -96,7 +96,7 @@ impl Args {
     }
 }
 
-pub const RUN_FLAGS: &[&str] = &["max-runtime", "stop-file", "log-dir", "blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "max-machines", "server"];
+pub const RUN_FLAGS: &[&str] = &["max-runtime", "stop-file", "log-dir", "blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "max-machines", "state", "server"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

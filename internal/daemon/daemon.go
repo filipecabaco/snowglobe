@@ -37,9 +37,11 @@ type Template struct {
 	// Its log's line saying it is ready: how long the restore took, what was compiled
 	Ready string `json:"ready"`
 	// The snowglobe-vm running it, for exec and attach on its machines
-	VM          string    `json:"vm"`
-	MaxMachines int       `json:"max_machines"`
-	Started     time.Time `json:"started"`
+	VM          string `json:"vm"`
+	MaxMachines int    `json:"max_machines"`
+	// The snapshot it was made of, if any (else the site's own state)
+	Snapshot string    `json:"snapshot,omitempty"`
+	Started  time.Time `json:"started"`
 }
 
 // Machine is a machine forked from a template, lasting until it is removed.
@@ -50,7 +52,22 @@ type Machine struct {
 	Socket   string            `json:"socket"`
 	Ports    []Port            `json:"ports,omitempty"`
 	Labels   map[string]string `json:"labels,omitempty"`
-	Created  time.Time         `json:"created"`
+	// The snapshot it started from, if any
+	Snapshot string    `json:"snapshot,omitempty"`
+	Created  time.Time `json:"created"`
+}
+
+// Snapshot is a machine saved whole (RAM, CPUs, devices, the files its guest wrote): machines start
+// from it again (up --snapshot), on any template of the same site, or a template is made of it.
+type Snapshot struct {
+	Name     string    `json:"name"`
+	Site     string    `json:"site"`
+	Template string    `json:"template"`
+	Machine  string    `json:"machine"`
+	Path     string    `json:"path"`
+	Bytes    int64     `json:"bytes"`
+	Ms       int64     `json:"ms"`
+	Created  time.Time `json:"created"`
 }
 
 // Port is a host port the daemon forwards to a machine's guest port.
@@ -142,22 +159,30 @@ func SocketPath() (string, error) {
 type state struct {
 	Templates map[string]*Template `json:"templates"`
 	Machines  map[string]*Machine  `json:"machines"`
+	Snapshots map[string]*Snapshot `json:"snapshots"`
+}
+
+func emptyState() state {
+	return state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}, Snapshots: map[string]*Snapshot{}}
 }
 
 func loadState(path string) state {
-	st := state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}}
+	st := emptyState()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return st
 	}
 	if json.Unmarshal(data, &st) != nil {
-		return state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}}
+		return emptyState()
 	}
 	if st.Templates == nil {
 		st.Templates = map[string]*Template{}
 	}
 	if st.Machines == nil {
 		st.Machines = map[string]*Machine{}
+	}
+	if st.Snapshots == nil {
+		st.Snapshots = map[string]*Snapshot{}
 	}
 	return st
 }
