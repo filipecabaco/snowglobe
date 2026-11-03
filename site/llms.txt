@@ -45,6 +45,9 @@ https://github.com/filipecabaco/snowglobe/releases, or
     messages, the job shell) and `events.jsonl` (start, restored, job_start, job_end, stop; one
     JSON object a line). Named native instances log to the user cache's `snowglobe/logs/<name>`.
   - `--tunnel [HOST:]PORT=URL`, `--tunnel-token URL`, `--allow-private`, `--record-reads FILE`.
+  - `--fork` (with `--detach --name`, native) makes the instance a template: it restores once,
+    and every `snowglobe sh` on it runs in a fresh copy of the machine, forked in milliseconds and
+    sharing its memory. Nothing one command does is seen by the next; `sh` is all it takes.
 - `snowglobe exec <name> <command>` types one command into a running instance's app and prints
   only what it printed (plain text when piped): the way to drive a REPL.
 - `snowglobe sh <name> [--json] [--timeout SECS] '<command>'` runs a shell command, passed as one

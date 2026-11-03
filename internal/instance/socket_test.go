@@ -30,7 +30,12 @@ func TestMain(m *testing.M) {
 		}
 		return ""
 	}
-	l, err := net.Listen("unix", flag("socket"))
+	// A control socket, or a serving one's (run --fork)
+	sock := flag("socket")
+	if sock == "" {
+		sock = flag("serve")
+	}
+	l, err := net.Listen("unix", sock)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "snowglobe-vm:", err)
 		os.Exit(1)

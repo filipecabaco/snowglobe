@@ -32,6 +32,8 @@ type nativeState struct {
 	Logs     string    `json:"logs,omitempty"`
 	StopFile string    `json:"stop_file,omitempty"`
 	Started  time.Time `json:"started"`
+	// Fork: a serving snowglobe-vm, every job a fresh fork of its machine (run --fork)
+	Fork bool `json:"fork,omitempty"`
 }
 
 func instancesDir() (string, error) {
@@ -75,6 +77,14 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 	if o.Name != "" && !validName(o.Name) {
 		return fmt.Errorf("--name %s: a name, not a path", o.Name)
 	}
+	if o.Fork {
+		switch {
+		case !o.Detach || o.Name == "":
+			return errors.New("--fork makes a detached instance: give it --detach and --name")
+		case len(o.Publish) > 0 || o.RecordReads != "" || o.MaxRuntime > 0 || o.StopFile != "" || o.LogDir != "":
+			return errors.New("--fork takes none of -p, --record-reads, --max-runtime, --stop-file and --log-dir: its machines last one command")
+		}
+	}
 	args := append([]string{"run", site}, tools.TunnelArgs(tunnels, o.AllowPrivate)...)
 	if o.RecordReads != "" {
 		record, err := filepath.Abs(o.RecordReads)
@@ -111,13 +121,15 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 			return err
 		}
 	}
-	driven := o
-	driven.LogDir = logs
-	_, vmDriver, err := driverArgs(driven, false)
-	if err != nil {
-		return err
+	if !o.Fork {
+		driven := o
+		driven.LogDir = logs
+		_, vmDriver, err := driverArgs(driven, false)
+		if err != nil {
+			return err
+		}
+		args = append(args, vmDriver...)
 	}
-	args = append(args, vmDriver...)
 
 	if !o.Detach {
 		// Its own control socket, so that runs side by side don't share one: in a private
@@ -186,14 +198,21 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 	}
 	stop := filepath.Join(dir, "stop")
 	os.Remove(stop)
-	args = append(args, "--stop-file", stop)
+	if o.Fork {
+		// One restore, serving jobs on the socket, each in a fork of it: stopped by a signal (it
+		// has no job of its own to end first)
+		stop = ""
+		args = append(args, "--serve", sock, "--jobs-root", filepath.Join(dir, "jobs"))
+	} else {
+		args = append(args, "--stop-file", stop, "--detached", "--socket", sock)
+	}
 	logPath := filepath.Join(dir, "log")
 	log, err := os.Create(logPath)
 	if err != nil {
 		return err
 	}
 	defer log.Close()
-	cmd := exec.Command(vm, append(args, "--detached", "--socket", sock)...)
+	cmd := exec.Command(vm, args...)
 	cmd.Stdout, cmd.Stderr = log, log
 	// Its own session: it outlives this command and the terminal it was started from
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -203,7 +222,7 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 		return err
 	}
 	if err := writeState(dir, nativeState{Pid: cmd.Process.Pid, Site: site, VM: vm, Socket: sock, Log: logPath, Started: time.Now(),
-		Logs: logs, StopFile: stop}); err != nil {
+		Logs: logs, StopFile: stop, Fork: o.Fork}); err != nil {
 		return err
 	}
 	// Wait until it has restored (or failed)
@@ -228,7 +247,11 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 			return fmt.Errorf("%s did not restore within %s, so it was stopped: %s", o.Name, restoreTimeout, said)
 		case <-time.After(100 * time.Millisecond):
 		}
-		if line := firstLine(logPath, "restored "); line != "" {
+		if line := firstLine(logPath, "restored "); line != "" && o.Fork {
+			fmt.Fprintf(os.Stderr, "%s: %s\n  snowglobe sh %s '<command>'   (each in a fresh copy of the machine)\n  snowglobe stop %s\n",
+				o.Name, line, o.Name, o.Name)
+			return nil
+		} else if line != "" {
 			fmt.Fprintf(os.Stderr, "%s: %s\n  snowglobe exec %s '<command>'\n  snowglobe attach %s\n  snowglobe stop %s\n  logs: %s\n",
 				o.Name, line, o.Name, o.Name, o.Name, logs)
 			return nil
@@ -424,7 +447,11 @@ func listNative() (int, error) {
 		if n == 0 {
 			fmt.Println("NAME\tSITE\tSTARTED\tRUNTIME")
 		}
-		fmt.Printf("%s\t%s\t%s ago\tnative (pid %d)\n", e.Name(), st.Site, time.Since(st.Started).Round(time.Second), st.Pid)
+		kind := "native"
+		if st.Fork {
+			kind = "native, a fork per command"
+		}
+		fmt.Printf("%s\t%s\t%s ago\t%s (pid %d)\n", e.Name(), st.Site, time.Since(st.Started).Round(time.Second), kind, st.Pid)
 		n++
 	}
 	return n, nil

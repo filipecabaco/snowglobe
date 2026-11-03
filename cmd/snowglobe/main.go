@@ -102,6 +102,11 @@ Usage:
                                                      events.jsonl (jobs, how the run ended). A named
                                                      native instance logs to the cache's
                                                      snowglobe/logs/<name>, kept after it stops
+                                                     --fork (with --detach --name, native): every
+                                                     snowglobe sh on it runs in a fresh copy of the
+                                                     restored machine, forked in milliseconds and
+                                                     sharing its memory; nothing one command does
+                                                     is seen by the next, and sh is all it takes
   snowglobe exec <name> <command>                    type a command into a running instance and
                                                      print what it printed
   snowglobe attach <name>                            join a running instance (ctrl-] detaches)
@@ -418,6 +423,7 @@ func runRun(args []string) error {
 	o := instance.Options{Site: "dist"}
 	fs.StringVar(&o.Name, "name", "", "")
 	fs.BoolVar(&o.Detach, "detach", false, "")
+	fs.BoolVar(&o.Fork, "fork", false, "")
 	publish := func(v string) error { o.Publish = append(o.Publish, v); return nil }
 	fs.Func("p", "", publish)
 	fs.Func("publish", "", publish)

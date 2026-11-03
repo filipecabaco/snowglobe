@@ -43,12 +43,27 @@ type JobResult struct {
 
 // Job runs a job on the native instance called name.
 func Job(name string, req JobRequest) (*JobResult, error) {
+	return job(name, req, false)
+}
+
+// forkOnlySh is the error for what a --fork instance can't do: there is no machine that lasts
+// from one command to the next to copy files into, join or keep an agent's work on.
+func forkOnlySh(name string) error {
+	return fmt.Errorf("%s runs each command in a fresh copy of its machine (--fork): snowglobe sh is all it takes", name)
+}
+
+// job runs a job on the native instance called name; on a --fork one only when fresh says each
+// job standing alone is what the caller wants.
+func job(name string, req JobRequest, fresh bool) (*JobResult, error) {
 	st, _, ok := loadNative(name)
 	if !ok {
 		if inContainer(name) {
 			return nil, fmt.Errorf("%s runs in a container: jobs, sh, cp and mcp need a native instance (--runtime native)", name)
 		}
 		return nil, fmt.Errorf("no instance called %s (snowglobe ps lists them)", name)
+	}
+	if st.Fork && !fresh {
+		return nil, forkOnlySh(name)
 	}
 	if req.Timeout < 0 {
 		return nil, fmt.Errorf("timeout %v: 0 or more seconds", req.Timeout)
@@ -90,7 +105,7 @@ func Job(name string, req JobRequest) (*JobResult, error) {
 // Shell runs a command on a native instance's shell and prints its output, ending with its exit
 // status; as JSON ({"exit", "output"}) when asked.
 func Shell(name, command string, asJSON bool, timeout float64) error {
-	res, err := Job(name, JobRequest{Cmd: command, Timeout: timeout})
+	res, err := job(name, JobRequest{Cmd: command, Timeout: timeout}, true)
 	if err != nil {
 		return err
 	}

@@ -156,6 +156,7 @@ func TestRunRefuses(t *testing.T) {
 		{"a negative time limit", Options{Site: offline, MaxRuntime: -time.Second}, "--max-runtime"},
 		{"no blobs", Options{Site: pooled}, "neither system/filesystem nor a pooled ../blobs"},
 		{"detached without a name", Options{Site: offline, Detach: true}, "needs --name"},
+		{"a fork in a container", Options{Site: offline, Runtime: "docker", Fork: true, Detach: true, Name: "f"}, "--fork needs --runtime native"},
 	} {
 		if err := Run(tc.o, "dev"); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want %q", tc.name, err, tc.want)
