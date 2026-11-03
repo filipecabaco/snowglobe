@@ -99,11 +99,13 @@ func TestADetachedRunHoldsItsNameAndItsSite(t *testing.T) {
 		t.Fatal(err)
 	}
 	held := filepath.Join(t.TempDir(), "held")
-	// What its inherited files 3 and 4 are
+	// What it inherited: the name's lock as file 3, and its site's among those after it (the
+	// process holds every build it fetched, earlier ones in the same process too)
 	vm := fakeVM(t, `for a; do [ "$prev" = --stop-file ] && stop=$a; prev=$a; done
 ino() { stat -L -c %i "$1" 2>/dev/null || stat -L -f %i "$1"; }
 r=; [ "$(ino /dev/fd/3)" = "$(ino "$(dirname "$stop")/.lock")" ] && r="$r name"
-[ "$(ino /dev/fd/4)" = "$(ino '`+site+`.lock')" ] && r="$r site"
+want=$(ino '`+site+`.lock')
+for f in /dev/fd/*; do [ "${f#/dev/fd/}" -ge 4 ] 2>/dev/null && [ "$(ino "$f")" = "$want" ] && { r="$r site"; break; }; done
 echo "$r" > '`+held+`'; echo "restored fake"
 while [ ! -e "$stop" ]; do sleep 0.01; done`)
 	if err := runNative(Options{Name: "held", Detach: true, LogDir: t.TempDir()}, site, vm, "none", nil); err != nil {
