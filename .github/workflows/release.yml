@@ -155,8 +155,12 @@ jobs:
 
   release:
     needs: [check, tools, tools-manifest, vm-darwin]
-    # tools-manifest is skipped when the image was published already
-    if: ${{ !failure() && !cancelled() && needs.check.outputs.tag }}
+    # tools-manifest is skipped when the image was published already; vm-darwin may fail or never
+    # get a runner, and the release goes out without the macOS snowglobe-vm
+    if: >-
+      ${{ always() && needs.check.outputs.tag && needs.check.result == 'success'
+      && needs.tools.result == 'success'
+      && (needs.tools-manifest.result == 'success' || needs.tools-manifest.result == 'skipped') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -182,7 +186,10 @@ jobs:
             mkdir -p "vm/linux_$arch" && docker cp "$id:/tools/snowglobe-vm" "vm/linux_$arch/snowglobe-vm" && docker rm "$id"
           done
 
+      # macOS runners don't always start: without its snowglobe-vm the release still goes out, the
+      # macOS snowglobe without one inside (it downloads the release's, which a Mac can attach after)
       - uses: actions/download-artifact@v7
+        continue-on-error: true
         with:
           name: vm-darwin
           path: vm/
@@ -217,8 +224,14 @@ jobs:
             os=${target%/*} arch=${target#*/}
             name="snowglobe_${TAG#v}_${os}_${arch}"
             mkdir -p "build/$name"
-            zstd -19 -q -f "vm/${os}_${arch}/snowglobe-vm" -o internal/native/embedded/snowglobe-vm.zst
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -tags embedvm \
+            tags=
+            if [ -f "vm/${os}_${arch}/snowglobe-vm" ]; then
+              zstd -19 -q -f "vm/${os}_${arch}/snowglobe-vm" -o internal/native/embedded/snowglobe-vm.zst
+              tags=embedvm
+            else
+              echo "::warning::no snowglobe-vm for ${os}/${arch}: its snowglobe carries none"
+            fi
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -tags "$tags" \
               -ldflags "-s -w -X main.version=$TAG" -o "build/$name/snowglobe" ./cmd/snowglobe
             cp LICENSE.md README.md "build/$name/"
             tar -czf "release/$name.tar.gz" -C build "$name"
