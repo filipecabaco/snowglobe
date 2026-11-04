@@ -166,11 +166,9 @@ func (s *Server) AddService(req Service) (*ServiceStatus, error) {
 	s.st.Services[svc.Name] = &svc
 	s.save()
 	s.mu.Unlock()
-	for i := 0; i < svc.Min; i++ {
-		if _, err := s.startReplica(svc.Name); err != nil {
-			s.RemoveService(svc.Name)
-			return nil, err
-		}
+	if err := s.topUp(svc.Name, svc.Min); err != nil {
+		s.RemoveService(svc.Name)
+		return nil, err
 	}
 	s.note("service.added", "service "+svc.Name, "on %s, %d to %d replicas of %s, idle %s, state %s", portList(svc.Ports), svc.Min, svc.Max,
 		svc.Template, time.Duration(svc.Idle), svc.State)
@@ -271,19 +269,40 @@ func (s *Server) pickReplica(name string) (*Machine, error) {
 		return m, nil
 	}
 	// Room for another: one start at a time, then look again (another may have started it)
-	s.svc.mu.Lock()
-	lock := s.svc.starting[name]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		s.svc.starting[name] = lock
-	}
-	s.svc.mu.Unlock()
+	lock := s.startLock(name)
 	lock.Lock()
 	defer lock.Unlock()
 	if m, ok := pick(); ok {
 		return m, nil
 	}
 	return s.startReplica(name)
+}
+
+// startLock is a service's lock for starting replicas: every start (for a connection, for its
+// minimum, when it is added) holds it and counts the replicas again under it, so that a replica
+// still starting (not yet listed) is never started twice.
+func (s *Server) startLock(name string) *sync.Mutex {
+	s.svc.mu.Lock()
+	defer s.svc.mu.Unlock()
+	lock := s.svc.starting[name]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.svc.starting[name] = lock
+	}
+	return lock
+}
+
+// topUp starts replicas of a service until it has min, counting them under its start lock.
+func (s *Server) topUp(name string, min int) error {
+	lock := s.startLock(name)
+	lock.Lock()
+	defer lock.Unlock()
+	for running := len(s.replicas(name)); running < min; running++ {
+		if _, err := s.startReplica(name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // startReplica starts one of a service's replicas: from its last save (state keep), else from
@@ -358,10 +377,9 @@ func (s *Server) scale() {
 			s.stopReplica(svc, m)
 			running--
 		}
-		for ; running < svc.Min; running++ {
-			if _, err := s.startReplica(svc.Name); err != nil {
+		if running < svc.Min {
+			if err := s.topUp(svc.Name, svc.Min); err != nil {
 				s.o.Logf("%v", err)
-				break
 			}
 		}
 	}
