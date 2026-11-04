@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>For agents and programs · snowglobe docs</title>
+  <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/agents/">
+  <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
+  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="snowglobe docs">
+  <meta property="og:description" content="Package a Docker image into a static site that runs it in the browser, then run it anywhere: in a page, headlessly, as one executable, or for an agent.">
+  <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/docs/agents/">
+  <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="../../fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../../base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <link rel="stylesheet" href="../docs.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Site">
+        <a href="../../#runs">Runs</a>
+        <a href="../" aria-current="page">Docs</a>
+        <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
+        <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <main class="doc">
+        <section id="agents" aria-labelledby="agents-title">
+          <h1 class="page-title" id="agents-title">For agents and programs</h1>
+          <p class="intro">A native instance takes jobs on the guest's root shell, whatever its app is, and a run
+            can be bounded, stopped from outside and recorded. For many machines at once, see
+            <a href="../../orchestration/#orchestration">Orchestration</a>.</p>
+
+          <h2 class="h3" id="sh-cp">Commands and files: sh and cp</h2>
+          <p>Pass the command to <code>snowglobe sh</code> as one quoted argument; its flags would otherwise be read as
+            snowglobe's own.</p>
+          <pre>snowglobe run dist/python --name box --detach --runtime native
+snowglobe sh box 'python3 -c "print(6*7)"'      <span class="dim"># its output, and its exit status as ours</span>
+snowglobe sh box --json 'ls /nope'
+snowglobe cp ./project box:/root/project        <span class="dim"># files and directories, either way</span>
+snowglobe cp box:/root/project/out ./out</pre>
+          <p>Each command runs with the app's environment in a fresh working directory; files elsewhere persist for
+            the instance's life. Out of time (300 s, or <code>--timeout S</code>), the command and everything it
+            started are killed (exit 124). What the guest sends back through <code>cp</code> can't write outside the
+            destination.</p>
+
+          <h2 class="h3" id="fork">A fresh machine per command: --fork</h2>
+          <p><code>--fork</code> makes a detached native instance a template. It restores once, and every
+            <code>snowglobe sh</code> on it runs in a copy of that machine, forked in milliseconds and sharing its
+            memory. Nothing one command does is seen by the next, so <code>sh</code> is all a fork instance takes:
+            <code>cp</code>, <code>exec</code>, <code>attach</code> and <code>mcp</code> need a machine that lasts.</p>
+          <pre>snowglobe run dist/python --name tpl --detach --runtime native --fork
+snowglobe sh tpl 'python3 untrusted.py'         <span class="dim"># many at once, each on its own copy</span>
+snowglobe stop tpl</pre>
+
+          <h2 class="h3" id="mcp">MCP</h2>
+          <p><code>snowglobe mcp &lt;site&gt;</code> serves a site to an agent as an MCP server over stdio: an isolated
+            Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code> tools. It
+            starts a native instance and stops it when the agent goes (<code>--keep</code> leaves it).</p>
+          <pre>claude mcp add sandbox -- snowglobe mcp https://filipecabaco.github.io/snowglobe/python/</pre>
+          <p><code>snowglobe mcp --daemon</code> serves the <a href="../../orchestration/#orchestration">daemon</a> instead: an agent lists,
+            builds and adds templates, runs commands on fresh forks or on machines it brings up, writes and reads their
+            files, submits fire-and-forget runs and reads their results, saves snapshots, puts services behind ports,
+            lists and checks ports, diffs and applies fleet files, and reads the daemon's status and events. <code>SNOWGLOBE_DAEMON</code> points it at a daemon on another host.</p>
+          <pre>claude mcp add snowglobe -- snowglobe mcp --daemon</pre>
+
+          <h2 class="h3" id="limits">Limits, stopping and logs</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Flag</th><th scope="col">What it does</th><th scope="col">Exit</th></tr></thead>
+              <tbody>
+                <tr><td><code>--max-runtime 30m</code></td><td>ends the run after this long, whatever it is doing</td><td>124</td></tr>
+                <tr><td><code>--stop-file PATH</code></td><td>ends the run once <code>PATH</code> exists: create it from anywhere</td><td>143</td></tr>
+                <tr><td><code>--log-dir DIR</code></td><td>durable <code>console.log</code>, <code>serial.log</code> and <code>events.jsonl</code></td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Either way the job running in the guest is killed first, and a <code>stop</code> event saying why goes to
+            the log. Logs are appended as things happen, so they survive a crash of the run, and rotate at 8 MiB. A
+            named native instance logs to <code>snowglobe/logs/&lt;name&gt;</code> in your cache directory unless
+            <code>--log-dir</code> says otherwise.</p>
+          <ul>
+            <li><code>console.log</code>: the app's terminal, byte for byte.</li>
+            <li><code>serial.log</code>: the guest's serial line, with the kernel's own messages (an OOM kill, a panic)
+              and the job shell.</li>
+            <li><code>events.jsonl</code>: one JSON object a line, each synced to disk: <code>start</code>,
+              <code>restored</code>, <code>job_start</code> (the command, its environment variables' names but never
+              their values, the timeout), <code>job_end</code> (status, <code>timed_out</code>, <code>killed</code>,
+              milliseconds, the first 64 KiB of output) and <code>stop</code> (its <code>reason</code>:
+              <code>stop-file</code>, <code>max-runtime</code>, <code>guest-stopped</code> or <code>end</code>, and the
+              exit status).</li>
+          </ul>
+          <p><strong>Kills reach everything a job started.</strong> A job runs in a session of its own in the guest;
+            when it runs out of time or the instance stops, it gets TERM, then KILL after 3 s, including whatever it
+            put in the background. A process that makes a session of its own (a daemon that <code>setsid</code>s) is
+            out of reach, as it would be anywhere.</p>
+          <p><strong>A job's result is its own word.</strong> A job's exit status comes back on a line marked with a
+            one-time value the host types only to the job's launcher, so a job that merely prints a fake result isn't
+            believed. A job runs as root in the guest, though: one determined to can still read that value from the
+            launcher's memory and forge its own status, output and <code>out/</code> files. That reaches only its own
+            result. The host still enforces the time limit, and if a job leaves the guest's shell busy, later jobs
+            fail with "the guest's shell is not answering" rather than run inside it.</p>
+        </section>
+
+        <nav class="pager" aria-label="Pages"><a class="prev" href="../running/"><small>Previous</small>Running outside a browser</a><a class="next" href="../orchestration/"><small>Next</small>Orchestration</a></nav>
+      </main>
+
+      <aside class="rail" aria-label="Docs">
+        <div class="side">
+          <div class="search" role="search">
+            <label class="sr" for="search">Search the docs</label>
+            <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-expanded="false">
+            <kbd aria-hidden="true">/</kbd>
+            <ol class="results" id="search-results" role="listbox" aria-label="Results" hidden></ol>
+          </div>
+          <nav class="toc" aria-label="Docs pages">
+            <ol>
+            <li><a href="../">Getting started</a></li>
+            <li><a href="../building/">Building a site</a></li>
+            <li><a href="../networking/">Networking</a></li>
+            <li><a href="../running/">Running outside a browser</a></li>
+            <li><a href="../agents/" aria-current="page">For agents and programs</a></li>
+            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../isolation/">Isolation</a></li>
+            <li><a href="../saving/">Saving your work</a></li>
+            <li><a href="../how-it-works/">How it works</a></li>
+            <li><a href="../reference/">CLI reference</a></li>
+            </ol>
+          </nav>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="../../llms.txt">llms.txt</a> · runs on <a href="https://github.com/filipecabaco/armless">armless</a>, which grew out of <a href="https://github.com/copy/v86">v86</a> by Fabian Hemmer and contributors</span>
+      <span><a href="../../">Back to the runs</a></span>
+    </footer>
+  </div>
+
+  <script src="../../theme.js"></script>
+  <script src="../docs.js"></script>
+</body>
+</html>

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Building a site · snowglobe docs</title>
+  <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/building/">
+  <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
+  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="snowglobe docs">
+  <meta property="og:description" content="Package a Docker image into a static site that runs it in the browser, then run it anywhere: in a page, headlessly, as one executable, or for an agent.">
+  <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/docs/building/">
+  <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="../../fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../../base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <link rel="stylesheet" href="../docs.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Site">
+        <a href="../../#runs">Runs</a>
+        <a href="../" aria-current="page">Docs</a>
+        <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
+        <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <main class="doc">
+        <section id="build" aria-labelledby="build-title">
+          <h1 class="page-title" id="build-title">Building a site</h1>
+          <p class="intro">A Dockerfile describes the app; labels in it, or flags, describe how snowglobe should
+            snapshot it.</p>
+
+          <h2 class="h3" id="dockerfile">Describe it in the Dockerfile</h2>
+          <p>The Python demo is this Dockerfile. Labels let an image describe itself, and flags override them:</p>
+          <pre>FROM alpine:3.24.2
+RUN apk add --no-cache python3
+CMD ["python3"]
+LABEL snowglobe.title="Python in the browser" \
+      snowglobe.ready=">>> " \
+      snowglobe.exercise='["import json, re, collections", "import asyncio; asyncio.run(asyncio.sleep(0))"]'</pre>
+
+          <h2 class="h3" id="ready">When the snapshot is taken</h2>
+          <p>snowglobe boots the image until the app is ready, then saves the whole machine. Visitors restore that
+            snapshot rather than booting Linux. Tell it what "ready" looks like with <code>--ready</code> (or
+            <code>snowglobe.ready</code>): text the app prints, usually its prompt. Without it, the app counts as
+            ready once its terminal has been quiet for 5 seconds.</p>
+          <p><code>--cmd</code> swaps the program without touching the image, and drops the image's
+            <code>ready</code> and <code>exercise</code> labels, which belonged to its own command.</p>
+
+          <h2 class="h3" id="exercises">Exercises and the warm pack</h2>
+          <p>The guest fetches its files on demand. To hide that, every site preloads a <code>warm.pack</code> in
+            the background, filled by measuring rather than guessing:</p>
+          <ul>
+            <li><strong>Boot reads:</strong> every file the guest read while booting.</li>
+            <li><strong>Exercise reads:</strong> after the snapshot, snowglobe types each <code>--exercise</code>
+              command into the app and records what it reads: the files a visitor's first commands would
+              otherwise wait for. A command is done once the app prints its prompt again and goes quiet.</li>
+            <li><strong>Pattern:</strong> anything matching <code>--warm REGEX</code>, for files no exercise
+              touches.</li>
+          </ul>
+          <p>Each build prints a breakdown and writes <code>warm-report.json</code>. An app used over the network
+            rather than its console can be warmed from real traffic instead:</p>
+          <pre>snowglobe run dist --name api --detach -p 5000:5000 --record-reads api-reads.json
+npm test                                    <span class="dim"># anything that talks to 127.0.0.1:5000</span>
+snowglobe stop api &amp;&amp; snowglobe warm dist api-reads.json</pre>
+
+          <h2 class="h3" id="cpus">CPUs and memory</h2>
+          <p><code>--memory MB</code> sets the guest's RAM (512 by default). <code>--cpus N</code> (1 to 8) gives it
+            more CPUs, each in its own Web Worker on shared memory, which helps programs that use them. Browsers only
+            allow that on a cross-origin isolated page, which a static host can't declare, so such a site ships a
+            small service worker that reloads the page once on the first visit, and it can't run inside another
+            page's frame. A build boots on at least 4 CPUs (<code>--build-cpus</code>) and takes the extra ones
+            offline before the snapshot.</p>
+
+          <h2 class="h3" id="image-services">Services in the image</h2>
+          <p>The guest boots with BusyBox's <code>init</code> and no service manager, so the app is ready seconds
+            after the kernel starts. Services an image enables for OpenRC do not start: start them from the
+            command, as the Postgres and Elixir examples' start scripts do. Slow first-time setup (an
+            <code>initdb</code>, migrations) belongs in a Dockerfile <code>RUN</code>, where it runs at native speed
+            instead of in emulation.</p>
+
+          <h2 class="h3" id="without-docker">Building without Docker</h2>
+          <p><code>--builder native</code> (or <code>SNOWGLOBE_BUILDER=native</code>) builds from an image reference,
+            pulled from its registry, or an image archive (<code>docker save</code>, or an OCI layout from buildah,
+            kaniko or anything else). Nothing runs at build time either way: the image's layers are flattened, the
+            prebuilt kernel and boot files are added on top, and <code>snowglobe-vm</code> boots and snapshots it on
+            your machine.</p>
+          <pre>snowglobe build python:3.13-alpine --builder native --ready '>>> '
+docker save my-app:latest -o my-app.tar         <span class="dim"># on a machine with a builder</span>
+snowglobe build my-app.tar --builder native     <span class="dim"># anywhere else</span></pre>
+
+          <h2 class="h3" id="hosting">Hosting several sites, and installing them</h2>
+          <p><code>snowglobe pool &lt;dir&gt;</code> lets every site under a directory share one blob store. Blobs are
+            named by content, so sites built on the same base share many, and a visitor's second site reuses what
+            their browser cached.</p>
+          <p><code>snowglobe pwa &lt;site&gt;</code> makes a site an installable app that keeps working offline once it
+            has run: a manifest, icons and a service worker caching the page, the machine and every file the run
+            fetched. Run it after <code>pool</code>.</p>
+        </section>
+
+        <nav class="pager" aria-label="Pages"><a class="prev" href="../"><small>Previous</small>Getting started</a><a class="next" href="../networking/"><small>Next</small>Networking</a></nav>
+      </main>
+
+      <aside class="rail" aria-label="Docs">
+        <div class="side">
+          <div class="search" role="search">
+            <label class="sr" for="search">Search the docs</label>
+            <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-expanded="false">
+            <kbd aria-hidden="true">/</kbd>
+            <ol class="results" id="search-results" role="listbox" aria-label="Results" hidden></ol>
+          </div>
+          <nav class="toc" aria-label="Docs pages">
+            <ol>
+            <li><a href="../">Getting started</a></li>
+            <li><a href="../building/" aria-current="page">Building a site</a></li>
+            <li><a href="../networking/">Networking</a></li>
+            <li><a href="../running/">Running outside a browser</a></li>
+            <li><a href="../agents/">For agents and programs</a></li>
+            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../isolation/">Isolation</a></li>
+            <li><a href="../saving/">Saving your work</a></li>
+            <li><a href="../how-it-works/">How it works</a></li>
+            <li><a href="../reference/">CLI reference</a></li>
+            </ol>
+          </nav>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="../../llms.txt">llms.txt</a> · runs on <a href="https://github.com/filipecabaco/armless">armless</a>, which grew out of <a href="https://github.com/copy/v86">v86</a> by Fabian Hemmer and contributors</span>
+      <span><a href="../../">Back to the runs</a></span>
+    </footer>
+  </div>
+
+  <script src="../../theme.js"></script>
+  <script src="../docs.js"></script>
+</body>
+</html>

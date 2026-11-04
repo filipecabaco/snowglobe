@@ -32,8 +32,25 @@
   </script>
   <style>
 
-    /* The page: main column for runs, a rail on the right for the live ledger */
-    .layout { display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); column-gap: calc(var(--gap) * 2); }
+    /* The runs: a list of them beside one panel, the selected run */
+    .runs { display: grid; grid-template-columns: minmax(220px, 3fr) minmax(0, 9fr); column-gap: calc(var(--gap) * 2); border-top: 1px solid var(--ink); padding-top: 28px; }
+    .runs-side { display: flex; flex-direction: column; gap: 32px; }
+    .run-list { display: flex; flex-direction: column; }
+    .run-tab { all: unset; box-sizing: border-box; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: baseline;
+      padding: 12px 0 12px 14px; border-bottom: 1px solid var(--rule); cursor: pointer; position: relative; }
+    .run-tab:first-child { border-top: 1px solid var(--rule); }
+    .run-tab::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px; background: transparent; }
+    .run-tab[aria-selected="true"]::before { background: var(--ink); }
+    .run-tab .tab-name { font-weight: 550; font-size: 16px; }
+    .run-tab[aria-selected="true"] .tab-name { font-weight: 650; }
+    .run-tab .tab-size { color: var(--ink-2); font-size: 13px; }
+    .run-tab .tab-what { grid-column: 1 / -1; color: var(--ink-2); font-size: 13.5px; line-height: 1.35; }
+    .run-tab .tab-live { display: none; width: 8px; height: 8px; border-radius: 50%; margin-left: 8px; vertical-align: .1em; background: var(--restoring); }
+    .run-tab[data-state="loading"] .tab-live { display: inline-block; }
+    .run-tab[data-state="ready"] .tab-live { display: inline-block; background: var(--signal); }
+    .run-tab:hover .tab-name { text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
+    .run-tab:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; }
+    .runs-main { min-width: 0; }
 
     .hero { padding: clamp(32px, 4.5vw, 64px) 0 clamp(28px, 3.5vw, 48px); }
     h1 { font-size: clamp(2.75rem, 4.3vw, 4rem); line-height: .95; letter-spacing: -.035em; font-weight: 620; margin: 0 0 28px; max-width: 26ch; text-wrap: balance; }
@@ -49,7 +66,7 @@
     .install-more { font-size: 14px; color: var(--ink-2); margin: 8px 0 0; }
 
     /* A run */
-    .run { padding: 40px 0 72px; border-top: 1px solid var(--ink); scroll-margin-top: 16px; }
+    .run { padding: 0 0 8px; scroll-margin-top: 16px; }
     .run-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px var(--gap); margin-bottom: 24px; }
     .run h2 { font-size: clamp(2rem, 3.4vw, 3rem); line-height: 1; letter-spacing: -.03em; font-weight: 600; margin: 0 0 10px; }
     .stack { color: var(--ink-2); margin: 0; font-size: 16px; }
@@ -97,17 +114,25 @@
     .section > h2 { font-size: clamp(2.4rem, 4.6vw, 4.25rem); line-height: .98; letter-spacing: -.035em; font-weight: 620; margin: 0 0 20px; max-width: 14ch; }
     .section > p { max-width: 38em; margin: 0 0 40px; color: var(--ink-2); font-size: 18px; }
 
-    /* Steps of using the CLI */
+    /* Steps of using the CLI: tabs once the script has run, every step in turn without it */
     .steps { border-top: 1px solid var(--ink); }
+    .step-tabs { display: flex; gap: 4px 28px; flex-wrap: wrap; border-bottom: 1px solid var(--rule); }
+    .step-tabs[hidden] { display: none; }
+    .step-tab { all: unset; cursor: pointer; padding: 14px 0 12px; font: 550 16px/1 var(--sans); color: var(--ink-2); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .step-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+    .step-tab:hover { color: var(--ink); }
+    .step-tab:focus-visible { outline: 2px solid var(--signal); outline-offset: 4px; }
     .step { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 9fr); gap: var(--gap); padding: 28px 0; border-bottom: 1px solid var(--rule); }
+    .steps.tabbed .step { grid-template-columns: minmax(0, 1fr); border-bottom: 0; min-height: 360px; }
+    .step[hidden], .run[hidden] { display: none; }
+    .steps.tabbed .step h3 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
     .step h3 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
     .step p { margin: 0 0 16px; max-width: 40em; }
     .ref-more { margin: 40px 0 0; max-width: 40em; }
 
 
-    /* The ledger: a live table of the visitor's own runs, in the right rail */
-    .rail { position: relative; }
-    .ledger { position: sticky; top: 24px; margin-top: clamp(32px, 4.5vw, 64px); padding-top: 14px; border-top: 1px solid var(--ink); }
+    /* The ledger: a live table of the visitor's own runs, under the list of runs */
+    .ledger { padding-top: 14px; border-top: 1px solid var(--ink); }
     .ledger-head { display: flex; justify-content: space-between; align-items: baseline; }
     .ledger h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
     .ledger .count { color: var(--ink-2); font-size: 14px; }
@@ -135,9 +160,16 @@
     @keyframes power-on { from { opacity: 0; filter: blur(10px); } }
 
     @media (max-width: 1080px) {
-      .layout { grid-template-columns: minmax(0, 1fr); }
-      .rail { order: -1; }
-      .ledger { position: static; margin-top: 0; }
+      /* One column: the runs as a strip of names above the panel */
+      .runs { grid-template-columns: minmax(0, 1fr); row-gap: 24px; }
+      .run-list { flex-direction: row; overflow-x: auto; gap: 8px; padding-bottom: 6px; scrollbar-width: thin; }
+      .run-tab { display: inline-flex; flex: none; padding: 9px 14px; border: 1px solid var(--rule); border-radius: 999px; gap: 6px; align-items: center; }
+      .run-tab:first-child { border-top: 1px solid var(--rule); }
+      .run-tab::before, .run-tab .tab-what, .run-tab .tab-size { display: none; }
+      .run-tab[aria-selected="true"] { border-color: var(--ink); background: var(--ink); color: var(--on-ink); }
+      .run-tab .tab-name { font-size: 15px; }
+      .run-tab .tab-live { margin-left: 0; }
+      .runs-side { order: 0; }
     }
     @media (max-width: 720px) {
       body { font-size: 16px; }
@@ -147,6 +179,7 @@
       .panel { height: 380px; }
       dl.specs { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 20px; }
       .step { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+      .step-tabs { flex-wrap: nowrap; overflow-x: auto; gap: 22px; scrollbar-width: none; }
       /* Each flag as its own block: flag and label on one line, what it sets below */
       /* Compare: each run as a block of labelled figures, so nothing clips at rest */
       #summary thead { display: none; }
@@ -156,7 +189,6 @@
       #summary td:first-child { grid-column: 1 / -1; font-weight: 600; font-size: 17px; }
       #summary td[data-label]::before { content: attr(data-label) " "; color: var(--ink-2); font-size: 13px; }
       /* The ledger becomes a sheet along the bottom edge, one line until opened */
-      .rail { order: 0; }
       .ledger { position: fixed; z-index: 10; top: auto; left: 0; right: 0; bottom: 0; margin: 0; padding: 0 var(--pad) env(safe-area-inset-bottom, 0px);
         background: var(--bg); border-top: 1px solid var(--ink); max-height: 62vh; overflow: auto; box-shadow: 0 -12px 32px -18px var(--sheet-shadow); }
       .ledger .ledger-toggle { display: flex; width: 100%; justify-content: space-between; align-items: center; height: 56px; padding: 0;
@@ -201,8 +233,7 @@
       </nav>
     </header>
 
-    <div class="layout">
-      <main>
+    <main>
         <section class="hero">
           <h1>Real programs, sandboxed in your&nbsp;browser.</h1>
           <p class="lede">Each run below is a whole Linux machine, packaged from a Dockerfile and emulated
@@ -222,7 +253,24 @@
           </div>
         </section>
 
-        <div id="runs"></div>
+        <section id="runs" aria-label="Runs">
+          <div class="runs">
+            <div class="runs-side">
+              <div class="run-list" id="run-list" role="tablist" aria-label="Runs" aria-orientation="vertical"></div>
+              <div class="ledger" id="ledger" aria-labelledby="ledger-title">
+                <button class="ledger-toggle" type="button" aria-expanded="false" aria-controls="ledger-body">
+                  <span>Your runs</span><span class="count" data-count>None running</span>
+                </button>
+                <div class="ledger-body" id="ledger-body">
+                  <div class="ledger-head"><h2 id="ledger-title">Your runs</h2><span class="count" data-count>None running</span></div>
+                  <p class="empty" id="ledger-empty">Nothing running yet. Start a run here or in a new window; it reports back to this list while it lives.</p>
+                  <ol id="ledger-list" aria-live="polite"></ol>
+                </div>
+              </div>
+            </div>
+            <div class="runs-main" id="runs-main"></div>
+          </div>
+        </section>
 
         <section class="section" aria-labelledby="compare-title">
           <h2 id="compare-title">Compare the runs</h2>
@@ -243,7 +291,8 @@
             Docker, or with no Docker at all from an image in a registry or a saved archive, and the result is
             a folder of static files you can host anywhere.</p>
 
-          <div class="steps">
+          <div class="steps" id="steps">
+            <div class="step-tabs" role="tablist" aria-label="Make your own" hidden></div>
             <div class="step">
               <h3>Install</h3>
               <div><pre>$ curl -fsSL https://filipecabaco.github.io/snowglobe/install.sh | sh
@@ -365,7 +414,7 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
                   and forks machines from it in tens of milliseconds, each sharing the memory it doesn't write. Services
                   start machines on a connection and scale to zero when idle, and a fleet file says what should run.
                   Instances outside the daemon share their snapshot's memory too, mapped from one read-only image.
-                  <a href="docs/#orchestration">Orchestration in the docs</a> covers all of it.</p>
+                  <a href="docs/orchestration/">Orchestration in the docs</a> covers all of it.</p>
 <pre><span class="dim"># a template, and machines forked from it</span>
 $ snowglobe daemon &amp;
 $ snowglobe template add dist/api --name api
@@ -380,25 +429,11 @@ $ snowglobe apply</pre>
             </div>
           </div>
 
-          <p class="ref-more">Every command, flag, label and setting is in the <a href="docs/#reference">docs</a>,
+          <p class="ref-more">Every command, flag, label and setting is in the <a href="docs/reference/">docs</a>,
             with guides to building, networking, running headlessly, driving it from an agent and orchestrating
             machines.</p>
         </section>
-      </main>
-
-      <aside class="rail">
-        <div class="ledger" id="ledger" aria-labelledby="ledger-title">
-          <button class="ledger-toggle" type="button" aria-expanded="false" aria-controls="ledger-body">
-            <span>Your runs</span><span class="count" data-count>None running</span>
-          </button>
-          <div class="ledger-body" id="ledger-body">
-            <div class="ledger-head"><h2 id="ledger-title">Your runs</h2><span class="count" data-count>None running</span></div>
-            <p class="empty" id="ledger-empty">Nothing running yet. Start a run here or in a new window; it reports back to this list while it lives.</p>
-            <ol id="ledger-list" aria-live="polite"></ol>
-          </div>
-        </div>
-      </aside>
-    </div>
+    </main>
 
     <footer>
       <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="llms.txt">llms.txt</a> · runs on <a href="https://github.com/filipecabaco/armless">armless</a>, which grew out of <a href="https://github.com/copy/v86">v86</a> by Fabian Hemmer and contributors</span>
@@ -408,7 +443,7 @@ $ snowglobe apply</pre>
 
   <template id="run-template">
     <article class="run">
-      <div class="run-head">
+      <div class="run-head" role="presentation">
         <div><h2 class="title"></h2><p class="stack"></p></div>
         <div class="controls">
           <button class="btn go play" type="button" aria-pressed="false">Run here</button>
@@ -447,16 +482,16 @@ $ snowglobe apply</pre>
   <script src="xterm/xterm.js" defer></script>
   <script type="module">
     const demos = [
-      { dir: "supabase", name: "Supabase", stack: "The Supabase CLI's native stack (Postgres, PostgREST and Auth as plain processes, no Docker) on 2 CPUs, and a small notes app on it, run by the Bun inside the CLI: Auth for users, the Data API to store and search notes, row level security keeping each user's notes their own.", show: [0, 1, 2, 3, 4, 5], command: "bash, with the stack running and notes on the PATH" },
-      { dir: "iex", name: "Elixir IEx", stack: "Just IEx, from Alpine's Elixir and Erlang packages: processes, tasks and docs, in a tab.", show: [0, 2, 3, 4] },
-      { dir: "postgres", name: "PostgreSQL", stack: "A Postgres 18 server from Alpine's packages, with psql attached and a small planets table to query.", show: [0, 1, 2, 3] },
-      { dir: "elixir", name: "Elixir + Postgres", stack: "A Mix release with Ecto and Postgrex, talking to a PostgreSQL 18 server running in the same tab.", show: [0, 1, 2, 3] },
-      { dir: "python", name: "Python + Rich", stack: "CPython 3.14 with Rich rendering tables, syntax and tracebacks.", show: [0, 1, 2, 6] },
-      { dir: "typescript", name: "TypeScript + Zod", stack: "Node 24 and tsx, with Zod validating live HTTPS responses; fetch() and WebSockets go out through your browser.", show: [0, 1, 6, 7, 8] },
-      { dir: "go", name: "Go + Bubble Tea", stack: "An interactive Game of Life built with Bubble Tea and Lip Gloss.", show: "screen" },
-      { dir: "rust", name: "Rust + clap", stack: "jtab, a CLI rendering JSON as tables: clap, serde_json, comfy-table.", show: [1, 2], command: "sh, with jtab on the PATH and sample data in ./data" },
-      { dir: "java", name: "Java + Gson", stack: "jshell on OpenJDK 11 with Gson on the classpath.", show: [0, 1, 2, 3] },
-      { dir: "curl", name: "curl + jq", stack: "Plain Alpine packages in a shell, online through your browser: curl against live APIs, piped into jq.", show: [0, 1, 2, 3], command: "sh, with curl and jq from Alpine's packages" },
+      { dir: "supabase", tag: "Postgres, PostgREST and Auth, and a notes app", name: "Supabase", stack: "The Supabase CLI's native stack (Postgres, PostgREST and Auth as plain processes, no Docker) on 2 CPUs, and a small notes app on it, run by the Bun inside the CLI: Auth for users, the Data API to store and search notes, row level security keeping each user's notes their own.", show: [0, 1, 2, 3, 4, 5], command: "bash, with the stack running and notes on the PATH" },
+      { dir: "iex", tag: "Erlang and Elixir from Alpine", name: "Elixir IEx", stack: "Just IEx, from Alpine's Elixir and Erlang packages: processes, tasks and docs, in a tab.", show: [0, 2, 3, 4] },
+      { dir: "postgres", tag: "A Postgres 18 server, with psql", name: "PostgreSQL", stack: "A Postgres 18 server from Alpine's packages, with psql attached and a small planets table to query.", show: [0, 1, 2, 3] },
+      { dir: "elixir", tag: "Ecto and Postgrex on Postgres 18", name: "Elixir + Postgres", stack: "A Mix release with Ecto and Postgrex, talking to a PostgreSQL 18 server running in the same tab.", show: [0, 1, 2, 3] },
+      { dir: "python", tag: "CPython 3.14 with Rich", name: "Python + Rich", stack: "CPython 3.14 with Rich rendering tables, syntax and tracebacks.", show: [0, 1, 2, 6] },
+      { dir: "typescript", tag: "Node 24, tsx and Zod, online", name: "TypeScript + Zod", stack: "Node 24 and tsx, with Zod validating live HTTPS responses; fetch() and WebSockets go out through your browser.", show: [0, 1, 6, 7, 8] },
+      { dir: "go", tag: "Game of Life with Bubble Tea", name: "Go + Bubble Tea", stack: "An interactive Game of Life built with Bubble Tea and Lip Gloss.", show: "screen" },
+      { dir: "rust", tag: "jtab: JSON as tables, with clap", name: "Rust + clap", stack: "jtab, a CLI rendering JSON as tables: clap, serde_json, comfy-table.", show: [1, 2], command: "sh, with jtab on the PATH and sample data in ./data" },
+      { dir: "java", tag: "jshell with Gson", name: "Java + Gson", stack: "jshell on OpenJDK 11 with Gson on the classpath.", show: [0, 1, 2, 3] },
+      { dir: "curl", tag: "A shell online through your browser", name: "curl + jq", stack: "Plain Alpine packages in a shell, online through your browser: curl against live APIs, piped into jq.", show: [0, 1, 2, 3], command: "sh, with curl and jq from Alpine's packages" },
     ];
 
     const $ = (sel, root = document) => root.querySelector(sel);
@@ -487,9 +522,52 @@ $ snowglobe apply</pre>
       // those runs open in a window of their own
       play.addEventListener("click", (event) => (entry.cpus > 1 ? openWindow(event, demo) : toggleInline(entry)));
       $(".panel", node).style.viewTransitionName = "panel-" + demo.dir;
-      $("#runs").append(node);
+      node.setAttribute("role", "tabpanel");
+      node.setAttribute("aria-labelledby", "tab-" + demo.dir);
+      node.hidden = true;
+      $("#runs-main").append(node);
+      // Its entry in the list: name, what it is, and its live state
+      entry.tab = el("button", { className: "run-tab", type: "button", id: "tab-" + demo.dir },
+        el("span", { className: "tab-name" }, demo.name, el("span", { className: "tab-live", ariaHidden: "true" })),
+        el("span", { className: "tab-size" }),
+        el("span", { className: "tab-what", textContent: demo.tag || "" }));
+      entry.tab.setAttribute("role", "tab");
+      entry.tab.setAttribute("aria-controls", demo.dir);
+      entry.tab.addEventListener("click", () => select(demo.dir, true));
+      $("#run-list").append(entry.tab);
       return entry;
     });
+
+    // One run shows at a time; the address keeps which (#python)
+    function select(dir, user) {
+      const chosen = entries.find((e) => e.demo.dir === dir) || entries[0];
+      for (const e of entries) {
+        const on = e === chosen;
+        e.node.hidden = !on;
+        e.tab.setAttribute("aria-selected", String(on));
+        e.tab.tabIndex = on ? 0 : -1;
+      }
+      if (user) history.replaceState(null, "", "#" + chosen.demo.dir);
+      // On narrow screens the list is a strip: bring the chosen one into it, without moving the page
+      const strip = $("#run-list");
+      if (strip.scrollWidth > strip.clientWidth) {
+        const left = chosen.tab.offsetLeft - strip.offsetLeft - (strip.clientWidth - chosen.tab.offsetWidth) / 2;
+        strip.scrollTo({ left: Math.max(0, left), behavior: user && !reduceMotion ? "smooth" : "auto" });
+      }
+      return chosen;
+    }
+    $("#run-list").addEventListener("keydown", (e) => {
+      const i = entries.findIndex((x) => x.tab === document.activeElement);
+      if (i < 0) return;
+      const next = { ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: entries.length - 1 }[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      const t = entries[(next + entries.length) % entries.length];
+      select(t.demo.dir, true);
+      t.tab.focus();
+    });
+    select(location.hash.slice(1), false);
+    addEventListener("hashchange", () => entries.some((e) => e.demo.dir === location.hash.slice(1)) && select(location.hash.slice(1), false));
 
     // Summary rows are created up front so they follow the page order, whichever data loads first
     const summaryRows = new Map(demos.map((d) => {
@@ -516,6 +594,7 @@ $ snowglobe apply</pre>
           $(".play", node).hidden = true;
           $(".window", node).classList.add("go");
         }
+        $(".tab-size", entry.tab).textContent = mb(run.snapshot_bytes) + " MB";
         spec("Snapshot to restore", mb(run.snapshot_bytes), "MB");
         spec("Ready at build", run.boot_seconds.toFixed(1), "s");
         spec("Preloaded", mb(pre), "MB");
@@ -656,7 +735,7 @@ $ snowglobe apply</pre>
         play.setAttribute("aria-pressed", "true");
         playing = entry;
       });
-      if (!wasPlaying) entry.node.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+      if (!wasPlaying) entry.node.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
     }
 
     // ── The ledger: every run on this origin reports in over a BroadcastChannel ─────────
@@ -750,8 +829,9 @@ $ snowglobe apply</pre>
               actions.append(Object.assign(el("button", { type: "button", textContent: "Show" }), {
                 onclick: () => {
                   if (!run.embedded) return item.win.focus();
+                  if (demo) select(demo.dir, true);
                   const node = demo && document.getElementById(demo.dir);
-                  node?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+                  node?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
                   node?.querySelector(".panel iframe")?.focus();
                 },
               }));
@@ -766,12 +846,57 @@ $ snowglobe apply</pre>
           }
         }
       }
+      // Each run's entry in the list shows whether it runs (here or in a window)
+      for (const e of entries) {
+        let st = "";
+        for (const item of ledger.values()) {
+          if (demoFor(item.run.path) !== e.demo) continue;
+          const s = Date.now() - item.lastSeen > 7000 ? "lost" : item.run.state;
+          if (s === "ready") st = "ready";
+          else if (s === "loading" && st !== "ready") st = "loading";
+        }
+        e.tab.dataset.state = st;
+      }
       $("#ledger-empty").hidden = ledger.size > 0;
       document.querySelectorAll("[data-count]").forEach((c) => (c.textContent = live ? `${live} running` : "None running"));
       document.documentElement.classList.toggle("live-any", live > 0);
     }
     setInterval(render, 1000);
 
+
+    // Make your own: its steps as tabs (each step stays readable without the script)
+    {
+      const steps = [...document.querySelectorAll("#steps .step")];
+      const strip = $("#steps .step-tabs");
+      const tabs = steps.map((step, i) => {
+        const name = $("h3", step).textContent;
+        const id = "step-" + name.toLowerCase();
+        step.id = id;
+        step.setAttribute("role", "tabpanel");
+        const tab = el("button", { className: "step-tab", type: "button", textContent: name, id: id + "-tab" });
+        tab.setAttribute("role", "tab");
+        tab.setAttribute("aria-controls", id);
+        step.setAttribute("aria-labelledby", id + "-tab");
+        tab.addEventListener("click", () => show(i));
+        strip.append(tab);
+        return tab;
+      });
+      function show(i) {
+        steps.forEach((s, j) => { s.hidden = j !== i; tabs[j].setAttribute("aria-selected", String(j === i)); tabs[j].tabIndex = j === i ? 0 : -1; });
+      }
+      strip.addEventListener("keydown", (e) => {
+        const i = tabs.indexOf(document.activeElement);
+        const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+        if (i < 0 || next === undefined) return;
+        e.preventDefault();
+        const n = (next + tabs.length) % tabs.length;
+        show(n);
+        tabs[n].focus();
+      });
+      strip.hidden = false;
+      $("#steps").classList.add("tabbed");
+      show(0);
+    }
 
     $(".ledger-toggle").addEventListener("click", (event) => {
       const open = $("#ledger").classList.toggle("open");

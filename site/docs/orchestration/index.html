@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orchestration · snowglobe docs</title>
+  <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/orchestration/">
+  <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
+  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="snowglobe docs">
+  <meta property="og:description" content="Package a Docker image into a static site that runs it in the browser, then run it anywhere: in a page, headlessly, as one executable, or for an agent.">
+  <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/docs/orchestration/">
+  <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="../../fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../../base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <link rel="stylesheet" href="../docs.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Site">
+        <a href="../../#runs">Runs</a>
+        <a href="../" aria-current="page">Docs</a>
+        <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
+        <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <main class="doc">
+        <section id="orchestration" aria-labelledby="orchestration-title">
+          <h1 class="page-title" id="orchestration-title">Orchestration</h1>
+          <p class="intro">Many machines from one site, without KVM, root or Docker: <code>snowglobe daemon</code> restores
+            sites once as templates and forks machines from them in milliseconds, keeps snapshots of running ones,
+            puts services behind ports that scale to zero, holds them all to a memory budget, and applies whole
+            fleets from a file.</p>
+
+          <h2 class="h3" id="ui">In a browser: snowglobe ui</h2>
+          <p><code>snowglobe ui</code> shows the daemon in your browser: the last hour on one time axis (memory
+            against the budget, machines, jobs and their latency, what happened), a lane per template with each
+            machine's life as a bar, and beside it whatever you select, with its terminal one click away. It
+            also runs commands on fresh forks, builds sites from a directory, an image or a Dockerfile you
+            write there, and manages templates, machines, services, snapshots and ports.</p>
+          <pre>snowglobe ui                                     <span class="dim"># opens http://127.0.0.1:7777/?token=…</span></pre>
+          <p>It listens on 127.0.0.1 only. The link it prints carries a session token that becomes a cookie, and
+            every request needs it, so other pages you visit can't reach the daemon through it. The terminal is
+            <a href="https://github.com/coder/ghostty-web">ghostty-web</a>, Ghostty's terminal compiled to
+            WebAssembly, joined to the machine's console over a WebSocket.</p>
+
+          <h2 class="h3" id="daemon">Templates and machines: the daemon</h2>
+          <p><code>snowglobe daemon</code> keeps templates (a site restored once) and the machines forked from them.
+            <code>snowglobe up</code> forks a machine from a template in tens of milliseconds. The machine shares
+            the template's memory, lasts until it is stopped, keeps what it writes, and has its ports forwarded
+            by the daemon (its site needs a network for that). <code>sh</code>, <code>cp</code>, <code>exec</code>, <code>attach</code>,
+            <code>ps</code> and <code>stop</code> reach the daemon's machines as they reach instances.</p>
+          <pre>snowglobe daemon &amp;
+snowglobe template add dist/api --name api       <span class="dim"># the python example built with --network fetch</span>
+snowglobe up api --name web -p 8080:8000 --label app=web
+snowglobe up api --name worker                   <span class="dim"># another machine, its own state</span>
+snowglobe sh web 'python3 -m http.server 8000 &amp;'
+snowglobe ps
+snowglobe stop worker
+snowglobe template rm api                        <span class="dim"># and its machines</span></pre>
+          <p>The API is HTTP/JSON on a Unix socket in the user cache (<code>curl --unix-socket</code> works):
+            <code>/v1/templates</code>, <code>/v1/machines</code>, <code>/v1/machines/{name}/jobs</code> and
+            <code>/v1/templates/{name}/jobs</code> (a job on a fresh fork). <code>--listen ADDR --token-file F</code>
+            also serves it over TCP, to requests bearing the token, and <code>SNOWGLOBE_DAEMON=http://HOST:PORT</code>
+            with <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it. A daemon started again takes back the
+            templates and machines that are still running.</p>
+          <p>It also builds: <code>POST /v1/builds</code> takes a directory with a Dockerfile (by its full path), an
+            image reference, or a Dockerfile's text, runs <code>snowglobe build</code> (Docker when it's there; an
+            image builds natively without it), and makes the result a template. <code>/v1/builds/{id}/log</code>
+            streams its output (<code>?follow=1</code>). A machine's terminal is a WebSocket at
+            <code>/v1/machines/{name}/attach?rows=R&amp;cols=C</code>. <code>/v1/metrics</code> keeps a sample every
+            5 s for the last hour (memory, machines, replicas, jobs and their latency), and <code>/metrics</code>
+            serves the same in Prometheus's format.</p>
+
+          <h2 class="h3" id="submit">Fire and forget: submit and runs</h2>
+          <p><code>snowglobe submit</code> runs a command once on a fresh fork of a template and returns at once
+            with the run's id. The fork is thrown away when the command ends; its output and exit status are kept
+            for <code>snowglobe runs</code>. <code>--wait</code> waits for the end and exits with the command's
+            status. The API is <code>POST /v1/runs</code> and <code>GET /v1/runs/{id}</code>.</p>
+          <pre>id=$(snowglobe submit py 'python3 report.py' --env DAY=monday --timeout 600)
+snowglobe runs                                   <span class="dim"># every run, newest first</span>
+snowglobe runs $id --wait                        <span class="dim"># its output; exits with its status</span></pre>
+
+          <h2 class="h3" id="snapshots">Snapshots of running machines</h2>
+          <p><code>snowglobe snapshot save</code> saves a machine whole: its memory, its running processes and the
+            files it wrote. Machines start from it again with <code>up --snapshot</code>, or it becomes a template
+            of its own with <code>template add --snapshot</code>. Set a machine up once (dependencies installed, a
+            server started, data loaded), then fork as many as you want, already set up.</p>
+          <pre>snowglobe up api --name base
+snowglobe sh base 'pip install httpx &amp;&amp; python3 -m http.server 8000 &amp;'
+snowglobe snapshot save base --name ready        <span class="dim"># tens of milliseconds</span>
+snowglobe template add --snapshot ready --name api-ready
+snowglobe up api-ready -p 8000                    <span class="dim"># installed, its server already listening</span>
+snowglobe snapshot ls
+snowglobe snapshot rm ready</pre>
+
+          <h2 class="h3" id="services">Services and scale to zero</h2>
+          <p>A service puts a template's machines behind host ports that the daemon holds. Each connection (or
+            <code>snowglobe sh &lt;service&gt;</code>) goes to one of its replicas, started on demand.
+            With <code>--min 0</code> it scales to zero: replicas with no connection or job for <code>--idle</code>
+            stop, and the next request forks one again. Made of a snapshot whose server was already listening, a
+            service at zero answers its first request in about 20 ms. <code>--state keep</code> saves the replica
+            before it stops, and the next one carries on from that save (one replica); <code>--state
+            discard</code>, the default, starts every replica from the template.</p>
+          <pre>snowglobe service add web --template api-ready -p 8080:8000 --min 0 --max 3 --idle 5m --concurrency 10
+snowglobe service add db --template pg --state keep --idle 10m
+snowglobe service ls                              <span class="dim"># replicas running now, of each</span>
+snowglobe service rm web</pre>
+          <p>A replica takes <code>--concurrency</code> connections before another is started, up to
+            <code>--max</code>; under <code>--min</code>, replicas that stop are replaced. The API is
+            <code>/v1/services</code> and <code>/v1/services/{name}/jobs</code>.</p>
+
+          <h2 class="h3" id="ports-map">Ports</h2>
+          <p><code>snowglobe ports</code> lists every host port the daemon holds and where it leads: the machine or
+            service, the guest port and whether it is open now (a service's stays open at zero).
+            <code>snowglobe ports check</code> says whether a host port is free, or which machine, service or other
+            program holds it, and exits 1 when it is taken. The UI shows the same, and checks the ports you type
+            as you type them. The API is <code>/v1/ports</code> and <code>/v1/ports/check?port=N&amp;ip=IP</code>.</p>
+          <pre>snowglobe ports
+<span class="dim">HOST             GUEST  KIND     NAME  TEMPLATE  STATE</span>
+<span class="dim">127.0.0.1:18081  8000   machine  web   curl      open</span>
+<span class="dim">127.0.0.1:18090  8000   service  api   curl      at zero</span>
+snowglobe ports check 8080                       <span class="dim"># 127.0.0.1:8080 is free</span></pre>
+
+          <h2 class="h3" id="limits-lifecycle">Limits and lifecycle</h2>
+          <p><code>snowglobe daemon --memory 8G</code> caps what its template servers and machines take together.
+            A machine that doesn't fit waits up to <code>--wait</code> (30 s) for room, then is refused with the
+            reason. Linux measures each process's proportional share; macOS its resident memory, which counts
+            pages shared with the template in full, so the cap is reached sooner. No cap unless asked.
+            <code>up --ttl 1h</code> stops a machine after that long, whatever it is doing.
+            <code>template add --idle 30m</code> stops a template's server after that long without a machine; the
+            next <code>up</code> (or job) restores it first, in about a second.</p>
+          <pre>snowglobe daemon --memory 8G --wait 30s &amp;
+snowglobe template add dist/python --name py --idle 30m
+snowglobe up py --ttl 1h</pre>
+
+          <h2 class="h3" id="events-top">Events and top</h2>
+          <p><code>snowglobe top</code> shows the daemon live: memory against its budget, templates (awake or
+            asleep), services with their replicas and open connections, machines with what each takes and when it
+            stops, and the latest events. <code>snowglobe events</code> streams those events (machines up and
+            stopped, replicas started and stopped, templates asleep and awake, snapshots, admissions refused), the
+            last 200 first; <code>--json</code> for programs. The API is <code>/v1/events</code> (server-sent
+            events, <code>?after=SEQ</code> to resume) and <code>/v1/stats</code>.</p>
+          <pre>snowglobe top
+snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
+
+          <h2 class="h3" id="fleets">Fleets: snowglobe apply</h2>
+          <p>A <code>snowglobe.toml</code> says what the daemon should have, and <code>snowglobe apply</code>
+            gets it there: templates (a built site, a URL, or a Dockerfile directory built first), snapshots (a
+            machine of a template set up by commands, saved once a readiness command succeeds), templates of those
+            snapshots, services and machines. <code>snowglobe diff</code> says what apply would do;
+            <code>snowglobe down</code> removes all of it. An entry that changed is replaced, with what is made
+            from it; one gone from the file is removed; names something else uses are refused. One file goes from
+            source to running services (<code>examples/fleet/snowglobe.toml</code>):</p>
+          <pre>[templates.py]
+build = "../python"                <span class="dim"># built first, for running natively</span>
+network = "fetch"
+
+[snapshots.serving]
+template = "py"
+run = ["cd /srv &amp;&amp; python3 -m http.server 8000 &gt;/dev/null 2&gt;&amp;1 &amp;"]
+ready = "wget -q -O /dev/null http://127.0.0.1:8000/"
+
+[templates.serving]
+snapshot = "serving"
+
+[services.web]
+template = "serving"
+ports = ["8080:8000"]
+min = 0                            <span class="dim"># scaled to zero, woken by a request</span>
+idle = "5m"
+
+[machines.scratch]
+template = "py"
+ttl = "24h"</pre>
+        </section>
+
+        <nav class="pager" aria-label="Pages"><a class="prev" href="../agents/"><small>Previous</small>For agents and programs</a><a class="next" href="../isolation/"><small>Next</small>Isolation</a></nav>
+      </main>
+
+      <aside class="rail" aria-label="Docs">
+        <div class="side">
+          <div class="search" role="search">
+            <label class="sr" for="search">Search the docs</label>
+            <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-expanded="false">
+            <kbd aria-hidden="true">/</kbd>
+            <ol class="results" id="search-results" role="listbox" aria-label="Results" hidden></ol>
+          </div>
+          <nav class="toc" aria-label="Docs pages">
+            <ol>
+            <li><a href="../">Getting started</a></li>
+            <li><a href="../building/">Building a site</a></li>
+            <li><a href="../networking/">Networking</a></li>
+            <li><a href="../running/">Running outside a browser</a></li>
+            <li><a href="../agents/">For agents and programs</a></li>
+            <li><a href="../orchestration/" aria-current="page">Orchestration</a></li>
+            <li><a href="../isolation/">Isolation</a></li>
+            <li><a href="../saving/">Saving your work</a></li>
+            <li><a href="../how-it-works/">How it works</a></li>
+            <li><a href="../reference/">CLI reference</a></li>
+            </ol>
+          </nav>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="../../llms.txt">llms.txt</a> · runs on <a href="https://github.com/filipecabaco/armless">armless</a>, which grew out of <a href="https://github.com/copy/v86">v86</a> by Fabian Hemmer and contributors</span>
+      <span><a href="../../">Back to the runs</a></span>
+    </footer>
+  </div>
+
+  <script src="../../theme.js"></script>
+  <script src="../docs.js"></script>
+</body>
+</html>

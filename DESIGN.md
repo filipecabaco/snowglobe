@@ -204,7 +204,7 @@ The xterm transcript theme carries its own ANSI palette (for example red `#ff6b4
 
 ## Layout
 
-The page is centred to 1440px with fluid side padding (`page-pad`, 20–64px). Under the masthead, a two-column grid holds the main column (8fr) and the right rail (4fr) with a 48px column gap. The rail holds the ledger, sticky at 24px from the top. Inside a run, the head is a two-column grid with the title and stack line on the left and the controls bottom-aligned on the right. The 460px terminal panel comes next. Below it, a four-up spec row sits on the 24px gap, and a one-line command and facts strip closes the run. CLI steps use a 3/9 split. Vertical rhythm is generous: 40px above and 72px below each run, and 72–120px above each section.
+The page is centred to 1440px with fluid side padding (`page-pad`, 20–64px). The hero runs the full width (headline, lede, the install line). The runs follow as one block opened by a full-ink rule. On the left (3fr) is the list of runs, a vertical tablist of ruled rows: the name, its snapshot size and a one-line description, with a 2px ink bar marking the selected one and a status dot when it is live. Under the list sits the "Your runs" ledger. On the right (9fr) is one panel, the selected run: its head (title and stack line on the left, the controls on the right), the 460px terminal, the four-up spec row and the command strip. The address keeps which run is open (`#python`). "Compare the runs" stays a single table. "Make your own" is a strip of underlined tabs (Install … Orchestrate) showing one step at a time; without the script every step shows in turn. Vertical rhythm: 72–120px above each section.
 
 Responsive behaviour:
 - **≤1080px:** one column. The ledger moves above the runs and stops being sticky.
@@ -245,7 +245,7 @@ A black 460px panel (6px radius) that holds a recorded xterm transcript rendered
 Four measured figures (Snapshot to restore, Ready at build, Preloaded, On demand). Each cell opens with a 1px ink rule, then a 13px Graphite label and a Figure-scale value with a small Graphite unit. A Graphite line follows with the command in ink mono, plus "· N MB RAM · no network · no server".
 
 ### Ledger ("Your runs")
-A ruled list in the right rail. Each row is a grid: an 8px status dot, the name (550) with a Graphite "· here" or "· window", a state line in 14px Graphite ("Restoring n%", "Running · mm:ss", "Stopped · ran for …"), and text-button actions on the right. Dots are Amber while restoring, a pulsing Signal while running, and Spent Grey (with the row text dimmed) once closed or lost. Actions ("Show", "Stop") are underlined text buttons that turn signal on hover. New rows enter with a 0.5s fade and a 6px drop.
+A ruled list under the runs list. Each row is a grid: an 8px status dot, the name (550) with a Graphite "· here" or "· window", a state line in 14px Graphite ("Restoring n%", "Running · mm:ss", "Stopped · ran for …"), and text-button actions on the right. Dots are Amber while restoring, a pulsing Signal while running, and Spent Grey (with the row text dimmed) once closed or lost. Actions ("Show", "Stop") are underlined text buttons that turn signal on hover. New rows enter with a 0.5s fade and a 6px drop.
 
 ### Code Blocks
 Bone background, 6px radius, 18px 20px padding, ink Fragment Mono at 13.5px/1.6. Comments are dimmed to Graphite. Blocks never wrap.
@@ -256,15 +256,24 @@ Full width, 15px, right-aligned numerals with a left-aligned first column. The h
 ### Navigation
 The masthead has the lowercase "snowglobe" wordmark (650, 20px, −0.02em) followed by a small round dot, and 15px text links on the right. A 1px ink rule runs underneath. Links are underlined with 1px thickness at a 4px offset, thickening to 2px on hover.
 
-### Docs Page (Read surface)
-`site/docs/index.html` is the user guide and CLI reference, in Read mode in the same world. It shares
-`base.css` (tokens, type, masthead, code, tables, footer) and `theme.js` with the index. Prose sits in
-the 8-column main column at a 40em measure; the 4-column rail holds a sticky "On this page" list
-where the index keeps its ledger, ruled like the ledger, with the section being read set in 600
-weight (never signal: signal means live). Sections open with the full-ink rule and a run-title
-sized heading; subsections use the Title step. A note is a 1px ink rule on the left, never a
-tinted box. Under 1080px the contents move above the text; under 720px option tables reflow into
-one block per row and the isolation comparison into labelled rows, so no table scrolls sideways.
+### Docs Pages (Read surface)
+The docs are one page per area: Getting started at `/docs/`, then building, networking, running,
+agents, orchestration, isolation, saving, how it works and the CLI reference, each under
+`/docs/<area>/`. They share `docs.css` and `docs.js` with `base.css` and `theme.js`. Prose sits in
+the 8-column main column at a 40em measure. A page's heading (its one `h1`) is set a step below
+the index's display size, opened by the full-ink rule; its sections are `h2`, set like the old
+subsections. Previous and next links close the page.
+
+The 4-column rail is sticky and holds two things. First, a search field that searches every
+page's headings and the first column of its tables (commands, flags, settings, labels); "/" or
+⌘K opens it, and results list in a ruled box. Second, the contents: every page, the current one in
+650 weight and opened to its sections, the section in view in 600 (never signal: signal means
+live). Every code block carries a small outlined "Copy" pill.
+
+Under 1080px the rail moves above the text, and the contents become a "Pages" menu that opens in
+place. Under 720px, option tables reflow into one block per row and the isolation comparison into
+labelled rows, so no table scrolls sideways. A link to the old single page (`docs/#section`) is
+sent to its section's page.
 
 ### Orchestration UI (Operate surface)
 `snowglobe ui` (`internal/ui/static/`) shows a running daemon in a browser, in the same world. It
