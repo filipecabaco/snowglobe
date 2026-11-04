@@ -136,6 +136,32 @@ func (f *fakeDaemon) BuildLog(id string, offset int64) (string, error) {
 	log := "==> building\n==> done\n"
 	return log[min(int(offset), len(log)):], nil
 }
+func (f *fakeDaemon) Ports() ([]daemon.PortMapping, error) {
+	return []daemon.PortMapping{{IP: "127.0.0.1", Host: 8080, Guest: 8000, Kind: "service", Name: "web", Template: "api", Open: true}}, nil
+}
+func (f *fakeDaemon) CheckPort(ip string, port int) (*daemon.PortCheck, error) {
+	if ip == "" {
+		ip = "127.0.0.1"
+	}
+	if port == 8080 {
+		return &daemon.PortCheck{IP: ip, Port: port, By: "service web"}, nil
+	}
+	return &daemon.PortCheck{IP: ip, Port: port, Free: true}, nil
+}
+func (f *fakeDaemon) SubmitRun(r daemon.SubmitRun) (*daemon.Run, error) {
+	f.jobs = append(f.jobs, "run "+r.Template+": "+r.Cmd)
+	return &daemon.Run{ID: "run-1", Template: r.Template, Cmd: r.Cmd, Status: "running"}, nil
+}
+func (f *fakeDaemon) Runs() ([]daemon.Run, error) {
+	return []daemon.Run{{ID: "run-1", Status: "done"}}, nil
+}
+func (f *fakeDaemon) Run(id string) (*daemon.Run, error) {
+	if id != "run-1" {
+		return nil, fmt.Errorf("no run called %s", id)
+	}
+	three := 3
+	return &daemon.Run{ID: id, Status: "done", Exit: &three, Output: []byte("partial report\n")}, nil
+}
 func (f *fakeDaemon) Events(ctx context.Context, after int64, fn func(daemon.Event) bool) error {
 	for _, ev := range f.events {
 		if ev.Seq > after && !fn(ev) {
@@ -300,5 +326,28 @@ func TestAFleetFileIsDiffedThroughTheDaemon(t *testing.T) {
 	text, isErr = call(t, d, "fleet_apply", map[string]any{"file": file})
 	if isErr || len(f.templates) != 1 || len(f.machines) != 1 {
 		t.Errorf("apply: %q %v %+v", text, isErr, f.machines)
+	}
+}
+
+func TestRunsAndPortsThroughTools(t *testing.T) {
+	f := newFake()
+	d := &Daemon{API: f, Version: "v"}
+	if text, isErr := call(t, d, "submit_run", map[string]any{"template": "py", "command": "make report"}); isErr || !strings.Contains(text, "submitted run-1") {
+		t.Errorf("submit: %q", text)
+	}
+	if text, isErr := call(t, d, "run_status", map[string]any{"id": "run-1"}); !isErr || !strings.Contains(text, "partial report") || !strings.Contains(text, "[exit 3]") {
+		t.Errorf("a run that exited 3: %q %v", text, isErr)
+	}
+	if _, isErr := call(t, d, "run_status", map[string]any{"id": "run-x"}); !isErr {
+		t.Error("no such run")
+	}
+	if text, _ := call(t, d, "list_ports", nil); !strings.Contains(text, "127.0.0.1:8080 → service web:8000") {
+		t.Errorf("ports: %q", text)
+	}
+	if text, _ := call(t, d, "check_port", map[string]any{"port": 8080}); text != "127.0.0.1:8080 is taken by service web" {
+		t.Errorf("a taken port: %q", text)
+	}
+	if text, _ := call(t, d, "check_port", map[string]any{"port": 9000, "ip": "0.0.0.0"}); text != "0.0.0.0:9000 is free" {
+		t.Errorf("a free one: %q", text)
 	}
 }

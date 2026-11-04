@@ -29,6 +29,11 @@ type DaemonAPI interface {
 	RemoveBuild(id string) error
 	BuildLog(id string, offset int64) (string, error)
 	Events(ctx context.Context, after int64, f func(daemon.Event) bool) error
+	Ports() ([]daemon.PortMapping, error)
+	CheckPort(ip string, port int) (*daemon.PortCheck, error)
+	SubmitRun(daemon.SubmitRun) (*daemon.Run, error)
+	Runs() ([]daemon.Run, error)
+	Run(id string) (*daemon.Run, error)
 }
 
 // Daemon serves a snowglobe daemon to an agent: its templates, machines, snapshots, services,
@@ -125,6 +130,17 @@ var daemonTools = []map[string]any{
 	tool("build_status", "A build's state and its log (from log_offset on).", obj(map[string]any{"id": str("The build"), "log_offset": num("Where to read the log from")}, "id")),
 	tool("list_builds", "Builds, newest first.", obj(map[string]any{})),
 	tool("cancel_build", "Cancel a running build, or remove a finished one.", obj(map[string]any{"id": str("The build")}, "id")),
+	tool("submit_run", "Fire and forget: run a command once on a fresh fork of a template, thrown away after. Answers at once with the run's id; run_status reads its output and exit status later.", obj(map[string]any{
+		"template": str("The template"), "command": str("The command line"), "timeout_seconds": num("Kill it after this long (default 300)"), "env": labels(),
+	}, "template", "command")),
+	tool("run_status", "A submitted run: still running, or its output and exit status. wait_seconds waits for it to end, up to that long.", obj(map[string]any{
+		"id": str("The run's id"), "wait_seconds": num("Wait up to this long for it to end (default 0)"),
+	}, "id")),
+	tool("list_runs", "Submitted runs, newest first, without their output.", obj(map[string]any{})),
+	tool("list_ports", "Every host port the daemon holds and where it leads: the machine or service, the guest port, open or at zero.", obj(map[string]any{})),
+	tool("check_port", "Whether a host port is free to forward, or which machine, service or other program holds it.", obj(map[string]any{
+		"port": num("The host port"), "ip": str("The address (default 127.0.0.1)"),
+	}, "port")),
 	tool("recent_events", "What the daemon did lately: machines up and stopped, replicas, templates asleep and awake, builds, refusals.", obj(map[string]any{"after": num("Only events after this sequence number")})),
 	tool("fleet_diff", "What applying a fleet file (snowglobe.toml) would change.", obj(map[string]any{"file": str("Path to the fleet file on the daemon's host")}, "file")),
 	tool("fleet_apply", "Get the daemon to what a fleet file (snowglobe.toml) says: build, create, replace and remove.", obj(map[string]any{"file": str("Path to the fleet file on the daemon's host")}, "file")),
@@ -330,6 +346,49 @@ func (d *Daemon) do(name string, a args) (string, error) {
 		return asJSON(v), err
 	case "cancel_build":
 		return "cancelled or removed build " + a.str("id"), api.RemoveBuild(a.str("id"))
+	case "submit_run":
+		r, err := api.SubmitRun(daemon.SubmitRun{Template: a.str("template"), Cmd: a.str("command"), Timeout: a.num("timeout_seconds"), Env: a.labels("env")})
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("submitted %s: it runs once on a fresh fork of %s; run_status with this id reads its result", r.ID, r.Template), nil
+	case "run_status":
+		deadline := time.Now().Add(time.Duration(a.num("wait_seconds") * float64(time.Second)))
+		for {
+			r, err := api.Run(a.str("id"))
+			if err != nil {
+				return "", err
+			}
+			if r.Status != "running" || time.Now().After(deadline) {
+				return describeRun(r)
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+	case "list_runs":
+		v, err := api.Runs()
+		return asJSON(v), err
+	case "list_ports":
+		v, err := api.Ports()
+		if err != nil {
+			return "", err
+		}
+		if len(v) == 0 {
+			return "no ports: up (ports) and add_service forward host ports to machines", nil
+		}
+		var lines []string
+		for _, p := range v {
+			lines = append(lines, p.Describe())
+		}
+		return strings.Join(lines, "\n"), nil
+	case "check_port":
+		c, err := api.CheckPort(a.str("ip"), int(a.num("port")))
+		if err != nil {
+			return "", err
+		}
+		if c.Free {
+			return fmt.Sprintf("%s:%d is free", c.IP, c.Port), nil
+		}
+		return fmt.Sprintf("%s:%d is taken by %s", c.IP, c.Port, c.By), nil
 	case "recent_events":
 		var evs []daemon.Event
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -415,6 +474,17 @@ func describeJob(res *control.JobResult) (string, error) {
 		return "", fmt.Errorf("%s\n[exit %d]", out, *res.Status)
 	}
 	return fmt.Sprintf("%s\n[exit 0]", out), nil
+}
+
+// describeRun says how a run went: running, or its output and exit status (an error when it failed).
+func describeRun(r *daemon.Run) (string, error) {
+	switch {
+	case r.Status == "running":
+		return fmt.Sprintf("%s is still running (since %s)", r.ID, r.Created.Format(time.TimeOnly)), nil
+	case r.Error != "":
+		return "", fmt.Errorf("%s couldn't run: %s", r.ID, r.Error)
+	}
+	return describeJob(&control.JobResult{Status: r.Exit, Output: r.Output, TimedOut: r.TimedOut})
 }
 
 // waitBuild waits for build id to finish (up to BuildWait) and says how it went.
