@@ -37,6 +37,11 @@ https://github.com/filipecabaco/snowglobe/releases, or
   (ctrl-] quits); with stdin piped, each line is typed in as a command and the output printed as
   plain text. The site can be a directory, a tarball, a tarball URL, or a deployed site's URL
   (e.g. https://filipecabaco.github.io/snowglobe/python/), fetched into a local cache first.
+  Native instances of one site share its snapshot's memory: the first writes it to an image in
+  the cache (`ram/`, one per snapshot, named by its hash) and every instance maps it
+  copy-on-write, so pages no instance writes are held once and a restore takes a few
+  milliseconds (Linux: ~46 MB PSS per Python instance instead of ~111 MB).
+  `SNOWGLOBE_RAM_IMAGE=off` restores into memory of the instance's own.
   - `-p HOST:GUEST` (repeatable) forwards a host port to a guest port (127.0.0.1 unless
     IP:HOST:GUEST); needs a site built with `--network fetch`.
   - `--max-runtime DURATION` ends the run after that long (exit 124); `--stop-file PATH` ends it
@@ -157,6 +162,12 @@ from the site, written to memory) and, with a network, the web relay. Around the
 browser, the page's sandbox; natively, the process's own sandbox (no new programs or processes,
 no files beyond the site, its cache, socket, logs and a job's workspace); in Docker, the container
 as well. `SNOWGLOBE_SANDBOX=strict` refuses to run without the whole native sandbox.
+
+The shared memory image is kept from changing under a machine: the cache's `ram/` is 0700 and
+its files 0444, written under a temporary name and renamed into place, and checked on the open
+descriptor before mapping (a regular file of this user's, no write bits, one link, no symlink);
+anything off and the run restores the usual way. A page a machine writes is its own, and every
+restore and fork gets fresh randomness (the guest kernel reseeds on it).
 
 ## What a built site contains
 

@@ -1,7 +1,7 @@
 # snowglobe orchestration
 
 Goal: snowglobe as one self-contained tool that packages (`build`), runs (`run`) and orchestrates
-(`daemon`, `service`, and later `apply`) Linux machines, with no Docker, KVM or root at run time:
+(`daemon`, `service` and `apply`) Linux machines, with no Docker, KVM or root at run time:
 Firecracker plus a small control plane, on Linux and macOS alike, with sites that also run in a
 browser. Measured against Firecracker in `bench/machines/README.md`.
 
@@ -18,7 +18,8 @@ browser. Measured against Firecracker in `bench/machines/README.md`.
 | #44 | Ports only on templates whose guest has a network |
 | #45 | Memory budget with a queue, machine TTL, templates that sleep when idle |
 | #46 | Events (`/v1/events`, `snowglobe events`), `/v1/stats` and `snowglobe top` |
-| next | Fleets: `snowglobe apply`, `diff` and `down` with a `snowglobe.toml` |
+| #47 | Fleets: `snowglobe apply`, `diff` and `down` with a `snowglobe.toml` |
+| #48 | Native runs share their snapshot's memory: an image mapped copy-on-write (armless 0.8.0) |
 
 ### The primitive: machines forked from one restore
 
@@ -121,6 +122,10 @@ removes everything with the fleet's label.
 ## Not built yet
 
 1. Several hosts (a daemon per host, one scheduling), per-machine networks, metrics.
+2. A smaller snowglobe-vm heap: with the snapshot's memory shared, most of what an instance takes
+   is the runtime's own (~40 MB live and ~36 MB freed but not given back, on macOS).
+3. Commands over a guest agent (vsock) instead of the serial shell, and the JIT's next steps
+   (blocks chained across pages, guest registers kept in host registers).
 
 ## Decisions
 
