@@ -1,9 +1,11 @@
 // Package native finds snowglobe-vm for running sites on this machine, with no container around
 // it: the process sandboxes itself (Landlock and seccomp on Linux, Seatbelt on macOS).
 //
-// In order: $SNOWGLOBE_VM; this release's snowglobe-vm for the system (a release asset, fetched
-// once into the user cache); on Linux, the tools image's (the same static binary, copied out of
-// the image once, which needs Docker). Without any, runs fall back to a container.
+// In order: $SNOWGLOBE_VM; the snowglobe-vm this snowglobe carries (release builds do, for the
+// system they were built for, unpacked once into the user cache); this release's snowglobe-vm
+// for the system (a release asset, fetched once into the user cache); on Linux, the tools image's
+// (the same static binary, copied out of the image once, which needs Docker). Without any, runs
+// fall back to a container.
 package native
 
 import (
@@ -44,6 +46,11 @@ func VM(version string, image *Image) (string, error) {
 func For(version, goos, goarch string, image *Image) (string, error) {
 	if p := os.Getenv("SNOWGLOBE_VM"); p != "" && goos == runtime.GOOS && goarch == runtime.GOARCH {
 		return p, nil
+	}
+	if Embedded() && goos == runtime.GOOS && goarch == runtime.GOARCH {
+		if p, err := fromEmbedded(); err == nil {
+			return p, nil
+		}
 	}
 	if strings.HasPrefix(version, "v") {
 		if p, err := Release(version, goos, goarch); err == nil {

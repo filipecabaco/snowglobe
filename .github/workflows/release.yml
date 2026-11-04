@@ -127,8 +127,34 @@ jobs:
           docker buildx imagetools create --tag "$IMAGE" "$IMAGE-amd64" "$IMAGE-arm64"
           docker buildx imagetools inspect "$IMAGE"
 
+  # snowglobe-vm for macOS on Apple silicon (the only Mac supported): built here, on a Mac, before
+  # the release, which puts it into that system's snowglobe (and publishes it for bundles)
+  vm-darwin:
+    needs: [check, ci]
+    if: ${{ !failure() && !cancelled() && needs.check.outputs.tag }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build snowglobe-vm
+        working-directory: internal/tools/runtime
+        run: |
+          rustup toolchain install stable --profile minimal
+          cargo build --release --locked
+          strip target/release/snowglobe-vm
+          ./target/release/snowglobe-vm sandbox-check
+          mkdir -p ../../../vm/darwin_arm64
+          cp target/release/snowglobe-vm ../../../vm/darwin_arm64/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vm-darwin
+          path: vm/
+          retention-days: 1
+
   release:
-    needs: [check, tools, tools-manifest]
+    needs: [check, tools, tools-manifest, vm-darwin]
     # tools-manifest is skipped when the image was published already
     if: ${{ !failure() && !cancelled() && needs.check.outputs.tag }}
     runs-on: ubuntu-24.04
@@ -152,10 +178,23 @@ jobs:
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           mkdir -p release
           for arch in amd64 arm64; do
-            name="snowglobe-vm_${TAG#v}_linux_${arch}"
             id=$(docker create --platform "linux/$arch" "$IMAGE")
-            mkdir -p "$name" && docker cp "$id:/tools/snowglobe-vm" "$name/snowglobe-vm" && docker rm "$id"
-            cp LICENSE.md "$name/"
+            mkdir -p "vm/linux_$arch" && docker cp "$id:/tools/snowglobe-vm" "vm/linux_$arch/snowglobe-vm" && docker rm "$id"
+          done
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: vm-darwin
+          path: vm/
+
+      # Each system's snowglobe-vm as an asset of its own too: what `snowglobe bundle --target` puts
+      # in a bundle for another system
+      - name: snowglobe-vm assets
+        run: |
+          for dir in vm/*/; do
+            target=$(basename "$dir")
+            name="snowglobe-vm_${TAG#v}_${target}"
+            mkdir -p "$name" && cp "$dir/snowglobe-vm" LICENSE.md "$name/" && chmod 755 "$name/snowglobe-vm"
             tar -czf "release/$name.tar.gz" "$name"
           done
 
@@ -168,15 +207,18 @@ jobs:
           ./snowglobe-kernel tools kernel "release/snowglobe-boot_${TAG#v}_arm64.tar.gz"
           tar -tzf "release/snowglobe-boot_${TAG#v}_arm64.tar.gz" | grep -qx boot/vmlinuz-virt
 
-      # Docker Desktop is the only host requirement on macOS; Windows isn't tested, so not shipped
+      # One file each: every snowglobe carries its system's snowglobe-vm (zstd), unpacked into the
+      # cache on first use, so running natively needs no download. Supported: Linux on x86-64 and
+      # arm64, macOS on Apple silicon
       - name: Build the binaries
         run: |
           mkdir -p release
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
             os=${target%/*} arch=${target#*/}
             name="snowglobe_${TAG#v}_${os}_${arch}"
             mkdir -p "build/$name"
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+            zstd -19 -q -f "vm/${os}_${arch}/snowglobe-vm" -o internal/native/embedded/snowglobe-vm.zst
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -tags embedvm \
               -ldflags "-s -w -X main.version=$TAG" -o "build/$name/snowglobe" ./cmd/snowglobe
             cp LICENSE.md README.md "build/$name/"
             tar -czf "release/$name.tar.gz" -C build "$name"
@@ -187,8 +229,12 @@ jobs:
       - name: Check the linux/amd64 binary
         run: |
           mkdir check && tar -xzf "release/snowglobe_${TAG#v}_linux_amd64.tar.gz" -C check
-          got=$("check/snowglobe_${TAG#v}_linux_amd64/snowglobe" version)
+          bin="check/snowglobe_${TAG#v}_linux_amd64/snowglobe"
+          got=$("$bin" version | head -1)
           [ "$got" = "snowglobe $TAG" ] || { echo "::error::got $got"; exit 1; }
+          # It carries its snowglobe-vm, and that one runs here
+          "$bin" version | grep -q "snowglobe-vm: built in" || { echo "::error::no snowglobe-vm built in"; exit 1; }
+          HOME=$(mktemp -d) XDG_CACHE_HOME=$(mktemp -d) "$bin" vm sandbox-check
 
       # Released from a change to VERSION: the tag, annotated, on the commit that was checked. A tag
       # pushed with this workflow's token starts no other workflow, so it isn't released twice
@@ -207,31 +253,3 @@ jobs:
           [[ "$TAG" == *-* ]] && prerelease=--prerelease
           gh release create "$TAG" --verify-tag --generate-notes --title "$TAG" $prerelease release/*
 
-  # snowglobe-vm for macOS, attached to the release: what `snowglobe bundle --target darwin` puts
-  # in a bundle (the tools image carries only Linux's). Apple silicon; built natively there
-  vm-darwin:
-    needs: [check, release]
-    if: ${{ !failure() && !cancelled() && needs.check.outputs.tag }}
-    runs-on: macos-15
-    permissions:
-      contents: write
-    env:
-      TAG: ${{ needs.check.outputs.tag }}
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Build snowglobe-vm
-        working-directory: internal/tools/runtime
-        run: |
-          rustup toolchain install stable --profile minimal
-          cargo build --release --locked
-          strip target/release/snowglobe-vm
-          ./target/release/snowglobe-vm sandbox-check
-
-      - name: Attach it to the release
-        run: |
-          name="snowglobe-vm_${TAG#v}_darwin_arm64"
-          mkdir -p "$name" && cp internal/tools/runtime/target/release/snowglobe-vm LICENSE.md "$name/"
-          tar -czf "$name.tar.gz" "$name"
-          gh release upload "$TAG" "$name.tar.gz"
