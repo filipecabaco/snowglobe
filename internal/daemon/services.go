@@ -324,7 +324,7 @@ func (s *Server) ServiceJob(name string, req control.JobRequest) (*control.JobRe
 	}
 	s.touch(m.Name, 1)
 	defer s.touch(m.Name, -1)
-	return control.Job(m.Socket, m.Name, req)
+	return s.runJob(m.Socket, m.Name, req)
 }
 
 // scale stops what has been idle too long, above each service's Min (saving it first, state

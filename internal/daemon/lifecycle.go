@@ -150,6 +150,7 @@ func (s *Server) awake(name string) (*Template, error) {
 	}
 	s.mu.Unlock()
 	s.used(name)
+	s.meter.wake(time.Since(begun))
 	s.note("template.awake", "template "+name, "awake in %d ms", time.Since(begun).Milliseconds())
 	return &c, nil
 }

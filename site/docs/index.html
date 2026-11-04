@@ -432,6 +432,13 @@ snowglobe template rm api                        <span class="dim"># and its mac
             also serves it over TCP, to requests bearing the token, and <code>SNOWGLOBE_DAEMON=http://HOST:PORT</code>
             with <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it. A daemon started again takes back the
             templates and machines that are still running.</p>
+          <p>It also builds: <code>POST /v1/builds</code> takes a directory with a Dockerfile (by its full path), an
+            image reference, or a Dockerfile's text, runs <code>snowglobe build</code> (Docker when it's there; an
+            image builds natively without it), and makes the result a template. <code>/v1/builds/{id}/log</code>
+            streams its output (<code>?follow=1</code>). A machine's terminal is a WebSocket at
+            <code>/v1/machines/{name}/attach?rows=R&amp;cols=C</code>. <code>/v1/metrics</code> keeps a sample every
+            5 s for the last hour (memory, machines, replicas, jobs and their latency), and <code>/metrics</code>
+            serves the same in Prometheus's format.</p>
 
           <h3 id="snapshots">Snapshots of running machines</h3>
           <p><code>snowglobe snapshot save</code> saves a machine whole: its memory, its running processes and the
