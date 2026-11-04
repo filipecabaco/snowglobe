@@ -85,7 +85,9 @@ rm -f "$dir/snowglobe"
 cp "$tmp/$name/snowglobe" "$dir/snowglobe"
 chmod 755 "$dir/snowglobe"
 
-say "Installed $("$dir/snowglobe" version 2>/dev/null || echo "snowglobe $version") in $dir"
+# `snowglobe version` goes on to say where its snowglobe-vm comes from: its first line is the version
+installed=$("$dir/snowglobe" version 2>/dev/null | sed -n 1p)
+say "Installed ${installed:-snowglobe $version} in $dir"
 case ":$PATH:" in
 *":$dir:"*) ;;
 *)
