@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>snowglobe</title>
+  <meta name="color-scheme" content="light dark">
+  <script src="theme-boot.js"></script>
+  <link rel="preload" href="fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="ui.css">
+  <script type="module" src="app.js"></script>
+  <script src="theme.js" defer></script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="#overview">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Sections">
+        <a href="#overview">Overview</a>
+        <a href="#ports">Ports</a>
+        <a href="#fleet">Fleet</a>
+        <a href="#builds">Builds</a>
+        <span class="daemon" id="daemon">connecting to the daemon…</span>
+        <button class="theme" id="theme-toggle" type="button">Dark</button>
+      </nav>
+    </header>
+
+    <p class="banner" id="banner" role="alert" hidden></p>
+
+    <div class="layout">
+      <main>
+        <section class="terminal" id="terminal" hidden aria-labelledby="terminal-title">
+          <div class="terminal-head">
+            <h2 id="terminal-title">Terminal</h2>
+            <span class="terminal-state" id="terminal-state"></span>
+            <button class="btn" type="button" id="terminal-close">Close</button>
+          </div>
+          <div class="panel" id="terminal-screen"></div>
+        </section>
+
+        <section id="overview" aria-labelledby="overview-title">
+          <div class="section-head">
+            <h2 id="overview-title">The last hour</h2>
+            <p class="readout" id="readout" aria-live="polite"></p>
+          </div>
+          <div class="timeline" id="timeline">
+            <div class="series">
+              <div class="row" data-series="memory">
+                <div class="label">Memory<span id="memory-of"></span><b id="memory-now">–</b></div>
+                <svg class="chart" id="chart-memory" preserveAspectRatio="none" role="img" aria-label="Memory over the last hour"></svg>
+              </div>
+              <div class="row" data-series="machines">
+                <div class="label">Machines<b id="machines-now">–</b></div>
+                <svg class="chart" id="chart-machines" preserveAspectRatio="none" role="img" aria-label="Machines over the last hour"></svg>
+              </div>
+              <div class="row" data-series="jobs">
+                <div class="label">Jobs · p95<b id="jobs-now">–</b></div>
+                <svg class="chart" id="chart-jobs" preserveAspectRatio="none" role="img" aria-label="Jobs and their latency over the last hour"></svg>
+              </div>
+              <div class="row events-row">
+                <div class="label">Events</div>
+                <div class="ticks" id="event-ticks"></div>
+              </div>
+              <div class="row axis-row">
+                <div class="label"></div>
+                <div class="axis" id="axis"></div>
+              </div>
+            </div>
+            <div class="lanes" id="lanes"></div>
+            <div class="cursor" id="cursor" hidden></div>
+          </div>
+          <p class="empty" id="lanes-empty" hidden>No templates yet. <a href="#fleet">Add a built site</a> or
+            <a href="#builds">build one</a>, and its machines appear here as they start and stop.</p>
+        </section>
+
+        <section id="ports" aria-labelledby="ports-title">
+          <h2 id="ports-title">Ports</h2>
+          <p class="intro">Each host port the daemon holds, and the guest port behind it. A service's port stays
+            open at zero: the next connection starts a replica.</p>
+          <div class="table-wrap">
+            <table class="list" id="ports-table">
+              <thead><tr><th scope="col">On this host</th><th scope="col">Goes to</th><th scope="col">Guest port</th><th scope="col">Template</th><th scope="col">State</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <form class="inline-form" id="port-check">
+            <label>Is a host port free? <input name="port" type="number" min="1" max="65535" placeholder="8080" required></label>
+            <label>On <input name="ip" placeholder="127.0.0.1" autocomplete="off"></label>
+            <button class="btn" type="submit">Check</button>
+            <p class="check-result" id="port-check-result" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <section id="fleet" aria-labelledby="fleet-title">
+          <h2 id="fleet-title">Fleet</h2>
+
+          <h3>Templates</h3>
+          <div class="table-wrap">
+            <table class="list" id="templates-table">
+              <thead><tr><th scope="col">Name</th><th scope="col">Site</th><th scope="col">State</th><th scope="col">Machines</th><th scope="col">Memory</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <form class="inline-form" id="template-form">
+            <label>Built site <input name="site" required placeholder="/path/to/dist/python or a site's URL" autocomplete="off"></label>
+            <label>Name <input name="name" placeholder="py" autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,62}"></label>
+            <label>Sleep when idle <input name="idle" placeholder="30m" autocomplete="off"></label>
+            <button class="btn" type="submit">Add template</button>
+          </form>
+
+          <h3>Machines</h3>
+          <div class="table-wrap">
+            <table class="list" id="machines-table">
+              <thead><tr><th scope="col">Name</th><th scope="col">Template</th><th scope="col">Up for</th><th scope="col">Memory</th><th scope="col">Ports</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <form class="inline-form" id="up-form">
+            <label>Template <select name="template" required></select></label>
+            <label>Name <input name="name" placeholder="made up when empty" autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,62}"></label>
+            <label>Ports <input name="ports" placeholder="8080:8000" autocomplete="off"></label>
+            <label>Time to live <input name="ttl" placeholder="1h" autocomplete="off"></label>
+            <button class="btn" type="submit">Up a machine</button>
+            <p class="check-result" data-ports-for="up-form" aria-live="polite"></p>
+          </form>
+
+          <h3>Services</h3>
+          <div class="table-wrap">
+            <table class="list" id="services-table">
+              <thead><tr><th scope="col">Name</th><th scope="col">Template</th><th scope="col">Ports</th><th scope="col">Replicas</th><th scope="col">Idle</th><th scope="col">State</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <form class="inline-form" id="service-form">
+            <label>Name <input name="name" required placeholder="web" autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,62}"></label>
+            <label>Template <select name="template" required></select></label>
+            <label>Ports <input name="ports" required placeholder="8080:8000" autocomplete="off"></label>
+            <label>Replicas <span class="pair"><input name="min" type="number" min="0" value="0" aria-label="Fewest"> to <input name="max" type="number" min="1" value="1" aria-label="Most"></span></label>
+            <label>Idle <input name="idle" value="5m" autocomplete="off"></label>
+            <label>State <select name="state"><option value="discard">discard</option><option value="keep">keep</option></select></label>
+            <button class="btn" type="submit">Add service</button>
+            <p class="check-result" data-ports-for="service-form" aria-live="polite"></p>
+          </form>
+
+          <h3>Snapshots</h3>
+          <div class="table-wrap">
+            <table class="list" id="snapshots-table">
+              <thead><tr><th scope="col">Name</th><th scope="col">Of</th><th scope="col">Size</th><th scope="col">Saved</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="builds" aria-labelledby="builds-title">
+          <h2 id="builds-title">Builds</h2>
+          <p class="intro">Build a site from a directory with a Dockerfile, an image, or a Dockerfile written here. It
+            becomes a template when it's done. Docker builds when it's running; an image builds without it.</p>
+          <form class="build-form" id="build-form">
+            <fieldset class="source">
+              <legend>From</legend>
+              <label><input type="radio" name="kind" value="dir" checked> A directory</label>
+              <label><input type="radio" name="kind" value="image"> An image</label>
+              <label><input type="radio" name="kind" value="dockerfile"> A Dockerfile</label>
+            </fieldset>
+            <label class="wide" data-kind="dir">Directory <input name="dir" placeholder="/Users/you/code/app (its full path)" autocomplete="off"></label>
+            <label class="wide" data-kind="image" hidden>Image <input name="image" placeholder="alpine:3.24.2" autocomplete="off"></label>
+            <label class="wide" data-kind="dockerfile" hidden>Dockerfile <textarea name="dockerfile" rows="8" spellcheck="false">FROM alpine:3.24.2
+RUN apk add --no-cache python3
+CMD ["python3"]</textarea></label>
+            <div class="build-opts">
+              <label>Name <input name="name" placeholder="app" autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,62}"></label>
+              <label>Memory <span class="unit"><input name="memory" type="number" min="64" step="64" placeholder="512"> MB</span></label>
+              <label>CPUs <input name="cpus" type="number" min="1" max="8" placeholder="1"></label>
+              <label class="check"><input type="checkbox" name="network"> A network (needed for ports)</label>
+              <button class="btn go" type="submit">Build</button>
+            </div>
+          </form>
+          <div class="build-list" id="build-list"></div>
+          <div class="build-log" id="build-log" hidden>
+            <div class="build-log-head"><h3 id="build-log-title">Log</h3><button class="btn" type="button" id="build-log-close">Close</button></div>
+            <pre id="build-log-text"></pre>
+          </div>
+        </section>
+      </main>
+
+      <aside class="rail" aria-label="Selection and actions">
+        <section class="selection" id="selection" aria-live="polite">
+          <h2 id="selection-title">Nothing selected</h2>
+          <p class="caption" id="selection-caption">Select a machine or a template on the timeline.</p>
+          <dl class="figures" id="selection-figures"></dl>
+          <div class="actions" id="selection-actions"></div>
+        </section>
+
+        <section class="run" aria-labelledby="run-title">
+          <h2 id="run-title">Run on a fresh fork</h2>
+          <form id="run-form">
+            <label class="sr" for="run-template">Template</label>
+            <select id="run-template" name="template" required></select>
+            <label class="sr" for="run-cmd">Command</label>
+            <input id="run-cmd" name="cmd" required placeholder="uname -a" autocomplete="off" spellcheck="false">
+            <button class="btn go" type="submit">Run</button>
+          </form>
+          <pre class="panel output" id="run-output" hidden></pre>
+          <p class="caption" id="run-meta"></p>
+        </section>
+
+        <section class="recent" aria-labelledby="recent-title">
+          <h2 id="recent-title">Events</h2>
+          <ol id="recent"></ol>
+        </section>
+      </aside>
+    </div>
+  </div>
+</body>
+</html>

@@ -571,10 +571,15 @@ func prepareOut(out string) error {
 }
 
 func step(name string, fn func() error) error {
-	fmt.Printf("\n\033[1m==> %s\033[0m\n", name)
+	// NO_COLOR (no-color.org): plain text, for logs read elsewhere (the daemon's builds)
+	bold, dim, reset := "\033[1m", "\033[2m", "\033[0m"
+	if os.Getenv("NO_COLOR") != "" {
+		bold, dim, reset = "", "", ""
+	}
+	fmt.Printf("\n%s==> %s%s\n", bold, name, reset)
 	start := time.Now()
 	err := fn()
-	fmt.Printf("\033[2m    %.1fs\033[0m\n", time.Since(start).Seconds())
+	fmt.Printf("%s    %.1fs%s\n", dim, time.Since(start).Seconds(), reset)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}

@@ -344,3 +344,15 @@ func (c *Client) Proxy() http.Handler {
 		FlushInterval: -1,
 	}
 }
+
+// Ports is every host port the daemon holds and where it leads.
+func (c *Client) Ports() ([]PortMapping, error) {
+	var v []PortMapping
+	return v, c.call("GET", "/v1/ports", nil, &v)
+}
+
+// CheckPort says whether a host port is free to forward (ip empty: 127.0.0.1).
+func (c *Client) CheckPort(ip string, port int) (*PortCheck, error) {
+	var v PortCheck
+	return &v, c.call("GET", fmt.Sprintf("/v1/ports/check?ip=%s&port=%d", url.QueryEscape(ip), port), nil, &v)
+}

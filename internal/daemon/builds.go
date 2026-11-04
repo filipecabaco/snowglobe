@@ -251,6 +251,8 @@ func (s *Server) runBuild(b *Build) {
 		fmt.Fprintf(log, "$ snowglobe %s\n", strings.Join(args, " "))
 		cmd = exec.Command(s.snowglobe(), args...)
 		cmd.Stdout, cmd.Stderr = log, log
+		// Its log is read as text, by people and agents: no colour codes in it
+		cmd.Env = append(os.Environ(), "NO_COLOR=1", "TERM=dumb")
 		// Its own process group: a cancel stops what it started too
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		err = cmd.Start()

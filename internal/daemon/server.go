@@ -907,6 +907,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/metrics", s.serveMetrics)
 	mux.HandleFunc("GET /metrics", s.servePrometheus)
 	s.buildRoutes(mux)
+	s.portRoutes(mux)
 	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
 	mux.HandleFunc("GET /v1/templates", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Templates(), nil)
