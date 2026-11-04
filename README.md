@@ -4,7 +4,8 @@
 image on real Linux inside [armless](https://github.com/filipecabaco/armless), a 64-bit ARM
 machine compiled to WebAssembly, snapshots it once your app is ready, and writes a folder of
 static files. Visitors get your program running in their tab in about a second, with no server
-behind it. The same site also runs headlessly, as one executable, and as a sandbox an agent drives.
+behind it. The same site also runs headlessly, as one executable, as a sandbox an agent drives,
+and as machines a daemon forks, scales to zero and applies from a fleet file.
 
 **[▶ Try the demos](https://filipecabaco.github.io/snowglobe/)**: Supabase (its native stack and a small app on it), Elixir IEx, PostgreSQL, Elixir + Postgres, Python + Rich, TypeScript + Zod,
 Go + Bubble Tea, Rust + clap, Java + Gson, and curl + jq (plain Alpine tools, online through your browser), each a small
@@ -36,9 +37,9 @@ The docs live on the site, written for people using snowglobe:
 - [Getting started](https://filipecabaco.github.io/snowglobe/docs/#start): what you need, install, your first site
 - [Building a site](https://filipecabaco.github.io/snowglobe/docs/#build): labels and flags, readiness, exercises and the warm pack, CPUs, building without Docker
 - [Networking](https://filipecabaco.github.io/snowglobe/docs/#network): HTTP(S) and WebSockets through the browser, tunnels for other TCP, credentials
-- [Running outside a browser](https://filipecabaco.github.io/snowglobe/docs/#run): sessions, instances, sites from a URL, one executable, jobs
-- [For agents and programs](https://filipecabaco.github.io/snowglobe/docs/#agents): `sh`, `cp`, MCP, limits, stop files and logs
-- [Isolation](https://filipecabaco.github.io/snowglobe/docs/#security): what each of the browser, native and Docker guards against
+- [Running outside a browser](https://filipecabaco.github.io/snowglobe/docs/#run): sessions, instances, shared memory, sites from a URL, one executable
+- [For agents and programs](https://filipecabaco.github.io/snowglobe/docs/#agents): `sh`, `cp`, forks, the daemon, snapshots, services and scale to zero, fleets, events, MCP, limits and logs
+- [Isolation](https://filipecabaco.github.io/snowglobe/docs/#security): what each of the browser, native and Docker guards against, and how shared memory stays private
 - [CLI reference](https://filipecabaco.github.io/snowglobe/docs/#reference): every command, flag, label and environment variable
 
 For agents, the site also serves a plain-text summary of the CLI at
@@ -66,7 +67,8 @@ bench/lib.test.mjs bench/server.test.mjs` (Node 22+; no npm packages needed), or
 `snowglobe-vm` has its own tests: `cargo test` in `internal/tools/runtime` (the job launcher's run
 on a pty and killed with ctrl-c on Linux only; CI runs them under dash and BusyBox ash). The
 end-to-end suite drives the CLI against a built site, natively and in Docker (jobs, kills,
-timeouts, `--max-runtime`, `--stop-file`, the logs, MCP, bundles):
+timeouts, `--max-runtime`, `--stop-file`, the logs, MCP, bundles, shared memory, forks, the
+daemon, scale to zero, lifecycle and fleets):
 
 ```sh
 SNOWGLOBE_E2E_SITE=dist/curl go test ./cmd/snowglobe -run TestE2E -v

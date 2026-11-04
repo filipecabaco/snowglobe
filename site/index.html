@@ -339,10 +339,30 @@ $ snowglobe cp ./data box:/root/data
 $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
               </div>
             </div>
+            <div class="step">
+              <h3>Orchestrate</h3>
+              <div>
+                <p>Many machines from one site, still without KVM or root. The daemon restores a site once as a template
+                  and forks machines from it in tens of milliseconds, each sharing the memory it doesn't write. Services
+                  start machines on a connection and scale to zero when idle, and a fleet file says what should run.
+                  Instances outside the daemon share their snapshot's memory too, mapped from one read-only image.</p>
+<pre><span class="dim"># a template, and machines forked from it</span>
+$ snowglobe daemon &amp;
+$ snowglobe template add dist/api --name api
+$ snowglobe up api --name worker
+$ snowglobe sh worker 'uname -m'
+aarch64
+<span class="dim"># behind a port, at zero when idle (the site needs a network)</span>
+$ snowglobe service add web --template api -p 8080:8000 --min 0 --idle 5m
+<span class="dim"># or all of it from a snowglobe.toml</span>
+$ snowglobe apply</pre>
+              </div>
+            </div>
           </div>
 
           <p class="ref-more">Every command, flag, label and setting is in the <a href="docs/#reference">docs</a>,
-            with guides to building, networking, running headlessly and driving it from an agent.</p>
+            with guides to building, networking, running headlessly, driving it from an agent and orchestrating
+            machines.</p>
         </section>
       </main>
 

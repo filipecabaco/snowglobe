@@ -30,27 +30,32 @@ after each boot, as the kvm group doesn't reach the Lima shell). In it:
 elixir bench/machines/capacity.exs --fc ~/fc --sg ~/sg --site ~/python --wake-site ~/python-net --n 50 --reps 10
 ```
 
-## Results (2026-11-03)
+## Results (2026-11-04)
 
 Apple M5 Pro, a Lima VM (vz, 12 CPUs, 24 GiB, Ubuntu 24.04), the python example, 1 vCPU and
-512 MB per machine, snowglobe at 3e8a8ba (armless 0.7.0):
+512 MB per machine, snowglobe at 26f221e (armless 0.8.0):
 
 | | Firecracker v1.17.0 | `snowglobe run --runtime native` | fork server (a fork per job) | daemon (`snowglobe up`) |
 |---|---:|---:|---:|---:|
-| cold boot | 2464 ms | – | – | – |
-| restore → first command done | 113 ms | 295 ms | 57 ms | 89 ms |
-| a command (`true`) after that | 12 ms | 64 ms | – | 60 ms |
-| python loop (3M squares) | 0.085 s | 3.13 s | 2.97 s | 3.02 s |
-| a request to a service at zero → its answer | – | – | – | 24 ms |
-| 50 at once: all up | 8728 ms | 6052 ms | 132 ms | 841 ms |
-| 50 at once: host memory used | 40 MB (~1 MB each) | 6450 MB (129 MB each) | 795 MB (15 MB each) | 887 MB (17 MB each) |
-| 50 at once: PSS | 50 MB (1 MB each) | 6194 MB (123 MB each) | 900 MB (18 MB each) | 900 MB (18 MB each) |
+| cold boot | 2347 ms | – | – | – |
+| restore → first command done | 115 ms | 195 ms | 65 ms | 87 ms |
+| a command (`true`) after that | 11 ms | 66 ms | – | 58 ms |
+| python loop (3M squares) | 0.081 s | 3.13 s | 3.01 s | 2.99 s |
+| a request to a service at zero → its answer | – | – | – | 25 ms |
+| 50 at once: all up | 11886 ms | 5598 ms | 157 ms | 846 ms |
+| 50 at once: host memory used | 34 MB (~1 MB each) | 2387 MB (47 MB each) | 761 MB (15 MB each) | 852 MB (17 MB each) |
+| 50 at once: PSS | 50 MB (1 MB each) | 2318 MB (46 MB each) | 850 MB (17 MB each) | 860 MB (17 MB each) |
 
 Firecracker runs the guest on the hardware (KVM); snowglobe emulates it (armless's JIT), with no
-KVM, root or Docker, on Linux and macOS alike. Where that shows: compute (~35×), and the memory of
-a standalone `snowglobe run` (its restored memory is a private copy; machines forked from a
-template share theirs). The daemon's 50 machines are 50 `snowglobe up` and `snowglobe sh` calls,
-eight at a time; "all up" for Firecracker includes the harness starting each process and its API.
+KVM, root or Docker, on Linux and macOS alike. Where that shows: compute (~35×), and the memory a
+machine takes besides its guest's own pages: snowglobe-vm's heap, most of what a standalone `snowglobe
+run` is left with now that the snapshot's memory is shared (below). The daemon's 50 machines are 50
+`snowglobe up` and `snowglobe sh` calls, eight at a time; "all up" for Firecracker includes the
+harness starting each process and its API.
+
+On 2026-11-03, at armless 0.7.0 (before the snapshot's memory was shared), a standalone run took
+129 MB of host memory each (123 MB PSS) and 295 ms from restore to its first command; the fork
+server and the daemon were within a few percent of the numbers above.
 
 ### Shared snapshot memory (armless 0.8.0)
 
