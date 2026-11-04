@@ -45,11 +45,12 @@
 
           <h2 class="h3" id="ui">In a browser: snowglobe ui</h2>
           <p><code>snowglobe ui</code> shows the daemon in your browser: the last hour on one time axis (memory
-            against the budget, machines, jobs and their latency, what happened), a lane per template with each
-            machine's life as a bar, and beside it whatever you select, with its terminal one click away. It
+            against the budget, templates running, jobs and their latency, what happened), a lane per template with each
+            machine's life as a bar, and under them whatever you select, with its terminal one click away. It
             also runs commands on fresh forks, builds sites from a directory, an image or a Dockerfile you
             write there, and manages templates, machines, services, snapshots and ports.</p>
-          <pre>snowglobe ui                                     <span class="dim"># opens http://127.0.0.1:7777/?token=…</span></pre>
+          <pre>snowglobe ui                                     <span class="dim"># opens http://127.0.0.1:7777/?token=…</span>
+snowglobe ui --start-daemon                      <span class="dim"># starts a detached daemon first if none runs</span></pre>
           <p>It listens on 127.0.0.1 only. The link it prints carries a session token that becomes a cookie, and
             every request needs it, so other pages you visit can't reach the daemon through it. The terminal is
             <a href="https://github.com/coder/ghostty-web">ghostty-web</a>, Ghostty's terminal compiled to
@@ -61,7 +62,7 @@
             the template's memory, lasts until it is stopped, keeps what it writes, and has its ports forwarded
             by the daemon (its site needs a network for that). <code>sh</code>, <code>cp</code>, <code>exec</code>, <code>attach</code>,
             <code>ps</code> and <code>stop</code> reach the daemon's machines as they reach instances.</p>
-          <pre>snowglobe daemon &amp;
+          <pre>snowglobe daemon --detach                        <span class="dim"># in the background, its log in daemon.log beside the socket</span>
 snowglobe template add dist/api --name api       <span class="dim"># the python example built with --network fetch</span>
 snowglobe up api --name web -p 8080:8000 --label app=web
 snowglobe up api --name worker                   <span class="dim"># another machine, its own state</span>

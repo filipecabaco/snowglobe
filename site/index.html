@@ -373,7 +373,7 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
                   Instances outside the daemon share their snapshot's memory too, mapped from one read-only image.
                   <a href="docs/orchestration/">Orchestration in the docs</a> covers all of it.</p>
 <pre><span class="dim"># a template, and machines forked from it</span>
-$ snowglobe daemon &amp;
+$ snowglobe daemon --detach
 $ snowglobe template add dist/api --name api
 $ snowglobe up api --name worker
 $ snowglobe sh worker 'uname -m'
