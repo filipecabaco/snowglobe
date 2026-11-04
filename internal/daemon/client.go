@@ -344,3 +344,33 @@ func (c *Client) Proxy() http.Handler {
 		FlushInterval: -1,
 	}
 }
+
+// Ports is every host port the daemon holds and where it leads.
+func (c *Client) Ports() ([]PortMapping, error) {
+	var v []PortMapping
+	return v, c.call("GET", "/v1/ports", nil, &v)
+}
+
+// CheckPort says whether a host port is free to forward (ip empty: 127.0.0.1).
+func (c *Client) CheckPort(ip string, port int) (*PortCheck, error) {
+	var v PortCheck
+	return &v, c.call("GET", fmt.Sprintf("/v1/ports/check?ip=%s&port=%d", url.QueryEscape(ip), port), nil, &v)
+}
+
+// SubmitRun starts a command on a fresh fork of a template and answers at once (fire and forget).
+func (c *Client) SubmitRun(req SubmitRun) (*Run, error) {
+	var v Run
+	return &v, c.call("POST", "/v1/runs", req, &v)
+}
+
+// Runs is the kept runs, newest first, without their output.
+func (c *Client) Runs() ([]Run, error) {
+	var v []Run
+	return v, c.call("GET", "/v1/runs", nil, &v)
+}
+
+// Run is one run, with its output once it ended.
+func (c *Client) Run(id string) (*Run, error) {
+	var v Run
+	return &v, c.call("GET", "/v1/runs/"+url.PathEscape(id), nil, &v)
+}

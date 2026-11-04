@@ -114,6 +114,18 @@ https://github.com/filipecabaco/snowglobe/releases, or
   `--state keep` saves the replica before it stops and the next one carries on (max 1);
   `discard` starts each from the template. `service ls`, `service rm <name>`; API
   `/v1/services`, `/v1/services/{name}/jobs`.
+- `snowglobe ui [--port 7777] [--no-open]` serves the daemon in a browser on 127.0.0.1 (the link
+  carries a session token): the last hour on one time axis, a lane per template with machine
+  lifespans, the selection, runs on fresh forks, a terminal on any machine (ghostty-web over
+  `/v1/machines/{name}/attach`), builds, and templates, machines, services, snapshots and ports.
+- `snowglobe submit <template> '<cmd>' [--timeout S] [--env K=V]...` is fire and forget: the
+  command runs once on a fresh fork, thrown away after, and the run's id is printed at once.
+  `snowglobe runs [<id> [--wait]] [--json]` lists runs or shows one's output and exit status
+  (`--wait` exits with it). API: `POST /v1/runs {"template","cmd","env","timeout"}`,
+  `GET /v1/runs`, `GET /v1/runs/{id}`.
+- `snowglobe ports [--json]` lists the host ports the daemon holds and where each leads (machine
+  or service, guest port, open or at zero); `snowglobe ports check <port> [--ip IP]` says whether
+  one is free or what holds it (exit 1 when taken). API: `/v1/ports`, `/v1/ports/check?port=N`.
 - `snowglobe events [--json] [--after SEQ]` streams the daemon's events (kind, subject, message:
   machine.up, machine.stopped, machine.expired, service.replica_up, template.asleep,
   template.awake, snapshot.saved, admission.refused, ...), the last 200 first; `snowglobe top

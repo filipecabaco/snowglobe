@@ -156,6 +156,20 @@ Usage:
                                                      as it happens (machines up and stopped,
                                                      replicas, templates asleep and awake,
                                                      snapshots, admissions refused)
+  snowglobe ui [--port 7777] [--no-open]             the daemon in a browser: templates, machines,
+                                                     services, snapshots, builds, metrics and a
+                                                     terminal on any machine; on 127.0.0.1 only,
+                                                     opened with a link carrying a session token
+  snowglobe submit <template> '<cmd>' [--timeout S]  fire and forget: run a command once on a fresh
+                 [--env K=V]... [--json]             fork of a template, thrown away after; prints
+                                                     the run's id at once
+  snowglobe runs [<id> [--wait]] [--json]            the runs submitted, or one's output and exit
+                                                     status (--wait: until it ends, exiting with it)
+  snowglobe ports [--json]                           the host ports the daemon holds and where each
+                                                     leads: machine or service, guest port, open or
+                                                     at zero
+  snowglobe ports check <port> [--ip IP]             whether a host port is free to forward, or
+                                                     which machine, service or program holds it
   snowglobe top [--once] [--every 1s]                the daemon live: memory against its budget,
                                                      templates, services, machines, recent events
   snowglobe apply [-f snowglobe.toml]                get the daemon to what a fleet file says:
@@ -289,6 +303,14 @@ func run(args []string) int {
 		err = instance.List()
 	case "daemon":
 		err = runDaemon(args[1:])
+	case "ui":
+		err = runUI(args[1:])
+	case "ports":
+		err = runPorts(args[1:])
+	case "submit":
+		err = runSubmit(args[1:])
+	case "runs":
+		err = runRuns(args[1:])
 	case "template":
 		err = runTemplate(args[1:])
 	case "up":
@@ -333,7 +355,11 @@ func run(args []string) int {
 		return exit.Code
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\033[31merror:\033[0m %v\n", err)
+		if os.Getenv("NO_COLOR") != "" {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "\033[31merror:\033[0m %v\n", err)
+		}
 		return 1
 	}
 	return 0
