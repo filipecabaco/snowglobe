@@ -31,7 +31,8 @@ func TestMetricsCountWhatTheDaemonDid(t *testing.T) {
 	if first.JobMsP50 <= 0 || first.JobMsP95 < first.JobMsP50 || first.UpMsP50 <= 0 {
 		t.Errorf("latencies: %+v", first)
 	}
-	// What a sample counts starts afresh
+	// What a sample counts starts afresh (a later millisecond: since is to the millisecond)
+	time.Sleep(5 * time.Millisecond)
 	second := d.s.sample()
 	if second.Jobs != 0 || second.Ups != 0 || second.JobMsP50 != 0 {
 		t.Errorf("second sample: %+v", second)
