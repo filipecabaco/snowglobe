@@ -135,8 +135,11 @@
           <pre>go install github.com/filipecabaco/snowglobe/cmd/snowglobe@latest</pre>
           <p>The first build fetches the tools image (the machine that boots and snapshots your image) from
             <code>ghcr.io/filipecabaco/snowglobe-tools</code>. A version that hasn't been released compiles it
-            locally instead, once, in a few minutes. Without Docker, the first native build or run fetches this
-            release's <code>snowglobe-vm</code> and its prebuilt kernel into your cache.</p>
+            locally instead, once, in a few minutes. A release of snowglobe is one file: it carries its own
+            <code>snowglobe-vm</code> (the machine) and unpacks it into your cache the first time it runs a site
+            natively; built with <code>go install</code>, it downloads the release's instead. Building without Docker
+            also fetches the prebuilt kernel once. Releases are for Linux on x86-64 and arm64, and macOS on Apple
+            silicon.</p>
 
           <h3 id="first-site">Your first site</h3>
           <p>Any directory with a Dockerfile, or any image reference, builds into <code>dist/</code>:</p>

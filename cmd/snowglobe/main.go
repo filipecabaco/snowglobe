@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"runtime/debug"
@@ -77,6 +78,9 @@ Usage:
   snowglobe mcp --daemon                             serve the daemon to an agent over MCP: templates,
                                                      machines, commands and files, snapshots,
                                                      services, builds, fleets, status and events
+  snowglobe vm <args>...                             run the snowglobe-vm this snowglobe uses (the one
+                                                     it carries, in release builds) with these
+                                                     arguments, e.g. snowglobe vm sandbox-check
   snowglobe warm <dir> <reads.json ...>              add the files runs recorded (run
                                                      --record-reads) to the site's warm pack
   snowglobe run [dir | url] [--name N] [--detach]    run a built site, sandboxed: in a container
@@ -342,6 +346,26 @@ func run(args []string) int {
 		}
 	case "version", "--version":
 		fmt.Println("snowglobe", version)
+		if native.Embedded() {
+			fmt.Println("snowglobe-vm: built in")
+		}
+	case "vm":
+		// The snowglobe-vm this snowglobe runs (the one it carries, else the one it finds), with
+		// these arguments: snowglobe vm sandbox-check
+		vm, verr := native.VM(version, tools.NativeSource(version))
+		if verr != nil {
+			err = verr
+			break
+		}
+		cmd := exec.Command(vm, args[1:]...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if rerr := cmd.Run(); rerr != nil {
+			var x *exec.ExitError
+			if errors.As(rerr, &x) {
+				return x.ExitCode()
+			}
+			err = rerr
+		}
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
