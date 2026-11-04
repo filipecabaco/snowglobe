@@ -40,6 +40,10 @@ type Options struct {
 	memOf func(pid int) int64
 	// Logf reports what the daemon does (nil: nothing)
 	Logf func(format string, a ...any)
+	// Snowglobe is the snowglobe command builds run (empty: this program)
+	Snowglobe string
+	// Whether Docker can build here (nil: ask it); for tests
+	dockerThere func() bool
 }
 
 // Server is a running daemon.
@@ -62,6 +66,11 @@ type Server struct {
 	memOf func(pid int) int64
 	// What happened, for /v1/events
 	ev *events
+	// Samples and counts, for /v1/metrics and /metrics; how often it samples (metricsEvery)
+	meter        *meter
+	metricsEvery time.Duration
+	// Builds of sites, for /v1/builds
+	builds *builds
 }
 
 // How long a template gets to restore, and a machine or server to go once asked
@@ -81,10 +90,14 @@ func New(o Options) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery,
-		life: newLifecycle(), memOf: processMemory, ev: newEvents()}
+		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery}
 	if o.memOf != nil {
 		s.memOf = o.memOf
 	}
+	if err := os.MkdirAll(filepath.Join(o.Dir, "builds"), 0o700); err != nil {
+		return nil, err
+	}
+	s.builds = newBuilds(filepath.Join(o.Dir, "builds"))
 	if s.o.Wait <= 0 {
 		s.o.Wait = 30 * time.Second
 	}
@@ -156,6 +169,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	s.o.Logf("serving the API on %s", sock)
 	go s.reap(ctx)
 	go s.scaler(ctx)
+	go s.sampler(ctx)
 	errs := make(chan error, len(servers))
 	for i, srv := range servers {
 		go func() { errs <- srv.Serve(listeners[i]) }()
@@ -425,7 +439,7 @@ func (s *Server) TemplateJob(name string, req control.JobRequest) (*control.JobR
 		return nil, err
 	}
 	defer s.used(name)
-	return control.Job(t.Server, name, req)
+	return s.runJob(t.Server, name, req)
 }
 
 func resolveSite(site string) (string, error) {
@@ -480,6 +494,23 @@ type Up struct {
 
 // Up forks a machine from a template: it lasts until it is removed, with its ports forwarded.
 func (s *Server) Up(req Up) (*Machine, error) {
+	begun := time.Now()
+	m, err := s.up(req)
+	if err == nil {
+		s.meter.up(time.Since(begun))
+	}
+	return m, err
+}
+
+// runJob runs a job on the control socket sock, counted in the metrics.
+func (s *Server) runJob(sock, name string, req control.JobRequest) (*control.JobResult, error) {
+	begun := time.Now()
+	r, err := control.Job(sock, name, req)
+	s.meter.job(time.Since(begun), err)
+	return r, err
+}
+
+func (s *Server) up(req Up) (*Machine, error) {
 	name := req.Name
 	if name == "" {
 		name = randomName(req.Template)
@@ -633,7 +664,7 @@ func (s *Server) Job(name string, req control.JobRequest) (*control.JobResult, e
 		s.touch(name, 1)
 		defer s.touch(name, -1)
 	}
-	return control.Job(m.Socket, name, req)
+	return s.runJob(m.Socket, name, req)
 }
 
 // forward listens on a machine's host ports (filling in those the system picks) and connects each
@@ -873,6 +904,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/stats", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Stats(), nil)
 	})
+	mux.HandleFunc("GET /v1/metrics", s.serveMetrics)
+	mux.HandleFunc("GET /metrics", s.servePrometheus)
+	s.buildRoutes(mux)
+	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
 	mux.HandleFunc("GET /v1/templates", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Templates(), nil)
 	})

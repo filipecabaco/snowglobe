@@ -25,6 +25,8 @@ import (
 // an echo server. A job sent to the server runs on a fresh machine: always the first.
 func TestMain(m *testing.M) {
 	switch {
+	case len(os.Args) > 1 && os.Args[1] == "build" && os.Getenv("SNOWGLOBE_FAKE_BUILD") != "":
+		fakeBuild()
 	case os.Getenv("SNOWGLOBE_FAKE_MACHINE") != "":
 		fakeMachine(os.Getenv("SNOWGLOBE_FAKE_MACHINE"))
 	case os.Getenv("SNOWGLOBE_FAKE_VM") == "serve":
@@ -35,6 +37,24 @@ func TestMain(m *testing.M) {
 	default:
 		os.Exit(m.Run())
 	}
+}
+
+// fakeBuild plays `snowglobe build SRC --out OUT ...`: a source with "fail" in it fails, one with
+// "slow" takes a minute, anything else is a site in OUT a moment later.
+func fakeBuild() {
+	src, out := os.Args[2], flagOf("out")
+	fmt.Println("==> building", src, "with", flagOf("builder"))
+	switch {
+	case strings.Contains(src, "fail"):
+		fmt.Println("error: no such image")
+		os.Exit(3)
+	case strings.Contains(src, "slow"):
+		time.Sleep(time.Minute)
+	}
+	os.MkdirAll(filepath.Join(out, "system", "filesystem"), 0o755)
+	os.WriteFile(filepath.Join(out, "run.json"), fmt.Appendf(nil, `{"network":%q}`, flagOf("network")), 0o644)
+	fmt.Println("==> done")
+	os.Exit(0)
 }
 
 func flagOf(name string) string {
@@ -137,6 +157,10 @@ func fakeMachine(sock string) {
 			c.Close()
 		case "connect":
 			send(c, map[string]any{"connected": req["port"]})
+			go func() { io.Copy(c, r); c.Close() }()
+		case "attach":
+			// The screen, then what is typed in, echoed
+			fmt.Fprintf(c, "screen %vx%v\r\n", req["rows"], req["cols"])
 			go func() { io.Copy(c, r); c.Close() }()
 		default:
 			c.Close()

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"strings"
@@ -266,4 +267,80 @@ func (c *Client) Events(ctx context.Context, after int64, f func(Event) bool) er
 func (c *Client) TemplateJob(name string, req control.JobRequest) (*control.JobResult, error) {
 	var res control.JobResult
 	return &res, c.call("POST", "/v1/templates/"+url.PathEscape(name)+"/jobs", req, &res)
+}
+
+// Builds is every build, newest first.
+func (c *Client) Builds() ([]Build, error) {
+	var v []Build
+	return v, c.call("GET", "/v1/builds", nil, &v)
+}
+
+// StartBuild starts building a site (and a template of it).
+func (c *Client) StartBuild(req BuildRequest) (*Build, error) {
+	var v Build
+	return &v, c.call("POST", "/v1/builds", req, &v)
+}
+
+// Build is the build called id.
+func (c *Client) Build(id string) (*Build, error) {
+	var v Build
+	return &v, c.call("GET", "/v1/builds/"+url.PathEscape(id), nil, &v)
+}
+
+// RemoveBuild cancels a build, or removes one that is done.
+func (c *Client) RemoveBuild(id string) error {
+	return c.call("DELETE", "/v1/builds/"+url.PathEscape(id), nil, nil)
+}
+
+// BuildLog is a build's log from offset on.
+func (c *Client) BuildLog(id string, offset int64) (string, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/v1/builds/%s/log?offset=%d", c.base, url.PathEscape(id), offset), nil)
+	if err != nil {
+		return "", err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("daemon %s: %w", c.Addr, err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		var e struct {
+			Error string `json:"error"`
+		}
+		json.Unmarshal(data, &e)
+		return "", &apiError{status: resp.StatusCode, msg: e.Error}
+	}
+	return string(data), err
+}
+
+// Metrics is the daemon's samples after since (all when zero) and its totals.
+func (c *Client) Metrics(since time.Time) (*Metrics, error) {
+	var v Metrics
+	path := "/v1/metrics"
+	if !since.IsZero() {
+		path += fmt.Sprintf("?since=%d", since.UnixMilli())
+	}
+	return &v, c.call("GET", path, nil, &v)
+}
+
+// Proxy forwards requests to the daemon's API as they are (WebSockets included), bearing its
+// token: for `snowglobe ui`, which checks who asks first.
+func (c *Client) Proxy() http.Handler {
+	target, _ := url.Parse(c.base)
+	return &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(target)
+			r.Out.Host = target.Host
+			r.Out.Header.Del("Cookie")
+			if c.token != "" {
+				r.Out.Header.Set("Authorization", "Bearer "+c.token)
+			}
+		},
+		Transport:     c.http.Transport,
+		FlushInterval: -1,
+	}
 }

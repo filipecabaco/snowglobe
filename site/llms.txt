@@ -78,6 +78,13 @@ https://github.com/filipecabaco/snowglobe/releases, or
   `/v1/templates/{name}/jobs` for a job on a fresh fork), and over TCP for requests bearing the
   token with `--listen`. `SNOWGLOBE_DAEMON=http://HOST:PORT` and `SNOWGLOBE_DAEMON_TOKEN` point
   the CLI at a remote one. A daemon started again takes back what still runs.
+  It builds too: `POST /v1/builds {"name","source"|"dockerfile","network","memory_mb","cpus",
+  "builder","no_template"}` runs `snowglobe build` (a directory by its full path, an image
+  reference, or a Dockerfile's text; Docker when there, else natively for images) and makes the
+  site a template; `GET /v1/builds`, `/v1/builds/{id}`, `/v1/builds/{id}/log?follow=1&offset=N`,
+  `DELETE /v1/builds/{id}` (cancels, or removes a finished one). A machine's terminal is a WebSocket
+  at `/v1/machines/{name}/attach?rows=R&cols=C`. `/v1/metrics?since=MS` is a sample every 5 s for
+  an hour (memory, machines, replicas, jobs, latencies) and totals; `/metrics` is Prometheus text.
 - `snowglobe template add <site> [--name T] [--max-machines N] [--idle 30m]`, `template ls`,
   `template rm T` (removes its machines too). `--idle` stops the template's server after that long
   with no machine; the next `up` or job restores it (about a second).
