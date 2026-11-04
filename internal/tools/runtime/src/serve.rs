@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 
 use crate::machine::{self, Activity};
 use crate::site::Site;
-use crate::{job, profile, sandbox, sys, Args};
+use crate::{image, job, profile, sandbox, sys, Args};
 
 pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     let (info, spec, title) = crate::run::site_spec(&site)?;
@@ -49,6 +49,9 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     // A machine's saved state in place of the site's (a template made from a machine), read
     // before the sandbox
     let saved = args.get("state").map(|p| std::fs::read(p).map_err(|e| format!("--state {p}: {e}"))).transpose()?;
+    // The site's own snapshot restores onto its RAM image, shared with every other machine of it
+    // (a machine's saved state has RAM of its own, which the image's must not show through)
+    let image = if saved.is_none() { image::open(&site, spec.memory_mb << 20) } else { None };
     let policy = policy(&site, &root, socket, spec.network == "fetch");
     let sandboxed = sandbox::apply_stage(&policy, sandbox::Stage::Parent)?;
     if std::env::var_os("ARMLESS_JIT_CODE_MB").is_none() {
@@ -59,12 +62,14 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     // The one restore. No thread may exist when this process forks: the JIT is off until a child
     // turns it on, and the CPUs and host loop start in children
     let started = std::time::Instant::now();
-    let (vm, clock) = machine::new_vm_jit(&spec, &site, false)?;
+    let (ram, without_pages) = image.map(|i| (i.ram, i.state)).unzip();
+    let (vm, clock) = machine::new_vm_on(&spec, &site, false, ram)?;
     let board = vm.board.clone();
     let runner = Runner::new(vm, clock, false);
-    match &saved {
-        Some(state) => load(&runner, state)?,
-        None => load(&runner, &site.need("system/state.bin.zst")?)?,
+    match (&saved, without_pages) {
+        (Some(state), _) => load(&runner, state)?,
+        (None, Some(state)) => runner.load_state(&state)?,
+        (None, None) => load(&runner, &site.need("system/state.bin.zst")?)?,
     }
     drop(saved);
     let restored = started.elapsed();

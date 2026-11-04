@@ -35,6 +35,11 @@ pub fn jit_wanted() -> bool {
 /// `new_vm`, with the JIT left off when `jit` is false: its compiler threads would not survive a
 /// fork (`serve` turns it on in each child, `enable_jit`).
 pub fn new_vm_jit(spec: &Spec, site: &Site, jit: bool) -> Result<(Vm<NativePlatform>, Arc<Clock>), String> {
+    new_vm_on(spec, site, jit, None)
+}
+
+/// `new_vm_jit`, on `ram` when there is one (the snapshot's image, `image::open`).
+pub fn new_vm_on(spec: &Spec, site: &Site, jit: bool, ram: Option<armless::Ram>) -> Result<(Vm<NativePlatform>, Arc<Clock>), String> {
     let config = Config {
         memory_size: spec.memory_mb << 20,
         cpus: spec.cpus,
@@ -45,7 +50,7 @@ pub fn new_vm_jit(spec: &Spec, site: &Site, jit: bool) -> Result<(Vm<NativePlatf
             ..Default::default()
         },
     };
-    let (mut vm, clock) = armless::runner::new_vm(config)?;
+    let (mut vm, clock) = armless::runner::new_vm_on(config, ram)?;
     // Hot guest code is compiled to host code (armless's native JIT): booting, exercising and
     // running a site spend most of their time in emulated code. ARMLESS_JIT=off keeps the
     // interpreter; where the host can't run generated code the CPU stays interpreted anyway.
