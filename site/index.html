@@ -133,6 +133,8 @@
 
     /* The ledger: a live table of the visitor's own runs, under the list of runs */
     .ledger { padding-top: 14px; border-top: 1px solid var(--ink); }
+    .ledger[hidden] { display: none !important; }
+    .runs-side { gap: 28px; }
     .ledger-head { display: flex; justify-content: space-between; align-items: baseline; }
     .ledger h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
     .ledger .count { color: var(--ink-2); font-size: 14px; }
@@ -196,7 +198,7 @@
       .ledger .ledger-toggle .count { font-weight: 400; }
       .ledger:not(.open) .ledger-body { display: none; }
       .ledger .ledger-head { display: none; }
-      body { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+      body:has(#ledger:not([hidden])) { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
 
       /* A live run takes the whole screen: a 380px box is no place to type, and the screen follows
          the visual viewport so the keyboard pushes the terminal up instead of covering it */
@@ -256,17 +258,16 @@
         <section id="runs" aria-label="Runs">
           <div class="runs">
             <div class="runs-side">
-              <div class="run-list" id="run-list" role="tablist" aria-label="Runs" aria-orientation="vertical"></div>
-              <div class="ledger" id="ledger" aria-labelledby="ledger-title">
+              <div class="ledger" id="ledger" aria-labelledby="ledger-title" hidden>
                 <button class="ledger-toggle" type="button" aria-expanded="false" aria-controls="ledger-body">
-                  <span>Your runs</span><span class="count" data-count>None running</span>
+                  <span>Running now</span><span class="count" data-count></span>
                 </button>
                 <div class="ledger-body" id="ledger-body">
-                  <div class="ledger-head"><h2 id="ledger-title">Your runs</h2><span class="count" data-count>None running</span></div>
-                  <p class="empty" id="ledger-empty">Nothing running yet. Start a run here or in a new window; it reports back to this list while it lives.</p>
+                  <div class="ledger-head"><h2 id="ledger-title">Running now</h2><span class="count" data-count></span></div>
                   <ol id="ledger-list" aria-live="polite"></ol>
                 </div>
               </div>
+              <div class="run-list" id="run-list" role="tablist" aria-label="Runs" aria-orientation="vertical"></div>
             </div>
             <div class="runs-main" id="runs-main"></div>
           </div>
@@ -798,9 +799,15 @@ $ snowglobe apply</pre>
         const { run } = item;
         let state = run.state;
         if (state !== "closed" && now - item.lastSeen > 7000) state = "lost";
-        if (state === "closed" && !item.closedAt) item.closedAt = now;
+        if ((state === "closed" || state === "lost") && !item.closedAt) item.closedAt = now;
         if (state === "loading" || state === "ready") live++;
         const demo = demoFor(run.path);
+        // Only what runs is listed: a stopped run says so for a moment, then goes
+        if (item.closedAt && now - item.closedAt > 4000) {
+          ledger.delete(id);
+          list.querySelector(`[data-id="${CSS.escape(id)}"]`)?.remove();
+          continue;
+        }
 
         let li = list.querySelector(`[data-id="${CSS.escape(id)}"]`);
         if (!li) {
@@ -857,8 +864,8 @@ $ snowglobe apply</pre>
         }
         e.tab.dataset.state = st;
       }
-      $("#ledger-empty").hidden = ledger.size > 0;
-      document.querySelectorAll("[data-count]").forEach((c) => (c.textContent = live ? `${live} running` : "None running"));
+      $("#ledger").hidden = ledger.size === 0;
+      document.querySelectorAll("[data-count]").forEach((c) => (c.textContent = live ? `${live} live` : ""));
       document.documentElement.classList.toggle("live-any", live > 0);
     }
     setInterval(render, 1000);
