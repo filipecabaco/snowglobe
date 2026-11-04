@@ -39,6 +39,14 @@
     h1 { font-size: clamp(2.75rem, 4.3vw, 4rem); line-height: .95; letter-spacing: -.035em; font-weight: 620; margin: 0 0 28px; max-width: 26ch; text-wrap: balance; }
     .lede { font-size: clamp(19px, 1.7vw, 22px); line-height: 1.45; max-width: 36em; margin: 0 0 18px; color: var(--ink); }
     .aside-note { color: var(--ink-2); max-width: 40em; margin: 0; }
+    /* Install: the one line to run, and a button that copies it */
+    .install { margin: 28px 0 0; max-width: 46em; }
+    .install-label { font-size: 13px; color: var(--ink-2); margin: 0 0 8px; }
+    .install-line { display: flex; align-items: center; gap: 12px; background: var(--soft); border-radius: 6px; padding: 8px 8px 8px 18px; }
+    .install-line code { flex: 1; min-width: 0; font-size: 13.5px; white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .install-line code::-webkit-scrollbar { display: none; }
+    .install-line .btn { flex: none; height: 36px; font-size: 14px; }
+    .install-more { font-size: 14px; color: var(--ink-2); margin: 8px 0 0; }
 
     /* A run */
     .run { padding: 40px 0 72px; border-top: 1px solid var(--ink); scroll-margin-top: 16px; }
@@ -203,6 +211,15 @@
           <p class="aside-note">Run one here to type into it, or open it in a window of its own. It is a 64-bit ARM CPU in
             emulation, so it is slower than native; every number and transcript below was measured and
             recorded when this site was built.</p>
+          <div class="install">
+            <p class="install-label" id="install-label">Install snowglobe on Linux or macOS</p>
+            <div class="install-line">
+              <code id="install-cmd">curl -fsSL https://filipecabaco.github.io/snowglobe/install.sh | sh</code>
+              <button class="btn" type="button" id="install-copy" aria-describedby="install-label">Copy</button>
+            </div>
+            <p class="install-more">It checks the release's checksum and installs into <code>~/.local/bin</code>, no sudo.
+              <a href="install.sh">Read the script</a> · <a href="docs/#install">other ways</a></p>
+          </div>
         </section>
 
         <div id="runs"></div>
@@ -229,7 +246,9 @@
           <div class="steps">
             <div class="step">
               <h3>Install</h3>
-              <div><pre>$ go install github.com/filipecabaco/snowglobe/cmd/snowglobe@latest</pre></div>
+              <div><pre>$ curl -fsSL https://filipecabaco.github.io/snowglobe/install.sh | sh
+<span class="dim"># or, with Go</span>
+$ go install github.com/filipecabaco/snowglobe/cmd/snowglobe@latest</pre></div>
             </div>
             <div class="step">
               <h3>Describe</h3>
@@ -409,6 +428,22 @@ $ snowglobe apply</pre>
   </template>
 
   <script src="theme.js"></script>
+  <script>
+  {
+    // Copy the install line; say so on the button for a moment
+    const btn = document.getElementById("install-copy");
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(document.getElementById("install-cmd").textContent);
+        btn.textContent = "Copied";
+      } catch {
+        getSelection().selectAllChildren(document.getElementById("install-cmd"));
+        btn.textContent = "Selected";
+      }
+      setTimeout(() => { btn.textContent = "Copy"; }, 1600);
+    });
+  }
+  </script>
   <script src="xterm/xterm.js" defer></script>
   <script type="module">
     const demos = [

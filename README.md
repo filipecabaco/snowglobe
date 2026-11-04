@@ -18,7 +18,7 @@ reference.
 [![CI and Pages](https://github.com/filipecabaco/snowglobe/actions/workflows/pages.yml/badge.svg)](https://github.com/filipecabaco/snowglobe/actions/workflows/pages.yml)
 
 ```sh
-go install github.com/filipecabaco/snowglobe/cmd/snowglobe@latest   # or a binary from the releases
+curl -fsSL https://filipecabaco.github.io/snowglobe/install.sh | sh   # or: go install github.com/filipecabaco/snowglobe/cmd/snowglobe@latest
 snowglobe build ./my-app          # a directory with a Dockerfile, or any image reference
 snowglobe serve dist              # preview at http://localhost:8000, then deploy dist/ anywhere
 snowglobe run dist                # or run it in your terminal, sandboxed
