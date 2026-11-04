@@ -39,7 +39,7 @@ The docs live on the site, written for people using snowglobe:
 - [Networking](https://filipecabaco.github.io/snowglobe/docs/#network): HTTP(S) and WebSockets through the browser, tunnels for other TCP, credentials
 - [Running outside a browser](https://filipecabaco.github.io/snowglobe/docs/#run): sessions, instances, shared memory, sites from a URL, one executable
 - [For agents and programs](https://filipecabaco.github.io/snowglobe/docs/#agents): `sh`, `cp`, forks, MCP, limits and logs
-- [Orchestration](https://filipecabaco.github.io/snowglobe/docs/#orchestration): the daemon, templates and machines, snapshots, services and scale to zero, limits, events and top, fleets
+- [Orchestration](https://filipecabaco.github.io/snowglobe/docs/#orchestration): `snowglobe ui`, the daemon, fire-and-forget runs, templates and machines, snapshots, services and scale to zero, ports, limits, events and top, fleets
 - [Isolation](https://filipecabaco.github.io/snowglobe/docs/#security): what each of the browser, native and Docker guards against, and how shared memory stays private
 - [CLI reference](https://filipecabaco.github.io/snowglobe/docs/#reference): every command, flag, label and environment variable
 
@@ -167,6 +167,8 @@ internal/daemon/      the orchestrator: templates, machines forked from them, sn
                       that scale to zero, and its HTTP/JSON API (snowglobe daemon)
 internal/control/     snowglobe-vm's control sockets: jobs, spawn, save, connect
 internal/fleet/       fleet files (snowglobe.toml): the plan apply, diff and down carry out
+internal/ui/          snowglobe ui: the daemon in a browser (static files embedded; ghostty-web
+                      vendored and pinned)
 internal/bundle/      a site and snowglobe-vm in one executable
 internal/mcp/         the MCP server
 internal/site/        each built site's run page (the terminal, saves, the service worker)

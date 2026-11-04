@@ -252,9 +252,11 @@ function renderAxis() {
   // Round minutes, each at its own place: every 2 at 10 minutes, 5 at half an hour, 15 at an hour
   const every = (minutes <= 15 ? 2 : minutes <= 30 ? 5 : 15) * MIN;
   const marks = [];
-  for (let t = Math.ceil((now - sp) / every) * every; t < now - every / 2; t += every) marks.push(t);
+  // None close enough to "now" for their labels to meet
+  for (let t = Math.ceil((now - sp) / every) * every; t < now - Math.max(every / 2, sp * 0.14); t += every) marks.push(t);
   const at = (t) => `${((t - (now - sp)) / sp) * 100}%`;
-  const kids = marks.map((t) => el("span", { style: `left:${at(t)}` }, clock(t)));
+  // One at the very start begins at its tick rather than centring on it, so it stays on the page
+  const kids = marks.map((t) => el("span", { class: (t - (now - sp)) / sp < 0.06 ? "edge" : null, style: `left:${at(t)}` }, clock(t)));
   kids.push(el("span", { class: "now", style: "left:100%" }, "now"));
   const started = state.totals ? new Date(state.totals.started).getTime() : 0;
   if (started > now - sp) {
@@ -486,16 +488,21 @@ const runHow = (r) => r.status === "running" ? "running"
   : r.exit === null || r.exit === undefined ? "out of time"
   : `exit ${r.exit} · ${r.ms} ms`;
 function renderRuns() {
-  $("runs").replaceChildren(...state.runs.slice(0, 6).map((r) => el("li", {},
-    el("button", { type: "button", onclick: () => showRun(r.id), title: r.cmd },
-      el("span", { class: "dot " + (r.status === "running" ? "waiting" : r.error || (r.exit ?? 1) !== 0 ? "idle" : "") }),
+  $("runs").replaceChildren(...state.runs.slice(0, 6).map((r) => {
+    const failed = r.status !== "running" && (r.error || (r.exit ?? 1) !== 0);
+    return el("li", { class: failed ? "failed" : "" },
+    el("button", { type: "button", onclick: () => showRun(r.id), title: r.cmd, "aria-current": state.shownRun === r.id ? "true" : null },
+      el("span", { class: "dot " + (r.status === "running" ? "waiting" : failed ? "failed" : "") }),
       el("span", { class: "cmd" }, r.cmd),
-      el("span", { class: "how" }, `${r.template} · ${runHow(r)}`)))));
+      el("span", { class: "how" }, `${r.template} · ${runHow(r)}`)));
+  }));
 }
 async function showRun(id) {
   const out = $("run-output"), meta = $("run-meta");
   try {
     const r = await api(`/v1/runs/${encodeURIComponent(id)}`);
+    state.shownRun = id;
+    renderRuns();
     out.hidden = false;
     out.textContent = `$ ${r.cmd}\n` + b64(r.output) + (r.error ? r.error : "");
     meta.textContent = `${r.id} on a fork of ${r.template} · ${runHow(r)}${r.status === "running" ? "" : ", the fork is gone"}`;
@@ -670,7 +677,7 @@ function wireForms() {
     if (e.submitter?.value === "submit") {
       try {
         const r = await api("/v1/runs", { method: "POST", body: { template: f.template.value, cmd: f.cmd.value, timeout: 600 } });
-        meta.textContent = `submitted ${r.id}: it runs once on a fresh fork; its result appears below`;
+        meta.textContent = `${r.id} runs once in the background on a fresh fork; its result appears below`;
         refresh();
       } catch (err) { meta.textContent = err.message; }
       return;

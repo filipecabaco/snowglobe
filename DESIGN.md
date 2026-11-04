@@ -266,6 +266,26 @@ sized heading; subsections use the Title step. A note is a 1px ink rule on the l
 tinted box. Under 1080px the contents move above the text; under 720px option tables reflow into
 one block per row and the isolation comparison into labelled rows, so no table scrolls sideways.
 
+### Orchestration UI (Operate surface)
+`snowglobe ui` (`internal/ui/static/`) shows a running daemon in a browser, in the same world. It
+embeds copies of `base.css`, `theme.js` and the fonts (a test keeps them identical to `site/`). Its
+layout is a timeline: the main column opens on one time axis spanning what the daemon has lived (10
+minutes to an hour). Ruled series rows hold memory against the budget (dashed), machines and jobs:
+a label, a figure-scale value, and a 1.5px ink line or ink bars. Under them come event ticks,
+round-minute labels, and the daemon's start marked in ink. A lane per template follows, with each
+machine's life as a 6px ink bar whose live end is signal and whose stopped bars are spent grey.
+A hairline cursor crosses every row and lane, and its readout leads with the minute at figure
+scale. The rail holds the selection (four figures, outlined pill actions), "Run on a fresh fork"
+(the one signal pill "Run", an outlined "Run in background", the output on a black panel, and
+submitted runs below), then events.
+
+Dots carry state: signal for live, amber for building or running, grey for idle or at zero, a
+solid ink dot for a run that succeeded, and a hollow ink ring for one that failed. The machine
+terminal is ghostty-web on the black panel (460px). Tables are the system's ruled tables, and on
+phones each row becomes a block. Under 1080px the page is one column: the timeline, then the rail,
+then Ports, Fleet and Builds. Every position is set through the CSSOM, because the page's CSP
+refuses style attributes.
+
 ### Run Window Strip (minor surface)
 A run opened in its own window (`internal/site/index.html.tmpl`) shows a one-line strip above a full-bleed black terminal: the title, "sandboxed in this tab · no server · no network", and a status with a dot. The strip is hidden when the run is embedded (`?embed`). It uses the system's tokens: white ground, ink text and rule, graphite secondary text, the amber restoring dot and the signal live dot; its type is the platform mono, since the template ships with every snowglobe site and carries no web fonts.
 

@@ -142,3 +142,20 @@ func TestVendoredGhosttyWebIsPinned(t *testing.T) {
 		}
 	}
 }
+
+// The UI's copies of the site's stylesheet, theme toggle and fonts are the site's own
+func TestTheSitesFilesAreTheSame(t *testing.T) {
+	for _, name := range []string{"base.css", "theme.js", "fonts/Switzer-Variable.woff2", "fonts/FragmentMono-Regular.woff2"} {
+		site, err := os.ReadFile(filepath.Join("..", "..", "site", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ours, err := os.ReadFile(filepath.Join("static", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(site) != string(ours) {
+			t.Errorf("internal/ui/static/%s differs from site/%s: copy it again", name, name)
+		}
+	}
+}
