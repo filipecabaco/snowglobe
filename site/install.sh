@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://filipecabaco.github.io/snowglobe/install.sh | sh
 #
-# It picks the release for this system (Linux or macOS, x86-64 or arm64), checks it against the
+# It picks the release for this system (Linux on x86-64 or arm64, macOS on Apple silicon), checks it against the
 # release's SHA256SUMS, and puts the snowglobe binary in ~/.local/bin (no sudo). snowglobe fetches
 # its machine runtime (snowglobe-vm) itself the first time it needs it.
 #
@@ -38,6 +38,11 @@ x86_64 | amd64) arch=amd64 ;;
 arm64 | aarch64) arch=arm64 ;;
 *) fail "no snowglobe release for $(uname -m)" ;;
 esac
+# Under Rosetta an arm64 Mac reports x86_64: it is Apple silicon all the same
+if [ "$os/$arch" = darwin/amd64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+	arch=arm64
+fi
+[ "$os/$arch" != darwin/amd64 ] || fail "snowglobe runs on Macs with Apple silicon, not Intel ones"
 
 version="${SNOWGLOBE_VERSION:-}"
 if [ -z "$version" ]; then
