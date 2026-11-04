@@ -38,7 +38,8 @@ The docs live on the site, written for people using snowglobe:
 - [Building a site](https://filipecabaco.github.io/snowglobe/docs/#build): labels and flags, readiness, exercises and the warm pack, CPUs, building without Docker
 - [Networking](https://filipecabaco.github.io/snowglobe/docs/#network): HTTP(S) and WebSockets through the browser, tunnels for other TCP, credentials
 - [Running outside a browser](https://filipecabaco.github.io/snowglobe/docs/#run): sessions, instances, shared memory, sites from a URL, one executable
-- [For agents and programs](https://filipecabaco.github.io/snowglobe/docs/#agents): `sh`, `cp`, forks, the daemon, snapshots, services and scale to zero, fleets, events, MCP, limits and logs
+- [For agents and programs](https://filipecabaco.github.io/snowglobe/docs/#agents): `sh`, `cp`, forks, MCP, limits and logs
+- [Orchestration](https://filipecabaco.github.io/snowglobe/docs/#orchestration): the daemon, templates and machines, snapshots, services and scale to zero, limits, events and top, fleets
 - [Isolation](https://filipecabaco.github.io/snowglobe/docs/#security): what each of the browser, native and Docker guards against, and how shared memory stays private
 - [CLI reference](https://filipecabaco.github.io/snowglobe/docs/#reference): every command, flag, label and environment variable
 

@@ -336,8 +336,8 @@ echo 'sum(i*i for i in range(10))' | ./python</pre>
         <section id="agents" aria-labelledby="agents-title">
           <h2 id="agents-title">For agents and programs</h2>
           <p class="intro">A native instance takes jobs on the guest's root shell, whatever its app is, and a run
-            can be bounded, stopped from outside and recorded. For many machines, the daemon forks them from
-            templates in milliseconds, scales services to zero and applies whole fleets from a file.</p>
+            can be bounded, stopped from outside and recorded. For many machines at once, see
+            <a href="#orchestration">Orchestration</a>.</p>
 
           <h3 id="sh-cp">Commands and files: sh and cp</h3>
           <p>Pass the command to <code>snowglobe sh</code> as one quoted argument; its flags would otherwise be read as
@@ -361,26 +361,106 @@ snowglobe cp box:/root/project/out ./out</pre>
 snowglobe sh tpl 'python3 untrusted.py'         <span class="dim"># many at once, each on its own copy</span>
 snowglobe stop tpl</pre>
 
+          <h3 id="mcp">MCP</h3>
+          <p><code>snowglobe mcp &lt;site&gt;</code> serves a site to an agent as an MCP server over stdio: an isolated
+            Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code> tools. It
+            starts a native instance and stops it when the agent goes (<code>--keep</code> leaves it).</p>
+          <pre>claude mcp add sandbox -- snowglobe mcp https://filipecabaco.github.io/snowglobe/python/</pre>
+
+          <h3 id="limits">Limits, stopping and logs</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Flag</th><th scope="col">What it does</th><th scope="col">Exit</th></tr></thead>
+              <tbody>
+                <tr><td><code>--max-runtime 30m</code></td><td>ends the run after this long, whatever it is doing</td><td>124</td></tr>
+                <tr><td><code>--stop-file PATH</code></td><td>ends the run once <code>PATH</code> exists: create it from anywhere</td><td>143</td></tr>
+                <tr><td><code>--log-dir DIR</code></td><td>durable <code>console.log</code>, <code>serial.log</code> and <code>events.jsonl</code></td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Either way the job running in the guest is killed first, and a <code>stop</code> event saying why goes to
+            the log. Logs are appended as things happen, so they survive a crash of the run, and rotate at 8 MiB. A
+            named native instance logs to <code>snowglobe/logs/&lt;name&gt;</code> in your cache directory unless
+            <code>--log-dir</code> says otherwise.</p>
+          <ul>
+            <li><code>console.log</code>: the app's terminal, byte for byte.</li>
+            <li><code>serial.log</code>: the guest's serial line, with the kernel's own messages (an OOM kill, a panic)
+              and the job shell.</li>
+            <li><code>events.jsonl</code>: one JSON object a line, each synced to disk: <code>start</code>,
+              <code>restored</code>, <code>job_start</code> (the command, its environment variables' names but never
+              their values, the timeout), <code>job_end</code> (status, <code>timed_out</code>, <code>killed</code>,
+              milliseconds, the first 64 KiB of output) and <code>stop</code> (its <code>reason</code>:
+              <code>stop-file</code>, <code>max-runtime</code>, <code>guest-stopped</code> or <code>end</code>, and the
+              exit status).</li>
+          </ul>
+          <p><strong>Kills reach everything a job started.</strong> A job runs in a session of its own in the guest;
+            when it runs out of time or the instance stops, it gets TERM, then KILL after 3 s, including whatever it
+            put in the background. A process that makes a session of its own (a daemon that <code>setsid</code>s) is
+            out of reach, as it would be anywhere.</p>
+          <p><strong>A job's result is its own word.</strong> A job's exit status comes back on a line marked with a
+            one-time value the host types only to the job's launcher, so a job that merely prints a fake result isn't
+            believed. A job runs as root in the guest, though: one determined to can still read that value from the
+            launcher's memory and forge its own status, output and <code>out/</code> files. That reaches only its own
+            result. The host still enforces the time limit, and if a job leaves the guest's shell busy, later jobs
+            fail with "the guest's shell is not answering" rather than run inside it.</p>
+        </section>
+
+        <section id="orchestration" aria-labelledby="orchestration-title">
+          <h2 id="orchestration-title">Orchestration</h2>
+          <p class="intro">Many machines from one site, without KVM, root or Docker: <code>snowglobe daemon</code> restores
+            sites once as templates and forks machines from them in milliseconds, keeps snapshots of running ones,
+            puts services behind ports that scale to zero, holds them all to a memory budget, and applies whole
+            fleets from a file.</p>
+
           <h3 id="daemon">Templates and machines: the daemon</h3>
           <p><code>snowglobe daemon</code> keeps templates (a site restored once) and the machines forked from them.
             <code>snowglobe up</code> forks a machine from a template in tens of milliseconds. The machine shares
             the template's memory, lasts until it is stopped, keeps what it writes, and has its ports forwarded
-            by the daemon. <code>sh</code>, <code>cp</code>, <code>exec</code>, <code>attach</code>,
+            by the daemon (its site needs a network for that). <code>sh</code>, <code>cp</code>, <code>exec</code>, <code>attach</code>,
             <code>ps</code> and <code>stop</code> reach the daemon's machines as they reach instances.</p>
           <pre>snowglobe daemon &amp;
-snowglobe template add dist/python --name py     <span class="dim"># restored once, its JIT code compiled once</span>
-snowglobe up py --name web -p 8080:8000 --label app=web
-snowglobe up py --name worker                    <span class="dim"># another machine, its own state</span>
+snowglobe template add dist/api --name api       <span class="dim"># the python example built with --network fetch</span>
+snowglobe up api --name web -p 8080:8000 --label app=web
+snowglobe up api --name worker                   <span class="dim"># another machine, its own state</span>
 snowglobe sh web 'python3 -m http.server 8000 &amp;'
 snowglobe ps
 snowglobe stop worker
-snowglobe template rm py                         <span class="dim"># and its machines</span></pre>
+snowglobe template rm api                        <span class="dim"># and its machines</span></pre>
           <p>The API is HTTP/JSON on a Unix socket in the user cache (<code>curl --unix-socket</code> works):
             <code>/v1/templates</code>, <code>/v1/machines</code>, <code>/v1/machines/{name}/jobs</code> and
             <code>/v1/templates/{name}/jobs</code> (a job on a fresh fork). <code>--listen ADDR --token-file F</code>
             also serves it over TCP, to requests bearing the token, and <code>SNOWGLOBE_DAEMON=http://HOST:PORT</code>
             with <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it. A daemon started again takes back the
             templates and machines that are still running.</p>
+
+          <h3 id="snapshots">Snapshots of running machines</h3>
+          <p><code>snowglobe snapshot save</code> saves a machine whole: its memory, its running processes and the
+            files it wrote. Machines start from it again with <code>up --snapshot</code>, or it becomes a template
+            of its own with <code>template add --snapshot</code>. Set a machine up once (dependencies installed, a
+            server started, data loaded), then fork as many as you want, already set up.</p>
+          <pre>snowglobe up api --name base
+snowglobe sh base 'pip install httpx &amp;&amp; python3 -m http.server 8000 &amp;'
+snowglobe snapshot save base --name ready        <span class="dim"># tens of milliseconds</span>
+snowglobe template add --snapshot ready --name api-ready
+snowglobe up api-ready -p 8000                    <span class="dim"># installed, its server already listening</span>
+snowglobe snapshot ls
+snowglobe snapshot rm ready</pre>
+
+          <h3 id="services">Services and scale to zero</h3>
+          <p>A service puts a template's machines behind host ports that the daemon holds. Each connection (or
+            <code>snowglobe sh &lt;service&gt;</code>) goes to one of its replicas, started on demand.
+            With <code>--min 0</code> it scales to zero: replicas with no connection or job for <code>--idle</code>
+            stop, and the next request forks one again. Made of a snapshot whose server was already listening, a
+            service at zero answers its first request in about 20 ms. <code>--state keep</code> saves the replica
+            before it stops, and the next one carries on from that save (one replica); <code>--state
+            discard</code>, the default, starts every replica from the template.</p>
+          <pre>snowglobe service add web --template api-ready -p 8080:8000 --min 0 --max 3 --idle 5m --concurrency 10
+snowglobe service add db --template pg --state keep --idle 10m
+snowglobe service ls                              <span class="dim"># replicas running now, of each</span>
+snowglobe service rm web</pre>
+          <p>A replica takes <code>--concurrency</code> connections before another is started, up to
+            <code>--max</code>; under <code>--min</code>, replicas that stop are replaced. The API is
+            <code>/v1/services</code> and <code>/v1/services/{name}/jobs</code>.</p>
 
           <h3 id="limits-lifecycle">Limits and lifecycle</h3>
           <p><code>snowglobe daemon --memory 8G</code> caps what its template servers and machines take together.
@@ -433,78 +513,6 @@ idle = "5m"
 [machines.scratch]
 template = "py"
 ttl = "24h"</pre>
-
-          <h3 id="snapshots">Snapshots of running machines</h3>
-          <p><code>snowglobe snapshot save</code> saves a machine whole: its memory, its running processes and the
-            files it wrote. Machines start from it again with <code>up --snapshot</code>, or it becomes a template
-            of its own with <code>template add --snapshot</code>. Set a machine up once (dependencies installed, a
-            server started, data loaded), then fork as many as you want, already set up.</p>
-          <pre>snowglobe up py --name base
-snowglobe sh base 'pip install httpx &amp;&amp; python3 -m http.server 8000 &amp;'
-snowglobe snapshot save base --name ready        <span class="dim"># tens of milliseconds</span>
-snowglobe template add --snapshot ready --name py-ready
-snowglobe up py-ready -p 8000                     <span class="dim"># installed, its server already listening</span>
-snowglobe snapshot ls
-snowglobe snapshot rm ready</pre>
-
-          <h3 id="services">Services and scale to zero</h3>
-          <p>A service puts a template's machines behind host ports that the daemon holds. Each connection (or
-            <code>snowglobe sh &lt;service&gt;</code>) goes to one of its replicas, started on demand.
-            With <code>--min 0</code> it scales to zero: replicas with no connection or job for <code>--idle</code>
-            stop, and the next request forks one again. Made of a snapshot whose server was already listening, a
-            service at zero answers its first request in about 20 ms. <code>--state keep</code> saves the replica
-            before it stops, and the next one carries on from that save (one replica); <code>--state
-            discard</code>, the default, starts every replica from the template.</p>
-          <pre>snowglobe service add web --template py-ready -p 8080:8000 --min 0 --max 3 --idle 5m --concurrency 10
-snowglobe service add db --template pg --state keep --idle 10m
-snowglobe service ls                              <span class="dim"># replicas running now, of each</span>
-snowglobe service rm web</pre>
-          <p>A replica takes <code>--concurrency</code> connections before another is started, up to
-            <code>--max</code>; under <code>--min</code>, replicas that stop are replaced. The API is
-            <code>/v1/services</code> and <code>/v1/services/{name}/jobs</code>.</p>
-
-          <h3 id="mcp">MCP</h3>
-          <p><code>snowglobe mcp &lt;site&gt;</code> serves a site to an agent as an MCP server over stdio: an isolated
-            Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code> tools. It
-            starts a native instance and stops it when the agent goes (<code>--keep</code> leaves it).</p>
-          <pre>claude mcp add sandbox -- snowglobe mcp https://filipecabaco.github.io/snowglobe/python/</pre>
-
-          <h3 id="limits">Limits, stopping and logs</h3>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th scope="col">Flag</th><th scope="col">What it does</th><th scope="col">Exit</th></tr></thead>
-              <tbody>
-                <tr><td><code>--max-runtime 30m</code></td><td>ends the run after this long, whatever it is doing</td><td>124</td></tr>
-                <tr><td><code>--stop-file PATH</code></td><td>ends the run once <code>PATH</code> exists: create it from anywhere</td><td>143</td></tr>
-                <tr><td><code>--log-dir DIR</code></td><td>durable <code>console.log</code>, <code>serial.log</code> and <code>events.jsonl</code></td><td></td></tr>
-              </tbody>
-            </table>
-          </div>
-          <p>Either way the job running in the guest is killed first, and a <code>stop</code> event saying why goes to
-            the log. Logs are appended as things happen, so they survive a crash of the run, and rotate at 8 MiB. A
-            named native instance logs to <code>snowglobe/logs/&lt;name&gt;</code> in your cache directory unless
-            <code>--log-dir</code> says otherwise.</p>
-          <ul>
-            <li><code>console.log</code>: the app's terminal, byte for byte.</li>
-            <li><code>serial.log</code>: the guest's serial line, with the kernel's own messages (an OOM kill, a panic)
-              and the job shell.</li>
-            <li><code>events.jsonl</code>: one JSON object a line, each synced to disk: <code>start</code>,
-              <code>restored</code>, <code>job_start</code> (the command, its environment variables' names but never
-              their values, the timeout), <code>job_end</code> (status, <code>timed_out</code>, <code>killed</code>,
-              milliseconds, the first 64 KiB of output) and <code>stop</code> (its <code>reason</code>:
-              <code>stop-file</code>, <code>max-runtime</code>, <code>guest-stopped</code> or <code>end</code>, and the
-              exit status).</li>
-          </ul>
-          <p><strong>Kills reach everything a job started.</strong> A job runs in a session of its own in the guest;
-            when it runs out of time or the instance stops, it gets TERM, then KILL after 3 s, including whatever it
-            put in the background. A process that makes a session of its own (a daemon that <code>setsid</code>s) is
-            out of reach, as it would be anywhere.</p>
-          <p><strong>A job's result is its own word.</strong> A job's exit status comes back on a line marked with a
-            one-time value the host types only to the job's launcher, so a job that merely prints a fake result isn't
-            believed. A job runs as root in the guest, though: one determined to can still read that value from the
-            launcher's memory and forge its own status, output and <code>out/</code> files. That reaches only its own
-            result. The host still enforces the time limit, and if a job leaves the guest's shell busy, later jobs
-            fail with "the guest's shell is not answering" rather than run inside it.</p>
         </section>
 
         <section id="security" aria-labelledby="security-title">
@@ -695,6 +703,7 @@ snowglobe service rm web</pre>
             <li><a href="#network">Networking</a></li>
             <li><a href="#run">Running outside a browser</a></li>
             <li><a href="#agents">For agents and programs</a></li>
+            <li><a href="#orchestration">Orchestration</a></li>
             <li><a href="#security">Isolation</a></li>
             <li><a href="#workspace">Saving your work</a></li>
             <li><a href="#internals">How it works</a></li>
