@@ -199,10 +199,14 @@ CMD ["python3"]</textarea></label>
             <select id="run-template" name="template" required></select>
             <label class="sr" for="run-cmd">Command</label>
             <input id="run-cmd" name="cmd" required placeholder="uname -a" autocomplete="off" spellcheck="false">
-            <button class="btn go" type="submit">Run</button>
+            <div class="run-buttons">
+              <button class="btn go" type="submit" value="wait">Run</button>
+              <button class="btn" type="submit" value="submit" title="Fire and forget: it runs once and its fork is thrown away; the result waits below">Submit</button>
+            </div>
           </form>
           <pre class="panel output" id="run-output" hidden></pre>
           <p class="caption" id="run-meta"></p>
+          <ol class="runs" id="runs" aria-label="Submitted runs"></ol>
         </section>
 
         <section class="recent" aria-labelledby="recent-title">

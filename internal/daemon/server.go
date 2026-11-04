@@ -71,6 +71,8 @@ type Server struct {
 	metricsEvery time.Duration
 	// Builds of sites, for /v1/builds
 	builds *builds
+	// Fire-and-forget runs, for /v1/runs
+	runs *runs
 }
 
 // How long a template gets to restore, and a machine or server to go once asked
@@ -90,7 +92,7 @@ func New(o Options) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery,
-		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery}
+		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery, runs: newRuns()}
 	if o.memOf != nil {
 		s.memOf = o.memOf
 	}
@@ -908,6 +910,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /metrics", s.servePrometheus)
 	s.buildRoutes(mux)
 	s.portRoutes(mux)
+	s.runRoutes(mux)
 	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
 	mux.HandleFunc("GET /v1/templates", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Templates(), nil)

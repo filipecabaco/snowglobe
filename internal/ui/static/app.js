@@ -71,7 +71,7 @@ const dur = (d) => (typeof d === "string" ? d.replace(/(\D)0s$/, "$1").replace(/
 // --- state
 
 const state = {
-  stats: null, templates: [], machines: [], services: [], snapshots: [], builds: [], ports: [],
+  stats: null, templates: [], machines: [], services: [], snapshots: [], builds: [], ports: [], runs: [],
   samples: [], totals: null, events: [], lives: new Map(), selected: null,
   seen: new Set(), cursorAt: null, reachable: true,
 };
@@ -84,10 +84,10 @@ function banner(msg) {
 
 async function refresh() {
   try {
-    const [stats, templates, machines, services, snapshots, builds, ports] = await Promise.all([
-      api("/v1/stats"), api("/v1/templates"), api("/v1/machines"), api("/v1/services"), api("/v1/snapshots"), api("/v1/builds"), api("/v1/ports"),
+    const [stats, templates, machines, services, snapshots, builds, ports, runs] = await Promise.all([
+      api("/v1/stats"), api("/v1/templates"), api("/v1/machines"), api("/v1/services"), api("/v1/snapshots"), api("/v1/builds"), api("/v1/ports"), api("/v1/runs"),
     ]);
-    Object.assign(state, { stats, templates, machines, services, snapshots, builds, ports, reachable: true });
+    Object.assign(state, { stats, templates, machines, services, snapshots, builds, ports, runs, reachable: true });
     for (const m of machines) {
       const l = state.lives.get(m.name);
       if (!l || l.end) state.lives.set(m.name, { name: m.name, template: m.template, start: new Date(m.created).getTime(), end: null });
@@ -110,6 +110,7 @@ async function refreshMetrics() {
     state.totals = m.totals;
     state.every = m.every_ms;
     renderSeries();
+    renderEvents();
   } catch {}
 }
 
@@ -214,7 +215,7 @@ function renderSeries() {
   });
   draw($("chart-machines"), (w, h) => {
     if (!s.length) return [];
-    const top = Math.max(1, ...s.map((v) => v.machines));
+    const top = Math.max(1, ...s.map((v) => v.machines)) + 1;
     const y = (v) => h - 4 - (v / top) * (h - 8);
     const pts = [];
     s.forEach((v, i) => {
@@ -248,8 +249,19 @@ function renderAxis() {
   const now = Date.now(), sp = span();
   const minutes = Math.round(sp / MIN);
   $("overview-title").textContent = minutes >= 60 ? "The last hour" : `The last ${minutes} minutes`;
-  const marks = [0, 1, 2, 3, 4].map((i) => now - sp + (i / 4) * sp);
-  $("axis").replaceChildren(...marks.map((t, i) => el("span", { style: `left:${(i / 4) * 100}%` }, i === 4 ? "now" : clock(t))));
+  // Round minutes, each at its own place: every 2 at 10 minutes, 5 at half an hour, 15 at an hour
+  const every = (minutes <= 15 ? 2 : minutes <= 30 ? 5 : 15) * MIN;
+  const marks = [];
+  for (let t = Math.ceil((now - sp) / every) * every; t < now - every / 2; t += every) marks.push(t);
+  const at = (t) => `${((t - (now - sp)) / sp) * 100}%`;
+  const kids = marks.map((t) => el("span", { style: `left:${at(t)}` }, clock(t)));
+  kids.push(el("span", { class: "now", style: "left:100%" }, "now"));
+  const started = state.totals ? new Date(state.totals.started).getTime() : 0;
+  if (started > now - sp) {
+    const late = (started - (now - sp)) / sp > 0.7;
+    kids.push(el("span", { class: "start" + (late ? " late" : ""), style: `left:${at(started)}` }, `daemon started ${clock(started)}`));
+  }
+  $("axis").replaceChildren(...kids);
 }
 
 // Which events count as marks on the axis, and which are quiet ones
@@ -257,7 +269,11 @@ const loud = /^(machine\.up|template\.(added|awake|asleep)|build\.(done|failed)|
 function renderEvents() {
   const cut = Date.now() - span();
   const ticks = state.events.filter((e) => new Date(e.time).getTime() >= cut);
-  $("event-ticks").replaceChildren(...ticks.map((e) => el("button", {
+  // An empty span: say so, unless the daemon's start (marked on the axis) already explains it
+  const startShown = state.totals && new Date(state.totals.started).getTime() > cut;
+  const quiet = !ticks.length && !startShown;
+  $("event-ticks").classList.toggle("empty", quiet);
+  $("event-ticks").replaceChildren(...(quiet ? [el("span", { class: "caption" }, "Nothing happened in this span yet.")] : []), ...ticks.map((e) => el("button", {
     class: "tick" + (loud.test(e.kind) ? "" : " quiet"), type: "button",
     style: `left:${((new Date(e.time).getTime() - cut) / span()) * 100}%`,
     title: `${clock(e.time)} · ${e.subject}: ${e.message}`, "aria-label": `${clock(e.time)}, ${e.subject}: ${e.message}`,
@@ -266,8 +282,8 @@ function renderEvents() {
   const shown = state.events.slice(-8).reverse();
   list.replaceChildren(...shown.map((e) => el("li", { class: state.seen.has(e.seq) ? "" : "enter" },
     el("time", { datetime: e.time }, clock(e.time)),
-    el("span", {}, el("b", {}, e.subject.replace(/^(machine|template|service|build|snapshot) /, "")), " ", plain(e.message)))));
-  if (!shown.length) list.replaceChildren(el("li", {}, el("span"), el("span", { class: "caption" }, "Nothing yet.")));
+    el("span", {}, el("b", {}, e.subject.replace(/^(machine|template|service|build|snapshot|run) /, "")), " ", plain(e.message)))));
+  if (!shown.length) list.replaceChildren(el("li", { class: "nothing" }, "Nothing yet."));
   for (const e of shown) state.seen.add(e.seq);
 }
 
@@ -320,9 +336,10 @@ function wireCursor() {
     const t = Date.now() - span() + ((e.clientX - chart.left) / chart.width) * span();
     const s = state.samples.reduce((best, v) => (!best || Math.abs(new Date(v.time) - t) < Math.abs(new Date(best.time) - t) ? v : best), null);
     const running = [...state.lives.values()].filter((l) => l.start <= t && (!l.end || l.end >= t)).length;
-    readout.textContent = s && Math.abs(new Date(s.time) - t) < 60000
-      ? `${clock(t)} · ${size(s.memory_used).join(" ")} · ${s.machines} machines · ${s.jobs} jobs${s.jobs ? `, p95 ${Math.round(s.job_ms_p95)} ms` : ""}`
-      : `${clock(t)} · ${running} machines`;
+    const near = s && Math.abs(new Date(s.time) - t) < 60000;
+    readout.replaceChildren(el("b", {}, clock(t)), near
+      ? ` ${size(s.memory_used).join(" ")} · ${s.machines} machines · ${s.jobs} jobs${s.jobs ? `, p95 ${Math.round(s.job_ms_p95)} ms` : ""}`
+      : ` ${running} machines`);
   });
   tl.addEventListener("pointerleave", () => { cursor.hidden = true; readout.textContent = ""; });
 }
@@ -462,6 +479,29 @@ function renderTables() {
   }
 }
 
+// --- fire-and-forget runs
+
+const runHow = (r) => r.status === "running" ? "running"
+  : r.error ? "couldn't run"
+  : r.exit === null || r.exit === undefined ? "out of time"
+  : `exit ${r.exit} · ${r.ms} ms`;
+function renderRuns() {
+  $("runs").replaceChildren(...state.runs.slice(0, 6).map((r) => el("li", {},
+    el("button", { type: "button", onclick: () => showRun(r.id), title: r.cmd },
+      el("span", { class: "dot " + (r.status === "running" ? "waiting" : r.error || (r.exit ?? 1) !== 0 ? "idle" : "") }),
+      el("span", { class: "cmd" }, r.cmd),
+      el("span", { class: "how" }, `${r.template} · ${runHow(r)}`)))));
+}
+async function showRun(id) {
+  const out = $("run-output"), meta = $("run-meta");
+  try {
+    const r = await api(`/v1/runs/${encodeURIComponent(id)}`);
+    out.hidden = false;
+    out.textContent = `$ ${r.cmd}\n` + b64(r.output) + (r.error ? r.error : "");
+    meta.textContent = `${r.id} on a fork of ${r.template} · ${runHow(r)}${r.status === "running" ? "" : ", the fork is gone"}`;
+  } catch (err) { meta.textContent = err.message; }
+}
+
 // --- ports
 
 function renderPorts() {
@@ -480,8 +520,8 @@ function renderPorts() {
       el("td", { class: "name" }, p.kind === "machine"
         ? el("button", { class: "link", type: "button", onclick: () => select("machine", p.name) }, p.name)
         : p.name, el("small", { class: "kind" }, ` ${p.kind}`)),
-      el("td", {}, p.guest),
-      el("td", {}, p.template),
+      el("td", { "data-label": "guest port" }, p.guest),
+      el("td", { "data-label": "template" }, p.template),
       el("td", {}, el("span", { class: "dot " + (live ? "live" : "idle") }), stateText));
   }));
 }
@@ -626,7 +666,16 @@ function wireForms() {
     e.preventDefault();
     const f = e.target.elements;
     const out = $("run-output"), meta = $("run-meta");
-    const btn = e.target.querySelector("button");
+    // Submit: fire and forget, the result lands in the list below
+    if (e.submitter?.value === "submit") {
+      try {
+        const r = await api("/v1/runs", { method: "POST", body: { template: f.template.value, cmd: f.cmd.value, timeout: 600 } });
+        meta.textContent = `submitted ${r.id}: it runs once on a fresh fork; its result appears below`;
+        refresh();
+      } catch (err) { meta.textContent = err.message; }
+      return;
+    }
+    const btn = e.submitter || e.target.querySelector("button");
     btn.disabled = true;
     out.hidden = false;
     out.textContent = `$ ${f.cmd.value}\n`;
@@ -704,6 +753,7 @@ function render() {
   renderSelection();
   renderTables();
   renderPorts();
+  renderRuns();
   renderBuilds();
 }
 

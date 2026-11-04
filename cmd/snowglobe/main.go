@@ -160,6 +160,11 @@ Usage:
                                                      services, snapshots, builds, metrics and a
                                                      terminal on any machine; on 127.0.0.1 only,
                                                      opened with a link carrying a session token
+  snowglobe submit <template> '<cmd>' [--timeout S]  fire and forget: run a command once on a fresh
+                 [--env K=V]... [--json]             fork of a template, thrown away after; prints
+                                                     the run's id at once
+  snowglobe runs [<id> [--wait]] [--json]            the runs submitted, or one's output and exit
+                                                     status (--wait: until it ends, exiting with it)
   snowglobe ports [--json]                           the host ports the daemon holds and where each
                                                      leads: machine or service, guest port, open or
                                                      at zero
@@ -302,6 +307,10 @@ func run(args []string) int {
 		err = runUI(args[1:])
 	case "ports":
 		err = runPorts(args[1:])
+	case "submit":
+		err = runSubmit(args[1:])
+	case "runs":
+		err = runRuns(args[1:])
 	case "template":
 		err = runTemplate(args[1:])
 	case "up":
