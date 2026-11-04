@@ -366,6 +366,11 @@ snowglobe stop tpl</pre>
             Linux machine with <code>run_command</code>, <code>write_file</code> and <code>read_file</code> tools. It
             starts a native instance and stops it when the agent goes (<code>--keep</code> leaves it).</p>
           <pre>claude mcp add sandbox -- snowglobe mcp https://filipecabaco.github.io/snowglobe/python/</pre>
+          <p><code>snowglobe mcp --daemon</code> serves the <a href="#orchestration">daemon</a> instead: an agent lists,
+            builds and adds templates, runs commands on fresh forks or on machines it brings up, writes and reads their
+            files, saves snapshots, puts services behind ports, diffs and applies fleet files, and reads the daemon's
+            status and events. <code>SNOWGLOBE_DAEMON</code> points it at a daemon on another host.</p>
+          <pre>claude mcp add snowglobe -- snowglobe mcp --daemon</pre>
 
           <h3 id="limits">Limits, stopping and logs</h3>
           <div class="table-wrap">
@@ -620,6 +625,7 @@ ttl = "24h"</pre>
                 <tr><td>sh &lt;name&gt; '&lt;cmd&gt;'</td><td class="wrap-cell">run a command on a native instance's shell (<code>--json</code>, <code>--timeout S</code>)</td></tr>
                 <tr><td>cp &lt;src&gt; &lt;dst&gt;</td><td class="wrap-cell">copy files in or out of a native instance (<code>name:/path</code> on one side)</td></tr>
                 <tr><td>mcp &lt;dir | url&gt;</td><td class="wrap-cell">serve a site to an agent over MCP (<code>--name</code>, <code>--keep</code>, <code>--log-dir</code>)</td></tr>
+                <tr><td>mcp --daemon</td><td class="wrap-cell">serve the daemon to an agent over MCP: templates, machines, commands and files, snapshots, services, builds, fleets, status and events</td></tr>
                 <tr><td>bundle &lt;dir | url&gt;</td><td class="wrap-cell">make a site one executable (<code>-o</code>, <code>--target linux|darwin</code>, <code>--runtime</code>)</td></tr>
                 <tr><td>pack &lt;dir&gt;</td><td class="wrap-cell">pack a site into one tarball (<code>-o site.tar.gz</code> or <code>.tar.zst</code>)</td></tr>
                 <tr><td>pool &lt;dir&gt;</td><td class="wrap-cell">let every site under a directory share one blob store</td></tr>

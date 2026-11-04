@@ -74,6 +74,9 @@ Usage:
                                                      write_file and read_file tools; no Docker.
                      [--log-dir DIR]                 Logs to the cache's snowglobe/logs/mcp
                                                      (or <name> with --name) unless --log-dir
+  snowglobe mcp --daemon                             serve the daemon to an agent over MCP: templates,
+                                                     machines, commands and files, snapshots,
+                                                     services, builds, fleets, status and events
   snowglobe warm <dir> <reads.json ...>              add the files runs recorded (run
                                                      --record-reads) to the site's warm pack
   snowglobe run [dir | url] [--name N] [--detach]    run a built site, sandboxed: in a container
@@ -613,10 +616,21 @@ func runMCP(args []string) error {
 	name := fs.String("name", "", "")
 	keep := fs.Bool("keep", false, "")
 	logDir := fs.String("log-dir", "", "")
+	onDaemon := fs.Bool("daemon", false, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
+	}
+	if *onDaemon {
+		if len(positional) != 0 {
+			return fmt.Errorf("mcp --daemon takes no site: it serves the daemon's")
+		}
+		c, err := daemonClient()
+		if err != nil {
+			return err
+		}
+		return (&mcp.Daemon{API: c, Version: version, Build: buildSite}).Stdio()
 	}
 	if len(positional) != 1 {
 		return fmt.Errorf("mcp takes a built site (a directory, a URL or a tarball)")
