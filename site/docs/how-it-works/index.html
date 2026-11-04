@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How it works · snowglobe docs</title>
+  <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/how-it-works/">
+  <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
+  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="snowglobe docs">
+  <meta property="og:description" content="Package a Docker image into a static site that runs it in the browser, then run it anywhere: in a page, headlessly, as one executable, or for an agent.">
+  <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/docs/how-it-works/">
+  <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="../../fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../../base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <link rel="stylesheet" href="../docs.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Site">
+        <a href="../../#runs">Runs</a>
+        <a href="../" aria-current="page">Docs</a>
+        <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
+        <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <main class="doc">
+        <section id="internals" aria-labelledby="internals-title">
+          <h1 class="page-title" id="internals-title">How it works</h1>
+          <ol>
+            <li><strong>Boot layer.</strong> snowglobe adds a kernel, an initramfs that mounts the root filesystem
+              over 9p, and BusyBox's <code>init</code> and <code>getty</code> with a terminal running your command, as
+              files on top of your image's layers. Nothing runs in the image.</li>
+            <li><strong>Filesystem.</strong> The flattened layers become a 9p filesystem: a JSON tree and one
+              compressed blob per unique file, fetched on demand. Files of 2 MiB and more are split into
+              content-defined chunks, so a read fetches only what it covers.</li>
+            <li><strong>Snapshot.</strong> The guest boots headless until the app is ready, and the whole machine is
+              saved. Visitors, <code>snowglobe run</code>, bundles and <code>snowglobe mcp</code> all restore it.</li>
+            <li><strong>Machines.</strong> Natively, the snapshot's memory becomes an image the host maps
+              copy-on-write into every instance, and a template restores once and forks a machine per command, per
+              <code>snowglobe up</code> or per service replica, each sharing what it doesn't write.</li>
+            <li><strong>Warm pack.</strong> The files read while booting and exercising are bundled into one download
+              the page fetches in the background.</li>
+          </ol>
+
+          <h2 class="h3" id="troubleshooting">When a build goes wrong</h2>
+          <ul>
+            <li><strong>"the boot stalled".</strong> Nothing was printed, fetched or computed for 5 minutes before the
+              app was ready. The build prints every CPU's state and boots once more; twice usually means the app
+              waits for something that never comes, such as <code>--ready</code> text it never prints.
+              <code>SNOWGLOBE_BOOT_STALL_SECS</code> changes the limit, and <code>0</code> turns it off.</li>
+            <li><strong>"not arm64".</strong> Build <code>FROM alpine</code> or <code>arm64v8/alpine</code>; on an x86
+              host, install QEMU's binfmt handlers first.</li>
+            <li><strong>A request answers 502.</strong> In a page, the server doesn't allow CORS. Under
+              <code>snowglobe run</code> the same request goes out from your machine instead.</li>
+            <li><strong>A service doesn't start.</strong> There is no OpenRC: start it from the image's command.</li>
+          </ul>
+        </section>
+
+        <nav class="pager" aria-label="Pages"><a class="prev" href="../saving/"><small>Previous</small>Saving your work</a><a class="next" href="../reference/"><small>Next</small>CLI reference</a></nav>
+      </main>
+
+      <aside class="rail" aria-label="Docs">
+        <div class="side">
+          <div class="search" role="search">
+            <label class="sr" for="search">Search the docs</label>
+            <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-expanded="false">
+            <kbd aria-hidden="true">/</kbd>
+            <ol class="results" id="search-results" role="listbox" aria-label="Results" hidden></ol>
+          </div>
+          <nav class="toc" aria-label="Docs pages">
+            <ol>
+            <li><a href="../">Getting started</a></li>
+            <li><a href="../building/">Building a site</a></li>
+            <li><a href="../networking/">Networking</a></li>
+            <li><a href="../running/">Running outside a browser</a></li>
+            <li><a href="../agents/">For agents and programs</a></li>
+            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../isolation/">Isolation</a></li>
+            <li><a href="../saving/">Saving your work</a></li>
+            <li><a href="../how-it-works/" aria-current="page">How it works</a></li>
+            <li><a href="../reference/">CLI reference</a></li>
+            </ol>
+          </nav>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="../../llms.txt">llms.txt</a> · runs on <a href="https://github.com/filipecabaco/armless">armless</a>, which grew out of <a href="https://github.com/copy/v86">v86</a> by Fabian Hemmer and contributors</span>
+      <span><a href="../../">Back to the runs</a></span>
+    </footer>
+  </div>
+
+  <script src="../../theme.js"></script>
+  <script src="../docs.js"></script>
+</body>
+</html>

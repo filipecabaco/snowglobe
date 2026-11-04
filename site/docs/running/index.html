@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Running outside a browser · snowglobe docs</title>
+  <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/running/">
+  <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
+  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="snowglobe docs">
+  <meta property="og:description" content="Package a Docker image into a static site that runs it in the browser, then run it anywhere: in a page, headlessly, as one executable, or for an agent.">
+  <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/docs/running/">
+  <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="../../fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../../base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <link rel="stylesheet" href="../docs.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Site">
+        <a href="../../#runs">Runs</a>
+        <a href="../" aria-current="page">Docs</a>
+        <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
+        <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <main class="doc">
+        <section id="run" aria-labelledby="run-title">
+          <h1 class="page-title" id="run-title">Running outside a browser</h1>
+          <p class="intro">The same snapshot runs on your terminal, in a container or natively, from a folder, a
+            tarball or a deployed site's URL.</p>
+
+          <h2 class="h3" id="run-sessions">Sessions and instances</h2>
+          <pre>snowglobe run dist/elixir                    <span class="dim"># a session; ctrl-] quits</span>
+printf 'Enum.sum(1..100)\n' | snowglobe run dist/elixir
+snowglobe run dist/elixir --name pg --detach
+snowglobe exec pg 'sql "SELECT 1"'           <span class="dim"># prints only what the command printed</span>
+snowglobe attach pg                          <span class="dim"># join it; ctrl-] detaches</span>
+snowglobe ps
+snowglobe stop pg</pre>
+          <p><code>snowglobe run</code> uses a container by default (<code>--runtime docker</code>: unprivileged,
+            read-only, memory-capped). <code>--runtime native</code> (or <code>SNOWGLOBE_RUNTIME=native</code>) runs
+            <code>snowglobe-vm</code> itself, with no Docker. Piped input is typed in one line at a time, each waiting
+            until the app goes quiet. Each instance starts fresh from the snapshot.</p>
+
+          <h2 class="h3" id="shared-memory">Instances share their memory</h2>
+          <p>Native instances of one site don't each hold a copy of its snapshot. The first one writes the snapshot's
+            memory to an image in the cache, and every instance after it maps that image copy-on-write: the pages no
+            instance writes are kept once for all of them, and a page an instance writes becomes its own. It restores
+            in a few milliseconds instead of decompressing the snapshot first.</p>
+          <div class="table-wrap">
+            <table class="compare">
+              <thead><tr><th scope="col">Ten instances of the Python run</th><th scope="col">Each, before</th><th scope="col">Each, now</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Memory on Linux (PSS)</th><td data-label="Before">111 MB</td><td data-label="Now">46 MB</td></tr>
+                <tr><th scope="row">Memory on macOS (physical footprint)</th><td data-label="Before">175 MB</td><td data-label="Now">96 MB</td></tr>
+                <tr><th scope="row">Restore</th><td data-label="Before">60–74 ms</td><td data-label="Now">4–6 ms</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The image lives in <code>ram/</code> under the cache (<code>SNOWGLOBE_CACHE</code>, by default
+            <code>~/.cache/snowglobe</code>), one per snapshot, named by its hash. It takes about as much disk as the
+            snapshot's memory in use (71 MB for the Python run), and images unused for two weeks go when a new one is
+            made. Machines forked from a template, by <code>--fork</code> or the daemon, already shared the
+            template's memory and still do; their template server maps the image too. How the image is kept from
+            changing under a machine is under <a href="../../isolation/#security">Isolation</a>;
+            <code>SNOWGLOBE_RAM_IMAGE=off</code> restores into memory of the instance's own.</p>
+
+          <h2 class="h3" id="remote">Sites from a URL</h2>
+          <p>A site doesn't have to be local. <code>snowglobe run</code> takes a deployed site's URL, which it
+            mirrors into a cache, or a tarball made with <code>snowglobe pack</code>, local or by URL. Downloads
+            happen on the host and are revalidated, so the second run starts from the cache and the sandbox stays
+            offline.</p>
+          <pre>snowglobe run https://filipecabaco.github.io/snowglobe/python/
+snowglobe pack dist/elixir -o elixir.tar.gz
+snowglobe run https://cdn.example.com/elixir.tar.gz</pre>
+
+          <h2 class="h3" id="ports">Serving from the guest</h2>
+          <p>A site built with <code>--network fetch</code> can serve: <code>-p HOST:GUEST</code> forwards a port on
+            your machine to one in the guest. Host ports bind to 127.0.0.1 unless you give an address
+            (<code>-p 0.0.0.0:8080:4000</code>).</p>
+
+          <h2 class="h3" id="bundle">One executable</h2>
+          <p><code>snowglobe bundle</code> makes a site a single executable: <code>snowglobe-vm</code> with the site
+            appended. It needs no Docker, hypervisor or KVM, so it runs on a laptop, in CI or inside someone else's
+            container. Build with <code>--sandbox</code> for this: the guest keeps its file cache in the snapshot,
+            and exercises run before it.</p>
+          <pre>snowglobe build examples/python --sandbox --out dist/python
+snowglobe bundle dist/python -o python        <span class="dim"># Linux; --target darwin for Apple silicon</span>
+echo 'sum(i*i for i in range(10))' | ./python</pre>
+          <p>A bundle whose app is a shell also runs one-shot jobs: <code>--workspace DIR</code> is written into a
+            fresh machine, <code>--cmd</code> runs there, and its output, exit status and <code>out/</code> come back.
+            <code>--serve SOCKET --jobs-root DIR</code> restores the snapshot once and answers each job with a fork
+            of it, sharing the restored machine copy-on-write; <code>--server SOCKET</code> is its client.</p>
+          <pre>./toolkit --workspace job --cmd 'sh main.sh' --env 'N=42'
+./toolkit --serve /run/toolkit.sock --jobs-root /var/lib/jobs &amp;
+./toolkit --server /run/toolkit.sock --workspace /var/lib/jobs/1 --cmd 'sh main.sh'</pre>
+        </section>
+
+        <nav class="pager" aria-label="Pages"><a class="prev" href="../networking/"><small>Previous</small>Networking</a><a class="next" href="../agents/"><small>Next</small>For agents and programs</a></nav>
+      </main>
+
+      <aside class="rail" aria-label="Docs">
+        <div class="side">
+          <div class="search" role="search">
+            <label class="sr" for="search">Search the docs</label>
+            <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-expanded="false">
+            <kbd aria-hidden="true">/</kbd>
+            <ol class="results" id="search-results" role="listbox" aria-label="Results" hidden></ol>
+          </div>
+          <nav class="toc" aria-label="Docs pages">
+            <ol>
+            <li><a href="../">Getting started</a></li>
+            <li><a href="../building/">Building a site</a></li>
+            <li><a href="../networking/">Networking</a></li>
+            <li><a href="../running/" aria-current="page">Running outside a browser</a></li>
+            <li><a href="../agents/">For agents and programs</a></li>
+            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../isolation/">Isolation</a></li>
+            <li><a href="../saving/">Saving your work</a></li>
+            <li><a href="../how-it-works/">How it works</a></li>
+            <li><a href="../reference/">CLI reference</a></li>
+            </ol>
+          </nav>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="../../llms.txt">llms.txt</a> · runs on <a href="https://github.com/filipecabaco/armless">armless</a>, which grew out of <a href="https://github.com/copy/v86">v86</a> by Fabian Hemmer and contributors</span>
+      <span><a href="../../">Back to the runs</a></span>
+    </footer>
+  </div>
+
+  <script src="../../theme.js"></script>
+  <script src="../docs.js"></script>
+</body>
+</html>

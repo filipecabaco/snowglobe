@@ -1,0 +1,102 @@
+    /* Read mode: one column of prose at a reading measure, the contents in the rail where the
+       index keeps its ledger */
+    .layout { display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); column-gap: calc(var(--gap) * 2); }
+    .doc { min-width: 0; }
+    .hero { padding: 64px 0 8px; }
+    .hero h1 { margin: 0; font-size: clamp(2.75rem, 4.3vw, 4rem); line-height: .95; letter-spacing: -.035em; font-weight: 620; }
+    .doc .lede { max-width: 36em; margin: 28px 0 0; font-size: clamp(19px, 1.7vw, 22px); line-height: 1.45; }
+
+    .doc section { padding-top: clamp(64px, 7vw, 96px); scroll-margin-top: 24px; }
+    .doc h2 { margin: 0 0 20px; padding-top: 20px; border-top: 1px solid var(--ink); font-size: clamp(2rem, 3.4vw, 3rem); line-height: 1; letter-spacing: -.03em; font-weight: 600; }
+    .doc h2.h3 { padding-top: 0; border-top: 0; line-height: 1.2; }
+    .doc h3, .doc h2.h3 { margin: 48px 0 12px; font-size: 24px; font-weight: 600; letter-spacing: -.02em; scroll-margin-top: 24px; }
+    .doc p, .doc li { max-width: 40em; }
+    .doc p { margin: 0 0 16px; }
+    .doc .intro { color: var(--ink-2); font-size: 18px; }
+    .doc ul, .doc ol { margin: 0 0 16px; padding-left: 1.2em; }
+    .doc li { margin: 0 0 8px; }
+    .doc li::marker { color: var(--ink-2); }
+    .doc pre { margin: 8px 0 24px; }
+    .doc .table-wrap { margin: 8px 0 24px; }
+    .doc table { margin: 0; }
+    .doc td { white-space: normal; vertical-align: top; }
+    .doc td:not(:first-child) { text-align: left; }
+    .doc th { text-align: left; }
+    .doc td:first-child { white-space: nowrap; }
+    .compare tbody th { font-weight: 550; vertical-align: top; padding-right: 16px; }
+    .doc td code { font-size: 13.5px; }
+    /* A note the reader should not miss: a hairline, never a coloured box */
+    .note { margin: 8px 0 24px; padding: 14px 0 14px 20px; border-left: 1px solid var(--ink); max-width: 40em; }
+    .note p:last-child { margin-bottom: 0; }
+
+    /* A page's own heading, at the size a section's had on the one long page */
+    .doc .page-title { margin: 64px 0 20px; padding-top: 20px; border-top: 1px solid var(--ink); font-size: clamp(2.4rem, 4.2vw, 3.6rem); line-height: .98; letter-spacing: -.035em; font-weight: 620; }
+    .doc section:first-of-type { padding-top: 0; }
+    .hero + section { padding-top: clamp(48px, 5vw, 72px) !important; }
+    .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+    /* The rail: search, then every page, the one being read opened to its sections */
+    .side { position: sticky; top: 24px; margin-top: 64px; max-height: calc(100vh - 48px); overflow-y: auto; padding-bottom: 24px; scrollbar-width: thin; }
+    .search { position: relative; }
+    .search input { width: 100%; font: 400 15px/1.3 var(--sans); color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 40px 10px 12px; }
+    .search input:focus { border-color: var(--ink); outline: none; }
+    .search input:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+    .search kbd { position: absolute; right: 10px; top: 9px; font: 400 12px/1 var(--mono); color: var(--ink-2); border: 1px solid var(--rule); border-radius: 4px; padding: 3px 6px; }
+    .results { list-style: none; margin: 6px 0 0; padding: 0; border: 1px solid var(--ink); border-radius: 6px; background: var(--bg); max-height: 60vh; overflow-y: auto; }
+    .results li a { display: block; padding: 9px 12px; text-decoration: none; border-bottom: 1px solid var(--rule); font-size: 15px; }
+    .results li:last-child a { border-bottom: 0; }
+    .results li a small { display: block; color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+    .results li a[aria-selected="true"], .results li a:hover { background: var(--soft); }
+    .results .none { padding: 9px 12px; color: var(--ink-2); font-size: 14px; }
+    .toc { margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--ink); }
+    .toc ol { list-style: none; margin: 0; padding: 0; }
+    .toc > ol > li { border-bottom: 1px solid var(--rule); }
+    .toc a { display: block; padding: 9px 0; text-decoration: none; font-size: 15px; }
+    .toc a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+    .toc a[aria-current="page"] { font-weight: 650; }
+    .toc .sub { margin: -2px 0 10px; padding-left: 12px; border-left: 1px solid var(--rule); }
+    .toc .sub a { padding: 5px 0; font-size: 14px; color: var(--ink-2); }
+    .toc .sub a[aria-current="true"] { color: var(--ink); font-weight: 600; }
+
+    /* Code: a button that copies it */
+    .doc .code { position: relative; }
+    .doc .code pre { padding-right: 76px; }
+    .copy { position: absolute; top: 10px; right: 10px; font: 550 13px/1 var(--sans); height: 28px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--rule); background: var(--bg); color: var(--ink); cursor: pointer; opacity: .8; }
+    .copy:hover { opacity: 1; border-color: var(--ink); }
+    .copy:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+    /* Previous and next */
+    .pager { display: flex; justify-content: space-between; gap: var(--gap); margin-top: clamp(64px, 7vw, 96px); padding-top: 20px; border-top: 1px solid var(--ink); }
+    .pager a { text-decoration: none; font-size: 20px; font-weight: 600; letter-spacing: -.02em; max-width: 48%; }
+    .pager a small { display: block; font-size: 13px; font-weight: 400; color: var(--ink-2); letter-spacing: 0; margin-bottom: 4px; }
+    .pager a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+    .pager .next { margin-left: auto; text-align: right; }
+
+    .toc-toggle { display: none; width: 100%; justify-content: space-between; align-items: center; font: 600 16px/1 var(--sans); color: var(--ink); background: none; border: 0; padding: 6px 0 10px; cursor: pointer; }
+    .toc-toggle span:last-child { font-weight: 400; color: var(--ink-2); font-size: 14px; }
+    .toc-toggle:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+    @media (max-width: 1080px) {
+      .layout { grid-template-columns: minmax(0, 1fr); }
+      .rail { order: -1; }
+      .side { position: static; margin-top: 32px; max-height: none; overflow: visible; padding-bottom: 0; }
+      /* The pages as a menu that opens; the search stays out */
+      .toc { margin-top: 16px; }
+      .toc-toggle { display: flex; }
+      .toc:not(.open) > ol { display: none; }
+    }
+    @media (max-width: 720px) {
+      body { font-size: 16px; }
+      .top nav a[href*="#runs"] { display: none; }
+      /* Tables fit the screen: long names wrap, and the comparison becomes one block per row */
+      .doc td:first-child { white-space: normal; overflow-wrap: anywhere; }
+      .compare thead { display: none; }
+      .compare, .compare tbody, .compare tr, .compare th, .compare td { display: block; }
+      .compare tr { padding: 12px 0; border-bottom: 1px solid var(--rule); }
+      .compare th, .compare td { border: 0; padding: 2px 0; }
+      .compare td::before { content: attr(data-label) " · "; color: var(--ink-2); font-size: 13px; }
+      .hero { padding-top: 40px; }
+    }
+    @media (pointer: coarse) {
+      .toc a { padding-block: 12px; }
+    }

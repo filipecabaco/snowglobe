@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Networking · snowglobe docs</title>
+  <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/networking/">
+  <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
+  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="snowglobe docs">
+  <meta property="og:description" content="Package a Docker image into a static site that runs it in the browser, then run it anywhere: in a page, headlessly, as one executable, or for an agent.">
+  <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/docs/networking/">
+  <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="../../fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../../base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <link rel="stylesheet" href="../docs.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Site">
+        <a href="../../#runs">Runs</a>
+        <a href="../" aria-current="page">Docs</a>
+        <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
+        <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <main class="doc">
+        <section id="network" aria-labelledby="network-title">
+          <h1 class="page-title" id="network-title">Networking</h1>
+          <p class="intro">A guest has no network unless the site asks for one, and then its only way out is the
+            visitor's own browser.</p>
+
+          <h2 class="h3" id="fetch">HTTP, HTTPS and WebSockets</h2>
+          <p>With <code>--network fetch</code> (or <code>snowglobe.network="fetch"</code>), the guest gets a network
+            card and DHCP, and every request it makes leaves as the page's own browser request. Its connections to
+            ports 80 and 443 end inside the machine:</p>
+          <ul>
+            <li><strong>HTTP</strong> requests become a <code>fetch()</code>.</li>
+            <li><strong>HTTPS</strong> is terminated in the machine with a certificate signed by a CA made fresh for
+              each build, which the guest trusts, and replayed with <code>fetch("https://…")</code>. Nothing else
+              should trust that CA: its key ships with the site.</li>
+            <li><strong>WebSockets</strong> open a browser <code>WebSocket</code> to the same URL.</li>
+          </ul>
+          <p>The browser's rules still apply. HTTP(S) only reaches servers that allow CORS (others answer with a 502
+            that says so), UDP goes nowhere, and other TCP only through a tunnel.</p>
+
+          <h2 class="h3" id="tunnels">Other TCP: tunnels</h2>
+          <p>A page can't open raw TCP, so a connection to a database or any port but 80 and 443 is refused unless
+            the site names it as a tunnel. <code>--tunnel HOST:PORT=URL</code> carries every connection to
+            <code>HOST:PORT</code> over a WebSocket to <code>URL</code>, as binary messages: what websockify, websocat
+            and Neon's wsproxy speak.</p>
+          <pre>websocat --binary ws-l:0.0.0.0:6543 tcp:127.0.0.1:5432       <span class="dim"># next to Postgres</span>
+snowglobe build ./my-app --network fetch --tunnel db.internal:5432=wss://db-proxy.example.com/</pre>
+
+          <h2 class="h3" id="credentials">Credentials</h2>
+          <div class="note">
+            <p>Whatever the guest knows ships with the site: a password in its environment is in the snapshot, for
+              every visitor.</p>
+          </div>
+          <p>Instead, put <code>{token}</code> in the tunnel URL and name a token endpoint with
+            <code>--tunnel-token URL</code>. The page asks it for a fresh token on every connection (natively, once
+            per boot), and a gateway behind the tunnel checks the token and holds the real credentials. A token only
+            replaces the password: what it opens is whatever the gateway lets any visitor do.</p>
+          <p>Builds and <code>snowglobe run</code> refuse loopback and private addresses, so a guest can't reach the
+            host's own services. <code>--allow-private</code> lets them, for a tunnel endpoint on your own machine
+            while developing.</p>
+        </section>
+
+        <nav class="pager" aria-label="Pages"><a class="prev" href="../building/"><small>Previous</small>Building a site</a><a class="next" href="../running/"><small>Next</small>Running outside a browser</a></nav>
+      </main>
+
+      <aside class="rail" aria-label="Docs">
+        <div class="side">
+          <div class="search" role="search">
+            <label class="sr" for="search">Search the docs</label>
+            <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-expanded="false">
+            <kbd aria-hidden="true">/</kbd>
+            <ol class="results" id="search-results" role="listbox" aria-label="Results" hidden></ol>
+          </div>
+          <nav class="toc" aria-label="Docs pages">
+            <ol>
+            <li><a href="../">Getting started</a></li>
+            <li><a href="../building/">Building a site</a></li>
+            <li><a href="../networking/" aria-current="page">Networking</a></li>
+            <li><a href="../running/">Running outside a browser</a></li>
+            <li><a href="../agents/">For agents and programs</a></li>
+            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../isolation/">Isolation</a></li>
+            <li><a href="../saving/">Saving your work</a></li>
+            <li><a href="../how-it-works/">How it works</a></li>
+            <li><a href="../reference/">CLI reference</a></li>
+            </ol>
+          </nav>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="../../llms.txt">llms.txt</a> · runs on <a href="https://github.com/filipecabaco/armless">armless</a>, which grew out of <a href="https://github.com/copy/v86">v86</a> by Fabian Hemmer and contributors</span>
+      <span><a href="../../">Back to the runs</a></span>
+    </footer>
+  </div>
+
+  <script src="../../theme.js"></script>
+  <script src="../docs.js"></script>
+</body>
+</html>

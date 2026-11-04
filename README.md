@@ -34,14 +34,14 @@ The docs live on the site, written for people using snowglobe:
 [filipecabaco.github.io/snowglobe/docs](https://filipecabaco.github.io/snowglobe/docs/)
 (source: [`site/docs/index.html`](site/docs/index.html)).
 
-- [Getting started](https://filipecabaco.github.io/snowglobe/docs/#start): what you need, install, your first site
-- [Building a site](https://filipecabaco.github.io/snowglobe/docs/#build): labels and flags, readiness, exercises and the warm pack, CPUs, building without Docker
-- [Networking](https://filipecabaco.github.io/snowglobe/docs/#network): HTTP(S) and WebSockets through the browser, tunnels for other TCP, credentials
-- [Running outside a browser](https://filipecabaco.github.io/snowglobe/docs/#run): sessions, instances, shared memory, sites from a URL, one executable
-- [For agents and programs](https://filipecabaco.github.io/snowglobe/docs/#agents): `sh`, `cp`, forks, MCP, limits and logs
-- [Orchestration](https://filipecabaco.github.io/snowglobe/docs/#orchestration): `snowglobe ui`, the daemon, fire-and-forget runs, templates and machines, snapshots, services and scale to zero, ports, limits, events and top, fleets
-- [Isolation](https://filipecabaco.github.io/snowglobe/docs/#security): what each of the browser, native and Docker guards against, and how shared memory stays private
-- [CLI reference](https://filipecabaco.github.io/snowglobe/docs/#reference): every command, flag, label and environment variable
+- [Getting started](https://filipecabaco.github.io/snowglobe/docs/): what you need, install, your first site
+- [Building a site](https://filipecabaco.github.io/snowglobe/docs/building/): labels and flags, readiness, exercises and the warm pack, CPUs, building without Docker
+- [Networking](https://filipecabaco.github.io/snowglobe/docs/networking/): HTTP(S) and WebSockets through the browser, tunnels for other TCP, credentials
+- [Running outside a browser](https://filipecabaco.github.io/snowglobe/docs/running/): sessions, instances, shared memory, sites from a URL, one executable
+- [For agents and programs](https://filipecabaco.github.io/snowglobe/docs/agents/): `sh`, `cp`, forks, MCP, limits and logs
+- [Orchestration](https://filipecabaco.github.io/snowglobe/docs/orchestration/): `snowglobe ui`, the daemon, fire-and-forget runs, templates and machines, snapshots, services and scale to zero, ports, limits, events and top, fleets
+- [Isolation](https://filipecabaco.github.io/snowglobe/docs/isolation/): what each of the browser, native and Docker guards against, and how shared memory stays private
+- [CLI reference](https://filipecabaco.github.io/snowglobe/docs/reference/): every command, flag, label and environment variable
 
 For agents, the site also serves a plain-text summary of the CLI at
 [llms.txt](https://filipecabaco.github.io/snowglobe/llms.txt).

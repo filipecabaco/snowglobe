@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Isolation · snowglobe docs</title>
+  <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/isolation/">
+  <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
+  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="snowglobe docs">
+  <meta property="og:description" content="Package a Docker image into a static site that runs it in the browser, then run it anywhere: in a page, headlessly, as one executable, or for an agent.">
+  <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/docs/isolation/">
+  <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="../../fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../../base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <link rel="stylesheet" href="../docs.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Site">
+        <a href="../../#runs">Runs</a>
+        <a href="../" aria-current="page">Docs</a>
+        <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
+        <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <main class="doc">
+        <section id="security" aria-labelledby="security-title">
+          <h1 class="page-title" id="security-title">Isolation</h1>
+          <p class="intro">The first wall is the same everywhere: the guest is an emulated machine whose only ways
+            out are its terminal, its files and, if the site has one, the network relay. Guest code never runs as host
+            code.</p>
+          <div class="table-wrap">
+            <table class="compare">
+              <thead><tr><th scope="col"></th><th scope="col">Browser</th><th scope="col">Native</th><th scope="col">Docker</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Around the emulator</th><td data-label="Browser">the browser's renderer sandbox</td><td data-label="Native">no_new_privs, Landlock and seccomp on Linux; Seatbelt on macOS</td><td data-label="Docker">read-only root, no capabilities, memory and pid limits</td></tr>
+                <tr><th scope="row">Host files</th><td data-label="Browser">none</td><td data-label="Native">reads the site; writes its cache, socket, logs and a job's workspace</td><td data-label="Docker">the site, read-only; logs if given</td></tr>
+                <tr><th scope="row">New processes</th><td data-label="Browser">none possible</td><td data-label="Native">refused</td><td data-label="Docker">inside the container only</td></tr>
+                <tr><th scope="row">Network</th><td data-label="Browser">the page's <code>fetch()</code> and <code>WebSocket</code></td><td data-label="Native">out the way your machine goes; private addresses off</td><td data-label="Docker">the same, from the container</td></tr>
+                <tr><th scope="row">Needs</th><td data-label="Browser">a browser</td><td data-label="Native">nothing (Linux or macOS)</td><td data-label="Docker">Docker</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The native sandbox is strongest on Linux with Landlock (kernel 5.13 or later). A run says which parts it
+            got; <code>SNOWGLOBE_SANDBOX=strict</code> refuses to run without all of them, and
+            <code>snowglobe-vm sandbox-check</code> tries what a run must not be able to do and reports each.</p>
+          <p>Native runs of one site share its snapshot's memory: the first run writes it to the cache as a
+            read-only image (in <code>ram/</code>, which only you can open), and every run maps it copy-on-write. A page
+            a machine writes becomes its own, so one machine never sees another's memory, and each restore gets fresh
+            randomness (the guest kernel reseeds on it). The image is named by a hash of the whole snapshot and checked
+            before use (yours, read-only, one link); anything off and the run restores the usual way.
+            <code>SNOWGLOBE_RAM_IMAGE=off</code> always does.</p>
+          <p>What none of them do: hide a site's contents from whoever runs it (the snapshot is theirs to read), or
+            make network access safe beyond the rules above. Give a guest a network only when the work needs it.</p>
+        </section>
+
+        <nav class="pager" aria-label="Pages"><a class="prev" href="../orchestration/"><small>Previous</small>Orchestration</a><a class="next" href="../saving/"><small>Next</small>Saving your work</a></nav>
+      </main>
+
+      <aside class="rail" aria-label="Docs">
+        <div class="side">
+          <div class="search" role="search">
+            <label class="sr" for="search">Search the docs</label>
+            <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-expanded="false">
+            <kbd aria-hidden="true">/</kbd>
+            <ol class="results" id="search-results" role="listbox" aria-label="Results" hidden></ol>
+          </div>
+          <nav class="toc" aria-label="Docs pages">
+            <ol>
+            <li><a href="../">Getting started</a></li>
+            <li><a href="../building/">Building a site</a></li>
+            <li><a href="../networking/">Networking</a></li>
+            <li><a href="../running/">Running outside a browser</a></li>
+            <li><a href="../agents/">For agents and programs</a></li>
+            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../isolation/" aria-current="page">Isolation</a></li>
+            <li><a href="../saving/">Saving your work</a></li>
+            <li><a href="../how-it-works/">How it works</a></li>
+            <li><a href="../reference/">CLI reference</a></li>
+            </ol>
+          </nav>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="../../llms.txt">llms.txt</a> · runs on <a href="https://github.com/filipecabaco/armless">armless</a>, which grew out of <a href="https://github.com/copy/v86">v86</a> by Fabian Hemmer and contributors</span>
+      <span><a href="../../">Back to the runs</a></span>
+    </footer>
+  </div>
+
+  <script src="../../theme.js"></script>
+  <script src="../docs.js"></script>
+</body>
+</html>
