@@ -4,7 +4,6 @@
 package mcp
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,73 +66,15 @@ var tools = []map[string]any{
 
 // Serve answers requests from r on w until r ends.
 func (s *Server) Serve(r io.Reader, w io.Writer) error {
-	in := bufio.NewReaderSize(r, 1<<20)
-	enc := json.NewEncoder(w)
-	for {
-		line, err := in.ReadBytes('\n')
-		if len(strings.TrimSpace(string(line))) > 0 {
-			var m message
-			if jerr := json.Unmarshal(line, &m); jerr != nil {
-				enc.Encode(map[string]any{"jsonrpc": "2.0", "id": nil, "error": map[string]any{"code": -32700, "message": "parse error"}})
-			} else if len(m.ID) > 0 {
-				result, rpcErr := s.handle(m)
-				reply := map[string]any{"jsonrpc": "2.0", "id": m.ID}
-				if rpcErr != nil {
-					reply["error"] = rpcErr
-				} else {
-					reply["result"] = result
-				}
-				if err := enc.Encode(reply); err != nil {
-					return err
-				}
-			}
-			// Notifications (no id) need no answer
-		}
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
+	return serveRPC(r, w, s.Version, s)
 }
 
-func (s *Server) handle(m message) (any, map[string]any) {
-	switch m.Method {
-	case "initialize":
-		var p struct {
-			ProtocolVersion string `json:"protocolVersion"`
-		}
-		json.Unmarshal(m.Params, &p)
-		version := p.ProtocolVersion
-		if version == "" {
-			version = "2025-06-18"
-		}
-		return map[string]any{
-			"protocolVersion": version,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "snowglobe", "version": s.Version},
-			"instructions": fmt.Sprintf("An isolated arm64 Linux machine (%s), emulated, with no access to this host. "+
-				"Use run_command to run shell commands in it, and write_file / read_file for files.", s.Title),
-		}, nil
-	case "ping":
-		return map[string]any{}, nil
-	case "tools/list":
-		return map[string]any{"tools": tools}, nil
-	case "tools/call":
-		var p struct {
-			Name      string         `json:"name"`
-			Arguments map[string]any `json:"arguments"`
-		}
-		if err := json.Unmarshal(m.Params, &p); err != nil {
-			return nil, map[string]any{"code": -32602, "message": err.Error()}
-		}
-		text, isErr := s.call(p.Name, p.Arguments)
-		return map[string]any{"content": []map[string]any{{"type": "text", "text": text}}, "isError": isErr}, nil
-	default:
-		return nil, map[string]any{"code": -32601, "message": "method not found: " + m.Method}
-	}
+func (s *Server) instructions() string {
+	return fmt.Sprintf("An isolated arm64 Linux machine (%s), emulated, with no access to this host. "+
+		"Use run_command to run shell commands in it, and write_file / read_file for files.", s.Title)
 }
+
+func (s *Server) list() []map[string]any { return tools }
 
 func (s *Server) call(name string, args map[string]any) (string, bool) {
 	str := func(k string) string { v, _ := args[k].(string); return v }

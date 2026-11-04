@@ -66,6 +66,13 @@ https://github.com/filipecabaco/snowglobe/releases, or
   MCP server over stdio: an isolated Linux machine with `run_command` (with `timeout_seconds`),
   `write_file` and `read_file`. No Docker, KVM or privileges. Example:
   `claude mcp add sandbox -- snowglobe mcp https://filipecabaco.github.io/snowglobe/python/`
+- `snowglobe mcp --daemon` serves the daemon to an agent over MCP (stdio): `status`,
+  `list_templates`, `add_template`, `remove_template`, `list_machines`, `up`, `stop_machine`,
+  `run_command` (on a `machine`, a fresh fork of a `template`, or a `service`'s replica),
+  `write_file`, `read_file`, `snapshot_machine`, `list_snapshots`, `remove_snapshot`,
+  `list_services`, `add_service`, `remove_service`, `build` (waits by default), `build_status`,
+  `list_builds`, `cancel_build`, `recent_events`, `fleet_diff`, `fleet_apply`. Example:
+  `claude mcp add snowglobe -- snowglobe mcp --daemon`
 - `snowglobe bundle <site | url> [-o FILE] [--target linux|darwin] [--runtime snowglobe-vm]`
   makes a site one executable (snowglobe-vm with the site appended) that takes `run`'s flags, plus
   one-shot jobs: `--workspace DIR --cmd COMMAND [--env K=V] [--env-file JSON] [--timeout SECS]`
