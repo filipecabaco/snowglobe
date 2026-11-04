@@ -83,7 +83,7 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   writes DIR into a fresh machine, runs the command, and returns its output, exit status and
   `out/`. `--serve SOCKET --jobs-root DIR` restores once and forks per job; `--server SOCKET` is
   its client.
-- `snowglobe daemon [--listen ADDR --token-file F]` is the orchestrator: it keeps templates (a
+- `snowglobe daemon [--listen ADDR --token-file F] [--detach]` is the orchestrator: it keeps templates (a
   site restored once) and machines forked from them, with an HTTP/JSON API on a Unix socket in the
   user cache (`/v1/templates`, `/v1/machines`, `/v1/machines/{name}/jobs`,
   `/v1/templates/{name}/jobs` for a job on a fresh fork), and over TCP for requests bearing the
@@ -118,9 +118,13 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `--state keep` saves the replica before it stops and the next one carries on (max 1);
   `discard` starts each from the template. `service ls`, `service rm <name>`; API
   `/v1/services`, `/v1/services/{name}/jobs`.
-- `snowglobe ui [--port 7777] [--no-open]` serves the daemon in a browser on 127.0.0.1 (the link
-  carries a session token): the last hour on one time axis, a lane per template with machine
-  lifespans, the selection, runs on fresh forks, a terminal on any machine (ghostty-web over
+- `snowglobe daemon --detach` starts the daemon in the background, in a session of its own so it
+  outlives the terminal, its log in `daemon.log` beside the socket; it returns once the daemon
+  answers, and does nothing if one runs.
+- `snowglobe ui [--port 7777] [--no-open] [--start-daemon]` serves the daemon in a browser on 127.0.0.1
+  (the link carries a session token; `--start-daemon` starts a detached daemon first when none runs):
+  the last hour on one time axis, a strip per template for the machines running, a lane per template
+  with machine lifespans, the selection (shown when something is selected), runs on fresh forks, a terminal on any machine (ghostty-web over
   `/v1/machines/{name}/attach`), builds, and templates, machines, services, snapshots and ports.
 - `snowglobe submit <template> '<cmd>' [--timeout S] [--env K=V]...` is fire and forget: the
   command runs once on a fresh fork, thrown away after, and the run's id is printed at once.

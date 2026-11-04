@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/filipecabaco/snowglobe/internal/daemon"
 	"github.com/filipecabaco/snowglobe/internal/ui"
 )
 
@@ -23,13 +24,21 @@ func runUI(args []string) error {
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
 	port := fs.Int("port", 7777, "")
 	noOpen := fs.Bool("no-open", false, "")
+	startDaemon := fs.Bool("start-daemon", false, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	c, err := daemonClient()
-	if err != nil {
-		return err
+	c, ok := daemon.Find()
+	switch {
+	case ok:
+	case *startDaemon:
+		var err error
+		if c, err = startDetached(nil); err != nil {
+			return err
+		}
+	default:
+		return errors.New("no snowglobe daemon is running: start one with `snowglobe daemon --detach`, or run `snowglobe ui --start-daemon` (or point SNOWGLOBE_DAEMON at one)")
 	}
 	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(*port)))
 	if err != nil {

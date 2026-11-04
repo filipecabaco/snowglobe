@@ -60,12 +60,12 @@
                 <tr><td>pool &lt;dir&gt;</td><td class="wrap-cell">let every site under a directory share one blob store</td></tr>
                 <tr><td>pwa &lt;dir&gt;</td><td class="wrap-cell">make a site an installable app (<code>--name</code>, <code>--short-name</code>)</td></tr>
                 <tr><td>warm &lt;dir&gt; &lt;reads.json…&gt;</td><td class="wrap-cell">add recorded reads to a site's warm pack</td></tr>
-                <tr><td>daemon</td><td class="wrap-cell">the orchestrator, on a Unix socket (<code>--listen ADDR --token-file F</code> for TCP; <code>--memory 8G</code>, <code>--wait 30s</code>)</td></tr>
+                <tr><td>daemon</td><td class="wrap-cell">the orchestrator, on a Unix socket (<code>--listen ADDR --token-file F</code> for TCP; <code>--memory 8G</code>, <code>--wait 30s</code>; <code>--detach</code> to run it in the background)</td></tr>
                 <tr><td>template add &lt;site&gt; · ls · rm</td><td class="wrap-cell">restore a site once for machines to fork from (<code>--name</code>, <code>--snapshot</code>, <code>--idle</code>, <code>--max-machines</code>)</td></tr>
                 <tr><td>up &lt;template&gt;</td><td class="wrap-cell">a machine forked from a template (<code>--name</code>, <code>-p PORT</code>, <code>--ttl</code>, <code>--snapshot</code>, <code>--label K=V</code>)</td></tr>
                 <tr><td>snapshot save &lt;machine&gt; · ls · rm</td><td class="wrap-cell">save a running machine whole, to start machines and templates from</td></tr>
                 <tr><td>service add &lt;name&gt; · ls · rm</td><td class="wrap-cell">a template's machines behind host ports, started on demand and scaled to zero (<code>--template</code>, <code>-p</code>, <code>--min</code>, <code>--max</code>, <code>--idle</code>, <code>--concurrency</code>, <code>--state</code>)</td></tr>
-                <tr><td>ui</td><td class="wrap-cell">the daemon in a browser, on 127.0.0.1 (<code>--port</code>, <code>--no-open</code>)</td></tr>
+                <tr><td>ui</td><td class="wrap-cell">the daemon in a browser, on 127.0.0.1 (<code>--port</code>, <code>--no-open</code>, <code>--start-daemon</code> to start a detached daemon if none runs)</td></tr>
                 <tr><td>submit &lt;template&gt; '&lt;cmd&gt;'</td><td class="wrap-cell">fire and forget: run a command once on a fresh fork; prints the run's id (<code>--timeout</code>, <code>--env</code>, <code>--json</code>)</td></tr>
                 <tr><td>runs [&lt;id&gt;]</td><td class="wrap-cell">the runs submitted, or one's output and exit status (<code>--wait</code>, <code>--json</code>)</td></tr>
                 <tr><td>ports · ports check &lt;port&gt;</td><td class="wrap-cell">host ports and where each leads · whether a host port is free (<code>--ip</code>, <code>--json</code>)</td></tr>

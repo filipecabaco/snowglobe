@@ -28,8 +28,7 @@
 
     <p class="banner" id="banner" role="alert" hidden></p>
 
-    <div class="layout">
-      <main>
+    <main>
         <section class="terminal" id="terminal" hidden aria-labelledby="terminal-title">
           <div class="terminal-head">
             <h2 id="terminal-title">Terminal</h2>
@@ -50,9 +49,9 @@
                 <div class="label">Memory<span id="memory-of"></span><b id="memory-now">–</b></div>
                 <svg class="chart" id="chart-memory" preserveAspectRatio="none" role="img" aria-label="Memory over the last hour"></svg>
               </div>
-              <div class="row" data-series="machines">
-                <div class="label">Machines<b id="machines-now">–</b></div>
-                <svg class="chart" id="chart-machines" preserveAspectRatio="none" role="img" aria-label="Machines over the last hour"></svg>
+              <div class="row tpl-row" data-series="machines">
+                <div class="label">Templates running<b id="machines-now">–</b></div>
+                <div class="strips" id="strips" role="img" aria-label="Machines per template over the last hour"></div>
               </div>
               <div class="row" data-series="jobs">
                 <div class="label">Jobs · p95, last minute<b id="jobs-now">–</b></div>
@@ -70,8 +69,18 @@
             <div class="lanes" id="lanes"></div>
             <div class="cursor" id="cursor" hidden></div>
           </div>
+        <div class="selection" id="selection" aria-live="polite" hidden>
+          <div class="selection-head"><h3 id="selection-title">Nothing selected</h3><button class="link" type="button" id="selection-close">Close</button></div>
+          <p class="caption" id="selection-caption"></p>
+          <dl class="figures" id="selection-figures"></dl>
+          <div class="actions" id="selection-actions"></div>
+        </div>
           <p class="empty" id="lanes-empty" hidden>No templates yet. <a href="#fleet">Add a built site</a> or
             <a href="#builds">build one</a>, and its machines appear here as they start and stop.</p>
+        <div class="recent">
+          <h3 id="recent-title">Events</h3>
+          <ol id="recent"></ol>
+        </div>
         </section>
 
         <section id="ports" aria-labelledby="ports-title">
@@ -124,6 +133,23 @@
             <button class="btn" type="submit">Up a machine</button>
             <p class="check-result" data-ports-for="up-form" aria-live="polite"></p>
           </form>
+
+        <div class="run">
+          <h3 id="run-title">Run on a fresh fork</h3>
+          <form id="run-form">
+            <label class="sr" for="run-template">Template</label>
+            <select id="run-template" name="template" required></select>
+            <label class="sr" for="run-cmd">Command</label>
+            <input id="run-cmd" name="cmd" required placeholder="uname -a" autocomplete="off" spellcheck="false">
+            <div class="run-buttons">
+              <button class="btn go" type="submit" value="wait">Run</button>
+              <button class="btn" type="submit" value="submit">Run in background</button>
+            </div>
+          </form>
+          <pre class="panel output" id="run-output" hidden></pre>
+          <p class="caption" id="run-meta"></p>
+          <ol class="runs" id="runs" aria-label="Submitted runs"></ol>
+        </div>
 
           <h3>Services</h3>
           <div class="table-wrap">
@@ -184,36 +210,6 @@ CMD ["python3"]</textarea></label>
         </section>
       </main>
 
-      <aside class="rail" aria-label="Selection and actions">
-        <section class="selection" id="selection" aria-live="polite">
-          <h2 id="selection-title">Nothing selected</h2>
-          <p class="caption" id="selection-caption">Select a machine or a template on the timeline.</p>
-          <dl class="figures" id="selection-figures"></dl>
-          <div class="actions" id="selection-actions"></div>
-        </section>
-
-        <section class="run" aria-labelledby="run-title">
-          <h2 id="run-title">Run on a fresh fork</h2>
-          <form id="run-form">
-            <label class="sr" for="run-template">Template</label>
-            <select id="run-template" name="template" required></select>
-            <label class="sr" for="run-cmd">Command</label>
-            <input id="run-cmd" name="cmd" required placeholder="uname -a" autocomplete="off" spellcheck="false">
-            <div class="run-buttons">
-              <button class="btn go" type="submit" value="wait">Run</button>
-              <button class="btn" type="submit" value="submit">Run in background</button>
-            </div>
-          </form>
-          <pre class="panel output" id="run-output" hidden></pre>
-          <p class="caption" id="run-meta"></p>
-          <ol class="runs" id="runs" aria-label="Submitted runs"></ol>
-        </section>
-
-        <section class="recent" aria-labelledby="recent-title">
-          <h2 id="recent-title">Events</h2>
-          <ol id="recent"></ol>
-        </section>
-      </aside>
     </div>
   </div>
 </body>

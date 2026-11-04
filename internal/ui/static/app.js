@@ -95,7 +95,7 @@ async function refresh() {
     banner(null);
   } catch (e) {
     state.reachable = false;
-    banner(`The daemon isn't answering (${e.message}). Is \`snowglobe daemon\` running?`);
+    banner(`The daemon isn't answering (${e.message}). Start it with \`snowglobe daemon --detach\`.`);
   }
   render();
 }
@@ -189,7 +189,8 @@ function renderSeries() {
   const used = stats?.memory_used ?? s.at(-1)?.memory_used ?? 0;
   $("memory-now").replaceChildren(...figure(...size(used)));
   $("memory-of").textContent = budget ? ` of ${size(budget).join(" ")}` : "";
-  $("machines-now").textContent = stats ? stats.machines : "–";
+  $("machines-now").textContent = stats ? `${stats.machines} machines` : "";
+  renderStrips();
   const recent = s.slice(-12);
   const p95 = Math.max(0, ...recent.map((v) => v.job_ms_p95));
   $("jobs-now").replaceChildren(...(recent.some((v) => v.jobs) ? figure(Math.round(p95), "ms") : ["–"]));
@@ -213,21 +214,6 @@ function renderSeries() {
     }
     return nodes;
   });
-  draw($("chart-machines"), (w, h) => {
-    if (!s.length) return [];
-    const top = Math.max(1, ...s.map((v) => v.machines)) + 1;
-    const y = (v) => h - 4 - (v / top) * (h - 8);
-    const pts = [];
-    s.forEach((v, i) => {
-      const px = x(new Date(v.time).getTime(), w);
-      if (i) pts.push([px, y(s[i - 1].machines)]);
-      pts.push([px, y(v.machines)]);
-    });
-    const p = document.createElementNS(svgNS, "path");
-    p.setAttribute("class", "line");
-    p.setAttribute("d", path(pts));
-    return [p];
-  });
   draw($("chart-jobs"), (w, h) => {
     const top = Math.max(1, ...s.map((v) => v.jobs));
     const bw = Math.max(1.5, (step / span()) * w * 0.6);
@@ -243,6 +229,46 @@ function renderSeries() {
     });
   });
   renderAxis();
+}
+
+// One strip per template: how many of its machines ran at each minute of the hour, on a shared scale
+function renderStrips() {
+  const now = Date.now(), sp = span(), cut = now - sp, N = 120;
+  const names = new Set(state.templates.map((t) => t.name));
+  for (const l of state.lives.values()) if (l.template && (!l.end || l.end >= cut)) names.add(l.template);
+  const lives = [...state.lives.values()];
+  const series = [...names].sort().map((name) => {
+    const mine = lives.filter((l) => l.template === name);
+    const counts = Array.from({ length: N + 1 }, (_, i) => {
+      const t = cut + (i / N) * sp;
+      return mine.filter((l) => l.start <= t && (!l.end || l.end >= t)).length;
+    });
+    return { name, counts, now: mine.filter((l) => !l.end).length };
+  });
+  const top = Math.max(1, ...series.flatMap((v) => v.counts));
+  const strips = $("strips");
+  if (!series.length) { strips.replaceChildren(el("p", { class: "strips-none" }, "None yet.")); return; }
+  strips.replaceChildren(...series.map((v) => {
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("class", "chart");
+    svg.setAttribute("preserveAspectRatio", "none");
+    const w = $("chart-memory").clientWidth || 600, h = 24;
+    const pts = [];
+    v.counts.forEach((c, i) => {
+      const px = (i / N) * w, py = h - (c / top) * (h - 2);
+      if (i) pts.push([px, pts.at(-1)[1]]);
+      pts.push([px, py]);
+    });
+    const p = document.createElementNS(svgNS, "path");
+    p.setAttribute("class", "area");
+    p.setAttribute("d", path([[0, h], ...pts, [w, h]]) + "Z");
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.replaceChildren(p);
+    const sel = state.selected?.kind === "template" && state.selected.name === v.name;
+    return el("div", { class: "strip" + (v.now ? "" : " off") + (sel ? " selected" : "") },
+      el("button", { class: "strip-name", type: "button", onclick: () => select("template", v.name) }, el("span", {}, v.name), el("b", {}, v.now)),
+      svg);
+  }));
 }
 
 function renderAxis() {
@@ -351,7 +377,7 @@ function wireCursor() {
 function select(kind, name) {
   state.selected = { kind, name };
   render();
-  if (matchMedia("(max-width: 1080px)").matches) $("selection").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("selection").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function renderSelection() {
@@ -359,6 +385,7 @@ function renderSelection() {
   const title = $("selection-title"), caption = $("selection-caption"), figs = $("selection-figures"), actions = $("selection-actions");
   const dl = (pairs) => pairs.map(([k, v]) => el("div", {}, el("dt", {}, k), el("dd", {}, v)));
   const memory = state.stats?.memory || {};
+  $("selection").hidden = !sel;
   if (sel?.kind === "machine") {
     const m = state.machines.find((v) => v.name === sel.name);
     const l = state.lives.get(sel.name);
@@ -394,18 +421,8 @@ function renderSelection() {
     ]));
     actions.replaceChildren(
       el("button", { class: "btn", type: "button", onclick: () => act(() => api("/v1/machines", { method: "POST", body: { template: t.name } }), "Up from " + t.name) }, "Up a machine"),
-      el("button", { class: "btn", type: "button", onclick: () => { $("run-template").value = t.name; $("run-cmd").focus(); } }, "Run on a fork"),
+      el("button", { class: "btn", type: "button", onclick: () => { $("run-template").value = t.name; $("run-cmd").scrollIntoView({ block: "center" }); $("run-cmd").focus(); } }, "Run on a fork"),
       el("button", { class: "btn", type: "button", onclick: () => confirmAct(`Remove template ${t.name} and its ${ms.length} machines?`, () => api(`/v1/templates/${t.name}`, { method: "DELETE" }), "Removed " + t.name) }, "Remove"));
-  } else {
-    title.textContent = "Nothing selected";
-    caption.textContent = state.templates.length ? "Select a machine or a template on the timeline." : "Add a template under Fleet, or build one.";
-    figs.replaceChildren(...(state.stats ? dl([
-      ["Templates", state.stats.templates],
-      ["Services", state.stats.services],
-      ["Snapshots", state.stats.snapshots],
-      ["Jobs run", state.totals ? state.totals.jobs.toLocaleString() : "–"],
-    ]) : []));
-    actions.replaceChildren();
   }
 }
 
@@ -589,6 +606,11 @@ function renderBuilds() {
       el("span", {},
         el("button", { class: "link", type: "button", onclick: () => showLog(b) }, "Log"),
         running ? el("button", { class: "link", type: "button", onclick: () => act(() => api(`/v1/builds/${b.id}`, { method: "DELETE" }), "Cancelled " + b.name) }, "Cancel") : null),
+      b.status === "done" && state.templates.some((t) => t.name === b.template)
+        ? el("p", { class: "made" }, `Now the template ${b.template}. `,
+          el("button", { class: "link", type: "button", onclick: () => act(() => api("/v1/machines", { method: "POST", body: { template: b.template } }), "Up from " + b.template) }, "Up a machine"),
+          el("button", { class: "link", type: "button", onclick: () => { select("template", b.template); } }, "Show"))
+        : null,
       b.error ? el("p", { class: "error" }, plain(b.error)) : null);
   }));
   if (!state.builds.length) list.replaceChildren(el("p", { class: "caption" }, "No builds yet."));
@@ -764,6 +786,7 @@ function render() {
   renderBuilds();
 }
 
+$("selection-close").addEventListener("click", () => { state.selected = null; render(); });
 $("terminal-close").addEventListener("click", () => { closeTerminal(); $("terminal").hidden = true; });
 wireCursor();
 wireForms();

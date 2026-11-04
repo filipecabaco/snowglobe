@@ -121,7 +121,9 @@ Usage:
                                                      kills its job and logs why it stopped first)
   snowglobe ps                                       list running instances (and the daemon's machines)
   snowglobe daemon [--listen ADDR --token-file F]    the orchestrator: keeps templates and the
-                   [--memory 8G] [--wait 30s]
+                   [--memory 8G] [--wait 30s] [--detach]
+                                                     (--detach: in the background, its log in
+                                                     daemon.log beside the socket)
                                                      machines forked from them, with an HTTP/JSON
                                                      API on a Unix socket in the user cache (and
                                                      on ADDR for requests bearing the token). sh,
@@ -161,9 +163,11 @@ Usage:
                                                      replicas, templates asleep and awake,
                                                      snapshots, admissions refused)
   snowglobe ui [--port 7777] [--no-open]             the daemon in a browser: templates, machines,
-                                                     services, snapshots, builds, metrics and a
+               [--start-daemon]                      services, snapshots, builds, metrics and a
                                                      terminal on any machine; on 127.0.0.1 only,
-                                                     opened with a link carrying a session token
+                                                     opened with a link carrying a session token;
+                                                     --start-daemon starts a detached daemon first
+                                                     when none runs
   snowglobe submit <template> '<cmd>' [--timeout S]  fire and forget: run a command once on a fresh
                  [--env K=V]... [--json]             fork of a template, thrown away after; prints
                                                      the run's id at once

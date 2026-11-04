@@ -266,20 +266,22 @@ sent to its section's page.
 `snowglobe ui` (`internal/ui/static/`) shows a running daemon in a browser, in the same world. It
 embeds copies of `base.css`, `theme.js` and the fonts (a test keeps them identical to `site/`). Its
 layout is a timeline: the main column opens on one time axis spanning what the daemon has lived (10
-minutes to an hour). Ruled series rows hold memory against the budget (dashed), machines and jobs:
-a label, a figure-scale value, and a 1.5px ink line or ink bars. Under them come event ticks,
+minutes to an hour). Ruled series rows hold memory against the budget (dashed), the templates running
+(one 24px ink step-area strip per template on a shared scale, named at the left with its machine count,
+grey when none run) and jobs: a label, a figure-scale value, and a 1.5px ink line or ink bars. Under them come event ticks,
 round-minute labels, and the daemon's start marked in ink. A lane per template follows, with each
 machine's life as a 6px ink bar whose live end is signal and whose stopped bars are spent grey.
 A hairline cursor crosses every row and lane, and its readout leads with the minute at figure
-scale. The rail holds the selection (four figures, outlined pill actions), "Run on a fresh fork"
-(the one signal pill "Run", an outlined "Run in background", the output on a black panel, and
-submitted runs below), then events.
+scale. There is no side rail: the page is one column. The selection (four figures, outlined pill actions)
+appears under the lanes only while something is selected, with a Close link. Events follow the lanes.
+"Run on a fresh fork" sits in Fleet (the one signal pill "Run", an outlined "Run in background", the
+output on a black panel, and submitted runs below). A finished build says which template it became,
+with Up a machine and Show.
 
 Dots carry state: signal for live, amber for building or running, grey for idle or at zero, a
 solid ink dot for a run that succeeded, and a hollow ink ring for one that failed. The machine
 terminal is ghostty-web on the black panel (460px). Tables are the system's ruled tables, and on
-phones each row becomes a block. Under 1080px the page is one column: the timeline, then the rail,
-then Ports, Fleet and Builds. Every position is set through the CSSOM, because the page's CSP
+phones each row becomes a block. On phones the strips and lanes stack their names above the chart. Every position is set through the CSSOM, because the page's CSP
 refuses style attributes.
 
 ### Run Window Strip (minor surface)

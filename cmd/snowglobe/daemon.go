@@ -25,8 +25,24 @@ func runDaemon(args []string) error {
 	tokenFile := fs.String("token-file", "", "")
 	memory := fs.String("memory", "", "")
 	wait := fs.Duration("wait", 30*time.Second, "")
+	detach := fs.Bool("detach", false, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	if _, err := parse(fs, args); err != nil {
+		return err
+	}
+	if *detach {
+		// Again as itself, minus the flag, in a session of its own
+		var rest []string
+		for _, a := range args {
+			if a != "--detach" && a != "-detach" {
+				rest = append(rest, a)
+			}
+		}
+		if _, ok := daemon.Find(); ok {
+			fmt.Println("a snowglobe daemon is running already")
+			return nil
+		}
+		_, err := startDetached(rest)
 		return err
 	}
 	token := ""
