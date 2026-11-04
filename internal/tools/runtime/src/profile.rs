@@ -83,7 +83,12 @@ impl Learned {
 /// jit/<snapshot>.bin, the snapshot named by its size and a hash of its end (a zstd frame
 /// ends with its checksum).
 pub fn cache_path(site: &Site) -> Option<PathBuf> {
-    cache_in(&cache_root(|k| std::env::var_os(k))?, site)
+    cache_in(&cache_root_from_env()?, site)
+}
+
+/// The cache directory, from the environment.
+pub fn cache_root_from_env() -> Option<PathBuf> {
+    cache_root(|k| std::env::var_os(k))
 }
 
 /// The cache directory, from the environment (`var`).

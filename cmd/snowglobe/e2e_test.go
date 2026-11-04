@@ -140,6 +140,7 @@ func TestE2E(t *testing.T) {
 	t.Run("native max runtime", e.nativeMaxRuntime)
 	t.Run("mcp", e.mcp)
 	t.Run("bundle", e.bundle)
+	t.Run("shared ram", e.sharedRAM)
 	t.Run("fork machines", e.forkMachines)
 	t.Run("daemon", e.daemonFleet)
 	t.Run("scale to zero", e.scaleToZero)

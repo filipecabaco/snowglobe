@@ -16,6 +16,7 @@
 
 mod b64;
 mod driver;
+mod image;
 mod job;
 mod log;
 mod machine;

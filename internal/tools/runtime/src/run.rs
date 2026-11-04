@@ -24,6 +24,7 @@ use armless::Board;
 use serde_json::json;
 
 use crate::machine::{self, Activity, Spec};
+use crate::image;
 use crate::job;
 use crate::driver;
 use crate::log;
@@ -260,6 +261,9 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // Confine this process before anything starts a thread: what follows reads the site (mapped
     // already, if bundled), makes the control socket, listens on the forwarded ports, keeps the
     // JIT profile and the logs, and looks for the stop files; nothing else
+    // The snapshot's RAM, shared with every other machine restored from it: opened (made, the
+    // first time) before the sandbox, which then needn't reach the cache's images
+    let image = image::open(&site, spec.memory_mb << 20);
     let sandboxed = sandbox::apply(&policy(args, &site, &controls, log_dir.as_deref(), &socket, spec.network == "fetch"))?;
 
     let started = Instant::now();
@@ -282,13 +286,18 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     if std::env::var_os("ARMLESS_JIT_CODE_MB").is_none() {
         std::env::set_var("ARMLESS_JIT_CODE_MB", "64");
     }
-    let (vm, clock) = machine::new_vm(&spec, &site)?;
+    let (ram, without_pages) = image.map(|i| (i.ram, i.state)).unzip();
+    let (vm, clock) = machine::new_vm_on(&spec, &site, true, ram)?;
     let board = vm.board.clone();
     let mut runner = Runner::new(vm, clock, false);
-    let state = site.need("system/state.bin.zst")?;
-    let mut reader = zstd::stream::read::Decoder::with_buffer(&state[..]).map_err(|e| e.to_string())?;
-    runner.load_state_from(&mut reader)?;
-    drop(reader);
+    match without_pages {
+        Some(state) => runner.load_state(&state)?,
+        None => {
+            let state = site.need("system/state.bin.zst")?;
+            let mut reader = zstd::stream::read::Decoder::with_buffer(&state[..]).map_err(|e| e.to_string())?;
+            runner.load_state_from(&mut reader)?;
+        }
+    }
     let timing = std::env::var_os("SNOWGLOBE_TIMING").is_some();
     if timing {
         eprintln!("timing: {sandboxed}");

@@ -51,3 +51,20 @@ KVM, root or Docker, on Linux and macOS alike. Where that shows: compute (~35×)
 a standalone `snowglobe run` (its restored memory is a private copy; machines forked from a
 template share theirs). The daemon's 50 machines are 50 `snowglobe up` and `snowglobe sh` calls,
 eight at a time; "all up" for Firecracker includes the harness starting each process and its API.
+
+### Shared snapshot memory (armless 0.8.0)
+
+Since armless 0.8.0, a standalone run maps its site's snapshot memory from an image in the cache
+(made by the first run, read-only and private to the user), copy-on-write, instead of decompressing
+the snapshot into memory of its own. Ten `snowglobe run --runtime native` instances of the python
+demo, after one command each:
+
+| | before | after |
+|---|---:|---:|
+| Linux (Lima, 512 MB guests): PSS each | 111 MB | 46 MB |
+| macOS: physical footprint each | 175 MB | 96 MB |
+| restore (`SNOWGLOBE_TIMING`, macOS) | 60–74 ms | 4–6 ms |
+| image on disk, once per snapshot | – | 71 MB (Linux) |
+
+Of what is left on macOS, the guest's own pages are ~14 MB; the rest is snowglobe-vm's heap.
+`SNOWGLOBE_RAM_IMAGE=off` restores the old way.

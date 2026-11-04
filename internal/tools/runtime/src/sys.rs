@@ -6,6 +6,14 @@
 use std::io;
 use std::os::fd::{AsRawFd, BorrowedFd};
 
+// ---------------------------------------------------------------- the user
+
+/// The effective user id of this process.
+pub fn euid() -> u32 {
+    // SAFETY: geteuid takes nothing and cannot fail
+    unsafe { libc::geteuid() }
+}
+
 // ---------------------------------------------------------------- the terminal
 
 /// The terminal settings of `fd`, if it is a terminal.
