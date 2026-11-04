@@ -345,7 +345,8 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
                 <p>Many machines from one site, still without KVM or root. The daemon restores a site once as a template
                   and forks machines from it in tens of milliseconds, each sharing the memory it doesn't write. Services
                   start machines on a connection and scale to zero when idle, and a fleet file says what should run.
-                  Instances outside the daemon share their snapshot's memory too, mapped from one read-only image.</p>
+                  Instances outside the daemon share their snapshot's memory too, mapped from one read-only image.
+                  <a href="docs/#orchestration">Orchestration in the docs</a> covers all of it.</p>
 <pre><span class="dim"># a template, and machines forked from it</span>
 $ snowglobe daemon &amp;
 $ snowglobe template add dist/api --name api
