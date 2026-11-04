@@ -126,12 +126,6 @@ components:
   spec-figure:
     textColor: "{colors.ink}"
     typography: "{typography.figure}"
-  ledger-action:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    padding: "4px 0"
-  ledger-action-hover:
-    textColor: "{colors.signal}"
 ---
 
 # Design System: snowglobe
@@ -140,9 +134,9 @@ components:
 
 **Creative North Star: "The Measured Spec Sheet"**
 
-snowglobe's demo page is a modern Swiss spec sheet for ten sandboxed machines. White paper, near-black ink, one signal orange-red. Switzer sits large and tight on a strict two-zone grid (an 8-column main column of runs, a 4-column rail holding the live "Your runs" ledger). The numbers the build measured, like snapshot size, ready time, preloaded and on-demand bytes, are set at headline scale. They are the decoration. Nothing else is.
+snowglobe's demo page is a modern Swiss spec sheet for ten sandboxed machines. White paper, near-black ink, one signal orange-red. Switzer sits large and tight on a strict two-zone grid (a narrow list of runs beside one wide panel, the selected run). The numbers the build measured, like snapshot size, ready time, preloaded and on-demand bytes, are set at headline scale. They are the decoration. Nothing else is.
 
-The page is quiet until something runs. Each run's terminal is a crisp black inset panel. At rest it shows the transcript recorded at build time, and "Run here" swaps in the live machine in the same footprint. Signal colour appears only on the run control and on live state: the pulsing ledger dot, the restore progress bar, and the masthead dot, which lights up only while a run is live. Structure comes from hairlines. Full-ink 1px rules open each major block, and pale 1px rules divide rows.
+The page is quiet until something runs. Each run's terminal is a crisp black inset panel. At rest it shows the transcript recorded at build time, and "Run here" swaps in the live machine in the same footprint. Signal colour appears only on the run control and on live state: the live dot in the list of runs, the restore progress bar, and the masthead dot, which lights up only while a run is live. Structure comes from hairlines. Full-ink 1px rules open each major block, and pale 1px rules divide rows.
 
 The world rejects both the dark dev-tool landing page and any retro or nostalgic framing. There are no CRT effects, no ornament, no gradients beyond the transcript's bottom fade into the panel.
 
@@ -159,17 +153,17 @@ The world rejects both the dark dev-tool landing page and any retro or nostalgic
 A near-monochrome paper-and-ink palette with a single hot signal reserved for live state.
 
 ### Primary
-- **Signal Vermilion** (`signal`): the "Run here" control, the restore progress bar, the live ledger dot and its pulse ring, the masthead dot while any run is live, the focus outline, the text caret, and ledger-action hover. Its pale companion **Signal Blush** (`signal-tint`) is used only for text selection.
+- **Signal Vermilion** (`signal`): the "Run here" control, the restore progress bar, the live dot in the list of runs, the masthead dot while any run is live, the focus outline, and the text caret. Its pale companion **Signal Blush** (`signal-tint`) is used only for text selection.
 
 ### Neutral
-- **Press Black** (`ink`): all body and display text, the 1px rules that open each block (masthead, run, ledger, spec cells, steps, table head, footer), outline-button borders, and the hover fill for every button.
-- **Graphite** (`ink-2`): secondary text such as stack lines, spec labels, ledger states, section intros, table headers, and the dimmed comments in code.
-- **Hairline Grey** (`rule`): pale row dividers in tables, steps and ledger rows.
+- **Press Black** (`ink`): all body and display text, the 1px rules that open each block (masthead, run, spec cells, steps, table head, footer), outline-button borders, and the hover fill for every button.
+- **Graphite** (`ink-2`): secondary text such as stack lines, spec labels, section intros, table headers, and the dimmed comments in code.
+- **Hairline Grey** (`rule`): pale row dividers in tables, steps and the list of runs.
 - **Spent Grey** (`spent`): the dot for closed or lost runs, and the page scrollbar thumb.
 - **Bone** (`soft`): the background of static code blocks (CLI steps). It is the only tinted light surface.
-- **Paper** (`paper`): the page, plus the mobile ledger sheet.
+- **Paper** (`paper`): the page.
 - **Panel Black** (`panel`) with **Panel Ink** (`panel-ink`) and **Panel Dim** (`panel-dim`): the terminal panel, its text, and its small "recorded at build" or "live in this tab" label.
-- **Restoring Amber** (`pending`): the ledger dot while a run is loading its snapshot. It is the only state colour besides signal.
+- **Restoring Amber** (`pending`): the dot in the list of runs while a run is loading its snapshot. It is the only state colour besides signal.
 
 The xterm transcript theme carries its own ANSI palette (for example red `#ff6b4a`, green `#7fd18b`). That palette lives inside the panel only and is not part of the page palette.
 
@@ -191,7 +185,7 @@ The xterm transcript theme carries its own ANSI palette (for example red `#ff6b4
 - **Headline** (620, clamp 2.4–4.25rem, 0.98, −0.035em): section heads ("Compare the runs", "Make your own"). Max 14ch.
 - **Run title** (600, clamp 2–3rem, 1, −0.03em): each run's name.
 - **Figure** (560, clamp 32–48px, 1, −0.035em, tabular): measured values in spec rows. The unit sits beside it at 15px/400 in Graphite.
-- **Title** (600, 24px, −0.02em): CLI step names. The ledger heading is a smaller sibling (600, 20px).
+- **Title** (600, 24px, −0.02em): CLI step names.
 - **Lede** (400, clamp 19–22px, 1.45): the hero paragraph, max 36em.
 - **Body** (400, 17px / 16px under 720px, 1.55): running text, max 38–40em. Section intros use 18px in Graphite.
 - **Label** (400, 13px, Graphite): spec labels and table column heads. These are sentence case, never uppercase or tracked.
@@ -204,20 +198,16 @@ The xterm transcript theme carries its own ANSI palette (for example red `#ff6b4
 
 ## Layout
 
-The page is centred to 1440px with fluid side padding (`page-pad`, 20–64px). The hero runs the full width (headline, lede, the install line). The runs follow as one block opened by a full-ink rule. On the left (3fr) is the list of runs, a vertical tablist of ruled rows: the name, its snapshot size and a one-line description, with a 2px ink bar marking the selected one and a status dot when it is live. Under the list sits the "Your runs" ledger. On the right (9fr) is one panel, the selected run: its head (title and stack line on the left, the controls on the right), the 460px terminal, the four-up spec row and the command strip. The address keeps which run is open (`#python`). "Compare the runs" stays a single table. "Make your own" is a strip of underlined tabs (Install … Orchestrate) showing one step at a time; without the script every step shows in turn. Vertical rhythm: 72–120px above each section.
+The page is centred to 1440px with fluid side padding (`page-pad`, 20–64px). The hero runs the full width (headline, lede, the install line). The runs follow as one block opened by a full-ink rule. On the left (3fr) is the list of runs, a vertical tablist of ruled rows: the name, its snapshot size and a one-line description, with a 2px ink bar marking the selected one and a status dot when it is live. On the right (9fr) is one panel, the selected run: its head (title and stack line on the left, the controls on the right), the 460px terminal, the four-up spec row and the command strip. The address keeps which run is open (`#python`). "Compare the runs" stays a single table. "Make your own" is a strip of underlined tabs (Install … Orchestrate) showing one step at a time; without the script every step shows in turn. Vertical rhythm: 72–120px above each section.
 
 Responsive behaviour:
-- **≤1080px:** one column. The ledger moves above the runs and stops being sticky.
-- **≤720px:** the run head stacks and the controls wrap. The panel drops to 380px. Spec rows become 2-up. CLI steps stack. The options table and the comparison table reflow into labelled blocks so nothing clips at rest. The ledger becomes a fixed bottom sheet with a 56px toggle row (count on the right) that opens to at most 62vh. The body reserves bottom padding for it. Only the last nav link (GitHub) stays in the masthead.
+- **≤1080px:** one column.
+- **≤720px:** the run head stacks and the controls wrap. The panel drops to 380px. Spec rows become 2-up. CLI steps stack. The options table and the comparison table reflow into labelled blocks so nothing clips at rest. Only the last nav link (GitHub) stays in the masthead.
 - Code keeps its columns. Code blocks scroll sideways and never re-wrap. Terminals never render narrower than 90 columns and scroll sideways on phones.
 
 ## Elevation & Depth
 
 The system is flat. Depth comes from contrast and hairlines: the black panel inset into white paper, and 1px ink rules that open each block. There are no card shadows.
-
-### Shadow Vocabulary
-- **Sheet lift** (`box-shadow: 0 -12px 32px -18px rgb(0 0 0 / .25)`): only on the mobile ledger sheet, to separate it from content scrolling underneath.
-- **Live pulse** (`box-shadow` ring from 0 to 7px of signal at 50% → 0): the animated halo on a running ledger dot. This is state, not elevation.
 
 ### Named Rules
 **The Hairline Rule.** Blocks open with a full-ink 1px top rule, and rows divide with 1px Hairline Grey. Use a rule wherever another system would reach for a card or a shadow.
@@ -243,9 +233,6 @@ A black 460px panel (6px radius) that holds a recorded xterm transcript rendered
 
 ### Spec Row
 Four measured figures (Snapshot to restore, Ready at build, Preloaded, On demand). Each cell opens with a 1px ink rule, then a 13px Graphite label and a Figure-scale value with a small Graphite unit. A Graphite line follows with the command in ink mono, plus "· N MB RAM · no network · no server".
-
-### Ledger ("Your runs")
-A ruled list under the runs list. Each row is a grid: an 8px status dot, the name (550) with a Graphite "· here" or "· window", a state line in 14px Graphite ("Restoring n%", "Running · mm:ss", "Stopped · ran for …"), and text-button actions on the right. Dots are Amber while restoring, a pulsing Signal while running, and Spent Grey (with the row text dimmed) once closed or lost. Actions ("Show", "Stop") are underlined text buttons that turn signal on hover. New rows enter with a 0.5s fade and a 6px drop.
 
 ### Code Blocks
 Bone background, 6px radius, 18px 20px padding, ink Fragment Mono at 13.5px/1.6. Comments are dimmed to Graphite. Blocks never wrap.
@@ -307,7 +294,7 @@ A run opened in its own window (`internal/site/index.html.tmpl`) shows a one-lin
 - **Do** keep terminals as black 6px-radius panels and put recorded and live output in the same footprint.
 - **Do** use Fragment Mono only for commands, flags, paths, labels and terminals.
 - **Do** keep code and terminals at their recorded column width and let them scroll sideways on narrow screens.
-- **Do** honour `prefers-reduced-motion`. The ledger entry animation, live pulse and View Transitions all switch off.
+- **Do** honour `prefers-reduced-motion`. View Transitions switch off.
 
 ### Don't:
 - **Don't** use signal for headings, links, decoration or emphasis in prose.

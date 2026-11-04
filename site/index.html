@@ -97,7 +97,7 @@
     .panel .loading .bar span { display: block; height: 100%; width: 0; background: var(--signal); transition: width .3s; }
     /* Only shown when a phone takes the live machine full screen */
     .panel .live-bar { display: none; }
-    /* Live: the Stop control and the ledger already say so; keep the terminal unobstructed */
+    /* Live: the Stop control and the run list already say so; keep the terminal unobstructed */
     .run.playing .label { display: none; }
 
     /* Measured facts: a spec row */
@@ -131,30 +131,6 @@
     .ref-more { margin: 40px 0 0; max-width: 40em; }
 
 
-    /* The ledger: a live table of the visitor's own runs, under the list of runs */
-    .ledger { padding-top: 14px; border-top: 1px solid var(--ink); }
-    .ledger[hidden] { display: none !important; }
-    .runs-side { gap: 28px; }
-    .ledger-head { display: flex; justify-content: space-between; align-items: baseline; }
-    .ledger h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
-    .ledger .count { color: var(--ink-2); font-size: 14px; }
-    .ledger .empty { color: var(--ink-2); font-size: 15px; margin: 14px 0 0; max-width: 28em; }
-    .ledger ol { list-style: none; margin: 10px 0 0; padding: 0; }
-    .ledger li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: 15px; }
-    .ledger .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--restoring); margin-top: 7px; }
-    .ledger [data-state="ready"] .dot { background: var(--signal); box-shadow: 0 0 0 0 rgb(214 48 12 / .5); animation: live 2s cubic-bezier(.2,.8,.2,1) infinite; }
-    .ledger [data-state="closed"] .dot, .ledger [data-state="lost"] .dot { background: var(--idle); }
-    .ledger [data-state="closed"], .ledger [data-state="lost"] { color: var(--ink-2); }
-    .ledger .name { font-weight: 550; }
-    .ledger .where { color: var(--ink-2); font-weight: 400; }
-    .ledger .state { grid-column: 2; color: var(--ink-2); font-size: 14px; }
-    .ledger .actions { grid-column: 3; grid-row: 1 / span 2; display: flex; gap: 12px; align-self: center; }
-    .ledger button { font: 500 14px/1 var(--sans); background: none; border: 0; padding: 4px 0; color: var(--ink); cursor: pointer; text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
-    .ledger button:hover { color: var(--signal); }
-    .ledger li.enter { animation: enter .5s cubic-bezier(.2,.8,.2,1) both; }
-    @keyframes enter { from { opacity: 0; transform: translateY(-6px); } }
-    @keyframes live { 70% { box-shadow: 0 0 0 7px rgb(214 48 12 / 0); } 100% { box-shadow: 0 0 0 0 rgb(214 48 12 / 0); } }
-    .ledger-toggle { display: none; }
 
     /* The signature moment: run here morphs the transcript into the live machine */
     ::view-transition-old(*), ::view-transition-new(*) { animation-duration: .5s; animation-timing-function: cubic-bezier(.2,.8,.2,1); }
@@ -190,16 +166,6 @@
       #summary td { display: block; border: 0; padding: 0; text-align: left; white-space: normal; }
       #summary td:first-child { grid-column: 1 / -1; font-weight: 600; font-size: 17px; }
       #summary td[data-label]::before { content: attr(data-label) " "; color: var(--ink-2); font-size: 13px; }
-      /* The ledger becomes a sheet along the bottom edge, one line until opened */
-      .ledger { position: fixed; z-index: 10; top: auto; left: 0; right: 0; bottom: 0; margin: 0; padding: 0 var(--pad) env(safe-area-inset-bottom, 0px);
-        background: var(--bg); border-top: 1px solid var(--ink); max-height: 62vh; overflow: auto; box-shadow: 0 -12px 32px -18px var(--sheet-shadow); }
-      .ledger .ledger-toggle { display: flex; width: 100%; justify-content: space-between; align-items: center; height: 56px; padding: 0;
-        font: 600 17px var(--sans); background: none; border: 0; color: var(--ink); cursor: pointer; text-decoration: none; }
-      .ledger .ledger-toggle .count { font-weight: 400; }
-      .ledger:not(.open) .ledger-body { display: none; }
-      .ledger .ledger-head { display: none; }
-      body:has(#ledger:not([hidden])) { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
-
       /* A live run takes the whole screen: a 380px box is no place to type, and the screen follows
          the visual viewport so the keyboard pushes the terminal up instead of covering it */
       .run.playing .panel { position: fixed; z-index: 30; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh);
@@ -217,7 +183,6 @@
       html:has(.run.playing) { overflow: hidden; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .ledger li.enter, .ledger [data-state="ready"] .dot { animation: none; }
       ::view-transition-old(*), ::view-transition-new(*) { animation: none; }
     }
   </style>
@@ -258,15 +223,6 @@
         <section id="runs" aria-label="Runs">
           <div class="runs">
             <div class="runs-side">
-              <div class="ledger" id="ledger" aria-labelledby="ledger-title" hidden>
-                <button class="ledger-toggle" type="button" aria-expanded="false" aria-controls="ledger-body">
-                  <span>Running now</span><span class="count" data-count></span>
-                </button>
-                <div class="ledger-body" id="ledger-body">
-                  <div class="ledger-head"><h2 id="ledger-title">Running now</h2><span class="count" data-count></span></div>
-                  <ol id="ledger-list" aria-live="polite"></ol>
-                </div>
-              </div>
               <div class="run-list" id="run-list" role="tablist" aria-label="Runs" aria-orientation="vertical"></div>
             </div>
             <div class="runs-main" id="runs-main"></div>
@@ -739,11 +695,10 @@ $ snowglobe apply</pre>
       if (!wasPlaying) entry.node.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
     }
 
-    // ── The ledger: every run on this origin reports in over a BroadcastChannel ─────────
+    // ── Every run on this origin reports in over a BroadcastChannel: the list of runs marks the
+    // ones running, here or in a window ──────────────────────────────────────────────────
     const ledger = new Map();
-    const pending = [];
     const channel = "BroadcastChannel" in window ? new BroadcastChannel("snowglobe-runs") : null;
-    const list = $("#ledger-list");
     let opened = 0;
 
     function openWindow(event, demo) {
@@ -756,25 +711,14 @@ $ snowglobe apply</pre>
         return;
       }
       event.preventDefault();
-      pending.push({ path: demo.dir + "/", win });
     }
 
     const demoFor = (path) => demos.find((d) => path.replace(/\?.*$/, "").replace(/\/+$/, "").endsWith("/" + d.dir));
-    const clock = (ms) => {
-      const s = Math.max(0, Math.floor(ms / 1000));
-      return (s >= 3600 ? Math.floor(s / 3600) + ":" : "") + String(Math.floor(s / 60) % 60).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
-    };
 
     channel?.addEventListener("message", ({ data }) => {
       if (data?.type !== "run") return;
       const { run } = data;
-      const known = ledger.get(run.id);
-      let win = known?.win;
-      if (!win && !run.embedded) {
-        const i = pending.findIndex((p) => run.path.endsWith(p.path));
-        if (i >= 0) win = pending.splice(i, 1)[0].win;
-      }
-      ledger.set(run.id, { ...known, run, lastSeen: Date.now(), win });
+      ledger.set(run.id, { run, lastSeen: Date.now() });
 
       // The inline panel shows the embedded run's restore progress until it's running
       if (run.embedded && playing && demoFor(run.path) === playing.demo) {
@@ -795,77 +739,20 @@ $ snowglobe apply</pre>
     function render() {
       const now = Date.now();
       let live = 0;
-      for (const [id, item] of ledger) {
-        const { run } = item;
-        let state = run.state;
-        if (state !== "closed" && now - item.lastSeen > 7000) state = "lost";
-        if ((state === "closed" || state === "lost") && !item.closedAt) item.closedAt = now;
-        if (state === "loading" || state === "ready") live++;
-        const demo = demoFor(run.path);
-        // Only what runs is listed: a stopped run says so for a moment, then goes
-        if (item.closedAt && now - item.closedAt > 4000) {
-          ledger.delete(id);
-          list.querySelector(`[data-id="${CSS.escape(id)}"]`)?.remove();
-          continue;
-        }
-
-        let li = list.querySelector(`[data-id="${CSS.escape(id)}"]`);
-        if (!li) {
-          li = el("li", { className: reduceMotion ? "" : "enter" },
-            el("span", { className: "dot", ariaHidden: "true" }),
-            el("span", { className: "name" }),
-            el("span", { className: "actions" }),
-            el("span", { className: "state" }));
-          li.dataset.id = id;
-          list.prepend(li);
-        }
-        li.dataset.state = state;
-        $(".name", li).replaceChildren(demo ? demo.name : run.title, " ", el("span", { className: "where", textContent: run.embedded ? "· here" : "· window" }));
-        $(".state", li).textContent =
-          state === "loading" ? `Restoring ${run.progress || 0}%` :
-          state === "ready" ? `Running · ${clock(now - (run.readyAt || run.openedAt))}` :
-          state === "closed" ? (run.readyAt ? `Stopped · ran for ${clock(item.closedAt - run.readyAt)}` : "Stopped while restoring") : "Stopped reporting";
-
-        const actions = $(".actions", li);
-        const isLive = state === "loading" || state === "ready";
-        if (actions.dataset.live !== String(isLive)) {
-          actions.dataset.live = isLive;
-          actions.replaceChildren();
-          if (isLive) {
-            if (item.win || run.embedded) {
-              actions.append(Object.assign(el("button", { type: "button", textContent: "Show" }), {
-                onclick: () => {
-                  if (!run.embedded) return item.win.focus();
-                  if (demo) select(demo.dir, true);
-                  const node = demo && document.getElementById(demo.dir);
-                  node?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
-                  node?.querySelector(".panel iframe")?.focus();
-                },
-              }));
-            }
-            actions.append(Object.assign(el("button", { type: "button", textContent: "Stop" }), {
-              onclick: () => {
-                if (run.embedded) return transition(stopInline);
-                channel?.postMessage({ type: "close", id });
-                item.win?.close();
-              },
-            }));
-          }
-        }
+      // A run that closed or stopped reporting is forgotten
+      for (const [id, { run, lastSeen }] of ledger) {
+        if (run.state === "closed" || now - lastSeen > 7000) ledger.delete(id);
+        else if (run.state === "loading" || run.state === "ready") live++;
       }
-      // Each run's entry in the list shows whether it runs (here or in a window)
       for (const e of entries) {
         let st = "";
-        for (const item of ledger.values()) {
-          if (demoFor(item.run.path) !== e.demo) continue;
-          const s = Date.now() - item.lastSeen > 7000 ? "lost" : item.run.state;
-          if (s === "ready") st = "ready";
-          else if (s === "loading" && st !== "ready") st = "loading";
+        for (const { run } of ledger.values()) {
+          if (demoFor(run.path) !== e.demo) continue;
+          if (run.state === "ready") st = "ready";
+          else if (run.state === "loading" && st !== "ready") st = "loading";
         }
         e.tab.dataset.state = st;
       }
-      $("#ledger").hidden = ledger.size === 0;
-      document.querySelectorAll("[data-count]").forEach((c) => (c.textContent = live ? `${live} live` : ""));
       document.documentElement.classList.toggle("live-any", live > 0);
     }
     setInterval(render, 1000);
@@ -904,11 +791,6 @@ $ snowglobe apply</pre>
       $("#steps").classList.add("tabbed");
       show(0);
     }
-
-    $(".ledger-toggle").addEventListener("click", (event) => {
-      const open = $("#ledger").classList.toggle("open");
-      event.currentTarget.setAttribute("aria-expanded", String(open));
-    });
   </script>
 </body>
 </html>
