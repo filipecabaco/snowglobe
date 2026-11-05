@@ -1,0 +1,25 @@
+#!/bin/sh
+# Drive the CRUD API at http://127.0.0.1:8080/items: N creates, then N reads, N updates and
+# N deletes of one item, and N lists, 4 at a time (ApacheBench). Prints each phase's rate.
+n=${1:-1000}
+url=http://127.0.0.1:8080/items
+body=$(mktemp)
+echo '{"name": "widget", "qty": 1}' > "$body"
+id=$(wget -q -O - --post-file="$body" --header='Content-Type: application/json' "$url" | sed 's/[^0-9]//g')
+phase() {
+  name=$1; shift
+  ab -q -n "$n" -c 4 "$@" 2>&1 | awk -v p="$name" '
+    # ApacheBench counts a response whose length differs from the first as failed (ids grow):
+    # only connections, receives and exceptions are
+    /\(Connect: / { gsub(/[(),]/, ""); failed = $2 + $4 + $8 }
+    /^Non-2xx responses/ { non2xx = $3 }
+    /^Requests per second/ { rps = $4 }
+    /^Time taken for tests/ { secs = $5 }
+    END { printf "%-7s %8s req/s  %6s s  failed %s%s\n", p, rps, secs, failed + 0, non2xx ? "  non-2xx " non2xx : "" }'
+}
+phase create -p "$body" -T application/json "$url"
+phase read "$url/$id"
+phase update -u "$body" -T application/json "$url/$id"
+phase list "$url"
+phase delete -m DELETE "$url/$id"
+rm -f "$body"
