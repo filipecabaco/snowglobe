@@ -302,7 +302,7 @@ func (p *Plan) create(api API, build Builder, o Object, logf func(string, ...any
 			}
 		}
 		_, err := api.AddTemplate(daemon.AddTemplate{Site: site, Name: o.Name, MaxMachines: s.MaxMachines,
-			Idle: durationOf(s.Idle), Snapshot: s.Snapshot, Labels: p.labels(o, nil)})
+			Idle: durationOf(s.Idle), Snapshot: s.Snapshot, AllowPrivate: s.AllowPrivate, Labels: p.labels(o, nil)})
 		return err
 	case SnapshotSpec:
 		return p.snapshot(api, o, s, logf)

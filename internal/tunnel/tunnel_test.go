@@ -16,7 +16,11 @@ func TestParse(t *testing.T) {
 	if got, err := Parse("6379=ws://127.0.0.1:7000"); err != nil || got != (Tunnel{Port: 6379, URL: "ws://127.0.0.1:7000"}) {
 		t.Fatalf("any host: got %+v, %v", got, err)
 	}
-	for _, bad := range []string{"5432", "db:5432=tcp://x", ":5432=ws://x", "db:0=ws://x", "db:nope=ws://x", "=ws://x"} {
+	// Natively, another machine's forwarded port
+	if got, err := Parse("db.internal:5432=tcp://127.0.0.1:15432"); err != nil || got != (Tunnel{Host: "db.internal", Port: 5432, URL: "tcp://127.0.0.1:15432"}) {
+		t.Fatalf("tcp: got %+v, %v", got, err)
+	}
+	for _, bad := range []string{"5432", "db:5432=tcp://x", "db:5432=tcp://x:0", "db:5432=tcp://:5432", "db:5432=udp://x:1", ":5432=ws://x", "db:0=ws://x", "db:nope=ws://x", "=ws://x"} {
 		if _, err := Parse(bad); err == nil {
 			t.Errorf("%q: want an error", bad)
 		}

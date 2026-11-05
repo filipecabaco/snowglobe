@@ -1,8 +1,9 @@
-// Package tunnel reads the guest TCP destinations a site carries over WebSockets: each
-// connection the guest opens to one becomes a WebSocket to its URL, the stream's bytes sent as
-// binary messages (what websockify, websocat and Neon's wsproxy speak). armless does the
-// carrying, in the page and in snowglobe-vm alike; this is the same [HOST:]PORT=URL spec its
-// Tunnel::parse reads.
+// Package tunnel reads the guest TCP destinations a site carries elsewhere: each connection the
+// guest opens to one becomes a WebSocket to its ws:// or wss:// URL, the stream's bytes sent as
+// binary messages (what websockify, websocat and Neon's wsproxy speak), or, natively only, a TCP
+// connection to its tcp://HOST:PORT (another machine's forwarded port, say; a page can't open
+// one). armless does the carrying, in the page and in snowglobe-vm alike; this is the same
+// [HOST:]PORT=URL spec its Tunnel::parse reads.
 package tunnel
 
 import (
@@ -25,9 +26,9 @@ type Tunnel struct {
 
 // Parse reads "[HOST:]PORT=URL", e.g. "db.internal:5432=wss://proxy.example.com/db".
 func Parse(spec string) (Tunnel, error) {
-	bad := fmt.Errorf("tunnel %q: use [HOST:]PORT=ws://... or wss://...", spec)
+	bad := fmt.Errorf("tunnel %q: use [HOST:]PORT=ws://..., wss://... or tcp://HOST:PORT", spec)
 	dest, url, ok := strings.Cut(spec, "=")
-	if !ok || !(strings.HasPrefix(url, "ws://") || strings.HasPrefix(url, "wss://")) {
+	if !ok || !(strings.HasPrefix(url, "ws://") || strings.HasPrefix(url, "wss://") || tcpAddress(url)) {
 		return Tunnel{}, bad
 	}
 	t := Tunnel{URL: url}
@@ -44,6 +45,20 @@ func Parse(spec string) (Tunnel, error) {
 	}
 	t.Port = n
 	return t, nil
+}
+
+// tcpAddress says whether url is tcp://HOST:PORT.
+func tcpAddress(url string) bool {
+	addr, ok := strings.CutPrefix(url, "tcp://")
+	if !ok {
+		return false
+	}
+	i := strings.LastIndex(addr, ":")
+	if i <= 0 {
+		return false
+	}
+	n, err := strconv.Atoi(addr[i+1:])
+	return err == nil && n >= 1 && n <= 65535
 }
 
 // ParseAll reads several specs.
