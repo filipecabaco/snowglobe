@@ -11,7 +11,9 @@
 //! /sgjob/<id>, a directory its kernel has never seen (it caches what it has, so new files appear
 //! only in a new directory), and `EXCLAVE_WORKSPACE` names it. Only `sh <launcher>` is typed. The
 //! launcher asks for a nonce, which the host then types (it is in no file, and the command hasn't
-//! started yet), starts the command in a session of its own (setsid; else a process group of its
+//! started yet) with its own time, which the launcher sets the guest's wall clock to (a restored
+//! guest's clock otherwise starts at its snapshot's moment: as after a resume from suspend, the
+//! wall clock catches up and the monotonic one doesn't count the gap), starts the command in a session of its own (setsid; else a process group of its
 //! own), waits for it, syncs what it wrote, then prints a marker line with the nonce and its
 //! status. Only that whole line ends the job: a job that prints a marker of its own from what it
 //! can read (`.sg/job.sh`, its id) doesn't end or misreport itself. One job at a time per machine.
@@ -145,7 +147,8 @@ pub fn scripts(id: &str, ws: &str, env: &[(String, String)], command: &str) -> R
         r#"k=0
 trap 'k=1' INT TERM HUP
 printf '\nSGNONCE_%s\n' {id}
-read -r n
+read -r n t
+[ -n "$t" ] && date -s "@$t" >/dev/null 2>&1
 cd {ws} || exit 1
 sg_procs() {{
   for p in /proc/[0-9]*; do
@@ -284,7 +287,11 @@ pub fn run(board: &armless::Board, activity: &Arc<Activity>, req: &Request) -> R
         loop {
             let printed = String::from_utf8_lossy(&activity.serial_since(from)).into_owned();
             if !asked && printed.contains(&format!("SGNONCE_{id}")) {
-                board.serial_input(format!("{nonce}\n").as_bytes());
+                // With the host's time, which the launcher sets the guest's clock to
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                board.serial_input(format!("{nonce} {now}\n").as_bytes());
                 asked = true;
             }
             if let Some(m) = parse_marker(&printed, &id, &nonce) {
@@ -490,8 +497,18 @@ mod tests {
     #[test]
     fn the_launcher_traps_before_anything_else() {
         let (launcher, _) = scripts("id", "/sgjob/id", &[], "true").unwrap();
-        let first: Vec<&str> = launcher.lines().take(4).collect();
-        assert_eq!(first, ["k=0", "trap 'k=1' INT TERM HUP", "printf '\\nSGNONCE_%s\\n' id", "read -r n"]);
+        let first: Vec<&str> = launcher.lines().take(5).collect();
+        assert_eq!(
+            first,
+            [
+                "k=0",
+                "trap 'k=1' INT TERM HUP",
+                "printf '\\nSGNONCE_%s\\n' id",
+                // The nonce, and the host's time, which the guest's clock is set to
+                "read -r n t",
+                "[ -n \"$t\" ] && date -s \"@$t\" >/dev/null 2>&1",
+            ]
+        );
         assert!(launcher.contains("setsid sh .sg/cmd"));
         // The marker carries the nonce, which is in no file
         assert!(launcher.contains("SGDONE_%s_%s_%s_%s\\n' id \"$n\""));
@@ -636,10 +653,15 @@ mod tests {
                 }
             };
             activity.observe(&Event::Serial(format!("sh /sgjob/{id}/.sg/job.sh\r\n\r\nSGNONCE_{id}\r\n").into_bytes()));
-            let nonce = next_line(board, typed);
+            // The nonce, then the host's time (Unix seconds), which the launcher sets the clock to
+            let line = next_line(board, typed);
+            let (nonce, time) = line.split_once(' ').expect("the nonce and the host's time");
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            let time: u64 = time.parse().expect("seconds");
+            assert!(time.abs_diff(now) <= 5, "the host's time, typed: {time} (now {now})");
             // The terminal echoes it
-            activity.observe(&Event::Serial(format!("{nonce}\r\n").into_bytes()));
-            (id, nonce)
+            activity.observe(&Event::Serial(format!("{line}\r\n").into_bytes()));
+            (id, nonce.to_string())
         }
 
         /// The shell back at its prompt: it answers the next sync typed in.
