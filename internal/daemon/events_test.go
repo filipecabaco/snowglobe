@@ -81,6 +81,8 @@ func TestEventsStreamWhatTheDaemonDoes(t *testing.T) {
 	d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "u"})
 	defer d.c.RemoveTemplate("u")
 	waitFor(t, func() bool { return has(late(), "template.added", "template u") })
+	// Each listener gets it in its own time: the first may still be one behind the late one
+	waitFor(t, func() bool { return has(got(), "template.added", "template u") })
 	if r := d.s.Recent(); len(r) != len(got()) {
 		t.Errorf("kept %d, streamed %d", len(r), len(got()))
 	}
