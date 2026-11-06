@@ -11,16 +11,11 @@ package ui
 import (
 	"crypto/rand"
 	"crypto/subtle"
-	"embed"
 	"encoding/hex"
-	"io/fs"
 	"net"
 	"net/http"
 	"strings"
 )
-
-//go:embed static
-var static embed.FS
 
 // cookie holds the session token.
 const cookie = "snowglobe_ui"
@@ -42,11 +37,9 @@ func NewToken() string {
 
 // Handler serves the UI and, under /api/, the daemon's API.
 func (s *Server) Handler() http.Handler {
-	files, _ := fs.Sub(static, "static")
-	assets := http.FileServerFS(files)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", http.StripPrefix("/api", s.API))
-	mux.Handle("/", assets)
+	mux.Handle("/", assets())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")

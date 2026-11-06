@@ -1,21 +1,24 @@
 # A todo app and its database, each a machine of its own: `snowglobe daemon --detach`, then
 # `snowglobe apply` here, and open http://127.0.0.1:8080. `snowglobe down` removes it all.
 #
-# The app reaches Postgres as db.internal:5432, a tunnel its image declares
-# (snowglobe.tunnels): each connection becomes one to the db service's host port, 15432. The app's
-# machines may reach the host's loopback for it (allow_private).
+# The app reaches Postgres as db.internal:5432 through a link: nothing else joins them, and
+# neither machine has a way out of its own (egress is none by default). Start another instance
+# (in `snowglobe ui`, Fleets, or POST /v1/fleets/todo/instances) and it gets an app and a
+# database of its own, which the first one's can't reach.
 name = "todo"
+
+[network]
+mode = "exclusive"      # each instance keeps to itself
 
 # Postgres, with the todos table made when the image was built
 [templates.db]
 build = "db"
-network = "fetch"       # a service's ports need a guest with a network
+network = "fetch"       # a network device: for the link's connections and the service's port
 
 # Elixir: Francis for HTTP, Ecto and Postgrex for the database
 [templates.app]
 build = "app"
 network = "fetch"
-allow_private = true
 
 # One database machine: its data lives in its memory, so it stays up
 [services.db]
@@ -31,3 +34,10 @@ ports = ["8080:4000"]
 min = 1
 max = 2
 concurrency = 50
+
+# The app's machines reach the database's as db.internal:5432
+[links.app-db]
+from = "app"
+to = "db"
+port = 5432
+as = "db.internal"

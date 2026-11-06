@@ -75,7 +75,10 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `write_file`, `read_file`, `snapshot_machine`, `list_snapshots`, `remove_snapshot`,
   `list_services`, `add_service`, `remove_service`, `build` (waits by default), `build_status`,
   `list_builds`, `cancel_build`, `submit_run`, `run_status` (`wait_seconds`), `list_runs`,
-  `list_ports`, `check_port`, `recent_events`, `fleet_diff`, `fleet_apply`. Example:
+  `list_ports`, `check_port`, `recent_events`, `fleet_diff`, `fleet_plan`, `fleet_apply` (one
+  `step` too), `graph`, `list_links`, `link`, `unlink`, and fleets kept like compose projects:
+  `list_fleets`, `add_fleet`, `write_fleet`, `read_fleet`, `apply_fleet`, `start_instance`,
+  `stop_instance`, `forget_fleet`. Example:
   `claude mcp add snowglobe -- snowglobe mcp --daemon`
 - `snowglobe bundle <site | url> [-o FILE] [--target linux|darwin] [--runtime snowglobe-vm]`
   makes a site one executable (snowglobe-vm with the site appended) that takes `run`'s flags, plus
@@ -122,10 +125,23 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   outlives the terminal, its log in `daemon.log` beside the socket; it returns once the daemon
   answers, and does nothing if one runs.
 - `snowglobe ui [--port 7777] [--no-open] [--start-daemon]` serves the daemon in a browser on 127.0.0.1
-  (the link carries a session token; `--start-daemon` starts a detached daemon first when none runs):
-  the last hour on one time axis, a strip per template for the machines running, a lane per template
-  with machine lifespans, the selection (shown when something is selected), runs on fresh forks, a terminal on any machine (ghostty-web over
-  `/v1/machines/{name}/attach`), builds, and templates, machines, services, snapshots and ports.
+  (the link carries a session token; `--start-daemon` starts a detached daemon first when none runs),
+  one view at a time: Overview (the last hour on one time axis, a lane per template with machine
+  lifespans), Network (the plan's templates and links dotted, then a group per fleet instance with its
+  machines, solid edges where one really reaches another by name, and each host port it opens; drag
+  one node onto another to link them), Fleets (each fleet file, its instances, its plan as steps that
+  each apply on their own, and an editor for the file), Machines (one control per task, and the
+  templates, machines, services, ports and snapshots), Run (a command on a fresh fork) and Builds. A
+  terminal on any machine is ghostty-web over `/v1/machines/{name}/attach`. The page is Preact + htm,
+  served gzipped from inside the binary, with no build step.
+- Links: nothing joins the daemon's machines but a link. `POST /v1/links {"from","to","port","as",
+  "as_port"}` lets a machine, or every machine of a template, reach a machine, a service (one of its
+  replicas, started if none runs) or a template's machines as `as:as_port`; `GET /v1/links`,
+  `DELETE /v1/links/{name}`. Each source machine gets a Unix socket of its own per link (mode 0600,
+  in its template's socket directory), so no TCP port opens on the host, and links work under egress
+  `none`. `GET /v1/graph` returns nodes (templates, services, machines, ports, snapshots, with fleet
+  and instance) and edges (fork, replica, serves, link, reach, port, saved, made). MCP: `graph`,
+  `list_links`, `link`, `unlink`.
 - `snowglobe submit <template> '<cmd>' [--timeout S] [--env K=V]...` is fire and forget: the
   command runs once on a fresh fork, thrown away after, and the run's id is printed at once.
   `snowglobe runs [<id> [--wait]] [--json]` lists runs or shows one's output and exit status
@@ -141,12 +157,27 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `/v1/events` (server-sent events, `?after=SEQ`), `/v1/stats`.
 - `snowglobe apply [-f snowglobe.toml]` gets the daemon to what a fleet file says: `[templates.N]`
   (`site`, or `build` = a Dockerfile directory built first with optional `network`, or `snapshot`;
-  `idle`, `max_machines`), `[snapshots.N]` (`template`, `run` = commands that must succeed, `ready`
+  `idle`, `max_machines`, `egress` = none (the default) | internet | private, `expose` = guest ports
+  the others reach under mode all), `[network]` (`mode` = exclusive (the default: each instance
+  reaches only its own machines) | inclusive (every machine of a template reaches the target's
+  template's, across instances) | all (as inclusive, plus every template reaches every other's
+  `expose`d ports by its name)), `[links.N]` (`from`, `to` = a template, service or machine of the
+  file, `port`, `as`, `as_port`), `[snapshots.N]` (`template`, `run` = commands that must succeed, `ready`
   = a command retried until it succeeds, `timeout`), `[services.N]` (`template`, `ports`, `min`,
   `max`, `idle`, `concurrency`, `state`, `labels`), `[machines.N]` (`template`, `count`, `ports`,
   `ttl`, `labels`). What changed is replaced with what is made from it; what left the file is
   removed. `snowglobe diff` shows the plan; `snowglobe down [-f F | --name FLEET]` removes it all.
-  Example: examples/fleet/snowglobe.toml.
+  Examples: examples/fleet/snowglobe.toml, examples/todo-fleet/snowglobe.toml (an Elixir app and
+  Postgres, linked as db.internal:5432, egress none).
+- Fleets as compose projects: the daemon keeps a list of fleet files. `GET/POST /v1/fleets` (POST
+  `{"file"}` adds one where it is; `{"name","text"}` writes a new one, checked before it is saved),
+  `GET/PUT/DELETE /v1/fleets/{name}` (GET plans it, `?instance=ID`; DELETE `?down=1` removes what it
+  made first), `POST /v1/fleets/{name}/apply {"instance","step"}` (all of the plan, or one step by its
+  key once the steps it waits on are done), `POST /v1/fleets/{name}/down`. A fleet runs as
+  instances, like `docker compose -p`: templates and snapshots are shared, services, machines and
+  links are made per instance (label `snowglobe.instance`); `main` keeps the file's names, another
+  gets `-ID` names and host ports the system picks. `POST /v1/fleets/{name}/instances {"instance"}`
+  starts one, `DELETE /v1/fleets/{name}/instances/{id}` removes it.
 - `snowglobe attach <name>` joins a running instance (ctrl-] detaches); `snowglobe ps` lists them;
   `snowglobe stop <name>` stops one (natively: through its stop file, killing its job and logging
   why).

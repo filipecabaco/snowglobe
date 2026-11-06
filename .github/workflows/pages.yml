@@ -71,6 +71,17 @@ jobs:
       - name: Test
         run: mise run test
 
+      # The UI's page in Chrome, driven from Go over the DevTools protocol (chromedp): no Node.
+      # The runner image has Chrome
+      - name: The UI in Chrome
+        run: go test -tags e2e ./internal/ui
+
+      # The UI's JavaScript (Preact, htm, ghostty-web) is what npm published, as
+      # internal/ui/vendor.json pins it; a newer release shows as a warning to update with
+      # `go run vendor.go -update NAME` in internal/ui
+      - name: The UI's vendored libraries
+        run: cd internal/ui && go run vendor.go -latest
+
   # snowglobe-vm's own tests, on the shells guests have: dash (Debian) and BusyBox ash (Alpine).
   # They include the job launcher run on a pty and killed with ctrl-c, as a guest's serial shell is
   runtime:

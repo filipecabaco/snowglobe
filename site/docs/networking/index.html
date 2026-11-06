@@ -75,6 +75,27 @@ snowglobe build ./my-app --network fetch --tunnel db.internal:5432=wss://db-prox
           <p>Builds and <code>snowglobe run</code> refuse loopback and private addresses, so a guest can't reach the
             host's own services. <code>--allow-private</code> lets them, for a tunnel endpoint on your own machine
             while developing.</p>
+
+          <h2 class="h3" id="native">Outside a browser</h2>
+          <p>Run natively, the network card goes out through the host instead of a page, so a tunnel's URL may also
+            be <code>tcp://HOST:PORT</code>: each connection the guest opens to the tunnel's name becomes one to that
+            address, with no WebSocket proxy in between. The same rules apply, so one to your own machine needs
+            <code>--allow-private</code>.</p>
+          <pre>snowglobe run dist/app --tunnel db.internal:5432=tcp://127.0.0.1:5432 --allow-private</pre>
+          <p><code>snowglobe-vm</code>, and an executable made by <code>snowglobe bundle</code>, also take
+            <code>--egress</code>: <code>none</code> refuses every connection of the guest's own (links and forwarded
+            ports still work), <code>internet</code> allows public addresses, and <code>private</code> adds loopback
+            and private networks, as <code>--allow-private</code> does.</p>
+
+          <h2 class="h3" id="machines">Between machines: links</h2>
+          <p>Machines in the daemon reach each other only through links. A link gives a machine, or every machine of
+            a template, a name to reach a machine, a service or a template's machines by: its guest connects to
+            <code>db.internal:5432</code> and gets the target's guest port. Each link is a Unix socket of that
+            machine's own, answered by the daemon, so no TCP port opens on the host for it, and a machine whose egress
+            is <code>none</code> still reaches what it is linked to.</p>
+          <p>A fleet file declares its links, a network mode for what may cross between the fleet's instances, and
+            each template's egress, which is <code>none</code> unless the file says otherwise.
+            <a href="../orchestration/#links">Orchestration</a> covers them; <code>snowglobe ui</code> draws them.</p>
         </section>
 
         <nav class="pager" aria-label="Pages"><a class="prev" href="../building/"><small>Previous</small>Building a site</a><a class="next" href="../running/"><small>Next</small>Running outside a browser</a></nav>

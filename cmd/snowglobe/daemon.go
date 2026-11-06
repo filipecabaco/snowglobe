@@ -6,13 +6,16 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/filipecabaco/snowglobe/internal/daemon"
+	"github.com/filipecabaco/snowglobe/internal/fleet"
 	"github.com/filipecabaco/snowglobe/internal/native"
 	"github.com/filipecabaco/snowglobe/internal/tools"
 )
@@ -71,7 +74,12 @@ func runDaemon(args []string) error {
 		return err
 	}
 	logger := log.New(os.Stderr, "snowglobe daemon: ", log.LstdFlags)
-	s, err := daemon.New(daemon.Options{Dir: dir, VM: vm, Listen: *listen, Token: token, Memory: budget, Wait: *wait, Logf: logger.Printf})
+	// Fleets on the API: planned and applied through the daemon's own socket, as a client would
+	own := "unix://" + filepath.Join(dir, "daemon.sock")
+	routes := func(mux *http.ServeMux) {
+		fleet.Routes(mux, fleet.NewRegistry(dir), func() (fleet.API, error) { return daemon.NewClient(own, "") }, buildSite)
+	}
+	s, err := daemon.New(daemon.Options{Dir: dir, VM: vm, Listen: *listen, Token: token, Memory: budget, Wait: *wait, Logf: logger.Printf, Routes: routes})
 	if err != nil {
 		return err
 	}

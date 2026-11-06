@@ -1,6 +1,6 @@
 import Config
 
-# db.internal is the fleet's tunnel to the db service (see snowglobe.toml). The site is
+# db.internal is the fleet's link to the db service (see snowglobe.toml). The site is
 # snapshotted without a database around, so the pool retries every second rather than backing
 # off for longer: the first requests after a restore find it.
 config :todo, Todo.Repo,

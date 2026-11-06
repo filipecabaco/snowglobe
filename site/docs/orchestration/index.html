@@ -44,17 +44,29 @@
             fleets from a file.</p>
 
           <h2 class="h3" id="ui">In a browser: snowglobe ui</h2>
-          <p><code>snowglobe ui</code> shows the daemon in your browser: the last hour on one time axis (memory
-            against the budget, templates running, jobs and their latency, what happened), a lane per template with each
-            machine's life as a bar, and under them whatever you select, with its terminal one click away. It
-            also runs commands on fresh forks, builds sites from a directory, an image or a Dockerfile you
-            write there, and manages templates, machines, services, snapshots and ports.</p>
+          <p><code>snowglobe ui</code> shows the daemon in your browser, one view at a time:</p>
+          <ul>
+            <li><b>Overview</b>: the last hour on one time axis (memory against the budget, templates running, jobs
+              and their latency, what happened), a lane per template with each machine's life as a bar.</li>
+            <li><b>Network</b>: what reaches what. The templates and the links between them come first, dotted: the plan.
+              Under them is a group per fleet instance, its machines in their template's column, with solid edges
+              where a machine really reaches another (labelled with the name it uses) and a tag on each for the
+              host port it opens. Drag from a machine or template onto another to link them.</li>
+            <li><b>Fleets</b>: each fleet file, its instances, and its plan as steps that each have their own Apply;
+              write a new one or add one you have.</li>
+            <li><b>Machines</b>: one control per task (add a template, up a machine, add a service, link), and the
+              templates, machines, services, ports and snapshots.</li>
+            <li><b>Run</b> a command on a fresh fork, and <b>Builds</b> from a directory, an image or a Dockerfile.</li>
+          </ul>
+          <p>Whatever you select shows its figures and actions, its terminal one click away. Everything the UI does
+            goes through the daemon's API, which the CLI and the MCP server use too.</p>
           <pre>snowglobe ui                                     <span class="dim"># opens http://127.0.0.1:7777/?token=…</span>
 snowglobe ui --start-daemon                      <span class="dim"># starts a detached daemon first if none runs</span></pre>
           <p>It listens on 127.0.0.1 only. The link it prints carries a session token that becomes a cookie, and
             every request needs it, so other pages you visit can't reach the daemon through it. The terminal is
             <a href="https://github.com/coder/ghostty-web">ghostty-web</a>, Ghostty's terminal compiled to
-            WebAssembly, joined to the machine's console over a WebSocket.</p>
+            WebAssembly, joined to the machine's console over a WebSocket. The page is Preact and htm (about 7 KB
+            gzipped), served gzipped from inside the binary, with no build step.</p>
 
           <h2 class="h3" id="daemon">Templates and machines: the daemon</h2>
           <p><code>snowglobe daemon</code> keeps templates (a site restored once) and the machines forked from them.
@@ -185,6 +197,58 @@ idle = "5m"
 [machines.scratch]
 template = "py"
 ttl = "24h"</pre>
+          <p>The daemon keeps a list of fleets, like compose projects: <code>/v1/fleets</code> adds a file from
+            where it is, or writes a new one in the daemon's own directory (checked before it is saved), and
+            plans, applies (all of it, or one step at a time by its key) and removes each by name.</p>
+
+          <h2 class="h3" id="links">Links: what reaches what</h2>
+          <p>Nothing joins machines but a link. A link lets a machine, or every machine of a template (now and
+            later), reach a machine, a service (one of its replicas, started if none runs) or a template's
+            machines by a name: its guest connects to <code>db.internal:5432</code> and gets the target's guest
+            port. Links change while machines run; new connections follow them.</p>
+          <pre>curl --unix-socket "$SOCK" -X POST localhost/v1/links \
+  -d '{"from": "app", "to": "db", "port": 5432, "as": "db.internal"}'
+curl --unix-socket "$SOCK" localhost/v1/graph      <span class="dim"># nodes and edges: forks, replicas, links, reaches, ports</span></pre>
+          <p>Each machine gets a Unix socket of its own for each of its links, in its template's socket
+            directory, which only that template's machines and the daemon reach. So the daemon knows which machine
+            connects, and no TCP port stays open on the host for anything else to use. A link is the host's own:
+            it needs no <code>allow_private</code>.</p>
+
+          <h2 class="h3" id="instances">Fleet instances and the network</h2>
+          <p>A fleet runs as instances, like <code>docker compose -p</code>. Templates and snapshots are shared
+            (built and restored once); services, machines and links are made per instance, labelled
+            <code>snowglobe.instance</code>. Instance <code>main</code> keeps the file's names; another carries its
+            own (<code>db-2</code>), and its host ports are picked by the system.</p>
+          <pre>[network]
+mode = "exclusive"        <span class="dim"># each instance reaches only its own machines (the default)</span>
+
+[templates.app]
+build = "app"
+egress = "internet"       <span class="dim"># none (the default), internet, or private</span>
+
+[templates.db]
+build = "db"
+expose = [5432]           <span class="dim"># what the others reach under mode = "all"</span>
+
+[links.app-db]
+from = "app"
+to = "db"                 <span class="dim"># a service or machine of the file</span>
+port = 5432
+as = "db.internal"</pre>
+          <ul>
+            <li><b>exclusive</b> (the default): a link stays inside its instance. Instance 2's app reaches instance 2's
+              db and nothing of instance main's.</li>
+            <li><b>inclusive</b>: every machine of the template reaches any machine of the target's template, across
+              instances.</li>
+            <li><b>all</b>: as inclusive, and every template also reaches every other one's <code>expose</code>d ports by
+              its name.</li>
+          </ul>
+          <p>A template's <code>egress</code> says where its machines' own connections may go: <code>none</code>
+            unless the file says otherwise (only links and forwarded ports), <code>internet</code> (public
+            addresses), or <code>private</code> (the host's loopback and private networks too, as
+            <code>allow_private</code> did). Start and remove instances from the UI, the API
+            (<code>POST /v1/fleets/NAME/instances</code>, <code>DELETE /v1/fleets/NAME/instances/ID</code>) or MCP
+            (<code>start_instance</code>, <code>stop_instance</code>).</p>
         </section>
 
         <nav class="pager" aria-label="Pages"><a class="prev" href="../agents/"><small>Previous</small>For agents and programs</a><a class="next" href="../isolation/"><small>Next</small>Isolation</a></nav>

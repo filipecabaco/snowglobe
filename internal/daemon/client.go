@@ -374,3 +374,74 @@ func (c *Client) Run(id string) (*Run, error) {
 	var v Run
 	return &v, c.call("GET", "/v1/runs/"+url.PathEscape(id), nil, &v)
 }
+
+func (c *Client) Links() ([]Link, error) {
+	var ls []Link
+	return ls, c.call("GET", "/v1/links", nil, &ls)
+}
+
+func (c *Client) AddLink(req Link) (*Link, error) {
+	var l Link
+	return &l, c.call("POST", "/v1/links", req, &l)
+}
+
+func (c *Client) RemoveLink(name string) error {
+	return c.call("DELETE", "/v1/links/"+url.PathEscape(name), nil, nil)
+}
+
+func (c *Client) Graph() (*Graph, error) {
+	var g Graph
+	return &g, c.call("GET", "/v1/graph", nil, &g)
+}
+
+// Fleets is every fleet the daemon knows (its fleet routes: cmd/snowglobe gives it them).
+func (c *Client) Fleets() ([]FleetInfo, error) {
+	var fs []FleetInfo
+	return fs, c.call("GET", "/v1/fleets", nil, &fs)
+}
+
+// AddFleet adds the fleet file at file (a full path on the daemon's host).
+func (c *Client) AddFleet(file string) error {
+	return c.call("POST", "/v1/fleets", map[string]string{"file": file}, nil)
+}
+
+// WriteFleet checks text and writes it as fleet name's file (a new fleet's goes in the daemon's
+// directory).
+func (c *Client) WriteFleet(name, text string) error {
+	return c.call("PUT", "/v1/fleets/"+url.PathEscape(name), map[string]string{"text": text}, nil)
+}
+
+// Fleet is fleet name's file and plan, as JSON.
+func (c *Client) Fleet(name string) (json.RawMessage, error) {
+	var v json.RawMessage
+	return v, c.call("GET", "/v1/fleets/"+url.PathEscape(name), nil, &v)
+}
+
+// ApplyFleet applies one step of an instance of fleet name (main when instance is empty), or all
+// of them: its log and plan.
+func (c *Client) ApplyFleet(name, instance, step string) (json.RawMessage, error) {
+	var v json.RawMessage
+	return v, c.call("POST", "/v1/fleets/"+url.PathEscape(name)+"/apply", map[string]string{"step": step, "instance": instance}, &v)
+}
+
+// StartInstance starts an instance of fleet name (numbered when instance is empty).
+func (c *Client) StartInstance(name, instance string) (json.RawMessage, error) {
+	var v json.RawMessage
+	return v, c.call("POST", "/v1/fleets/"+url.PathEscape(name)+"/instances", map[string]string{"instance": instance}, &v)
+}
+
+// StopInstance removes an instance of fleet name; what its instances share stays.
+func (c *Client) StopInstance(name, instance string) (json.RawMessage, error) {
+	var v json.RawMessage
+	return v, c.call("DELETE", "/v1/fleets/"+url.PathEscape(name)+"/instances/"+url.PathEscape(instance), nil, &v)
+}
+
+// ForgetFleet drops fleet name from the daemon's list, removing what it made first when down.
+func (c *Client) ForgetFleet(name string, down bool) (json.RawMessage, error) {
+	var v json.RawMessage
+	q := ""
+	if down {
+		q = "?down=1"
+	}
+	return v, c.call("DELETE", "/v1/fleets/"+url.PathEscape(name)+q, nil, &v)
+}

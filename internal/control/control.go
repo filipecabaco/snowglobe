@@ -210,3 +210,35 @@ func Alive(sock string) bool {
 	c.Close()
 	return true
 }
+
+// Link is a destination a machine's guest connects to (a name, or "" for any, and a port) that
+// goes to a tcp://HOST:PORT address instead.
+type Link struct {
+	Host string `json:"host,omitempty"`
+	Port int    `json:"port"`
+	URL  string `json:"url"`
+}
+
+// SetLinks replaces the links of the machine whose control socket is sock: its new connections
+// follow them at once.
+func SetLinks(sock string, links []Link) error {
+	var answer struct {
+		Links *int   `json:"links"`
+		Error string `json:"error"`
+	}
+	if links == nil {
+		links = []Link{}
+	}
+	conn, _, err := ask(sock, map[string]any{"mode": "links", "links": links}, &answer, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("links: %w", err)
+	}
+	conn.Close()
+	if answer.Error != "" {
+		return errors.New(answer.Error)
+	}
+	if answer.Links == nil {
+		return errors.New("links: this machine's snowglobe-vm doesn't take links (update it)")
+	}
+	return nil
+}

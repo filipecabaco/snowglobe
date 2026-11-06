@@ -46,9 +46,11 @@ type Template struct {
 	Idle   Duration `json:"idle,omitempty"`
 	Asleep bool     `json:"asleep,omitempty"`
 	// Its machines may reach the host's loopback and private addresses (--allow-private)
-	AllowPrivate bool              `json:"allow_private,omitempty"`
-	Labels       map[string]string `json:"labels,omitempty"`
-	Started      time.Time         `json:"started"`
+	AllowPrivate bool `json:"allow_private,omitempty"`
+	// Where its machines' connections may go (AddTemplate.Egress)
+	Egress  string            `json:"egress,omitempty"`
+	Labels  map[string]string `json:"labels,omitempty"`
+	Started time.Time         `json:"started"`
 }
 
 // Machine is a machine forked from a template, lasting until it is removed.
@@ -171,10 +173,11 @@ type state struct {
 	Machines  map[string]*Machine  `json:"machines"`
 	Snapshots map[string]*Snapshot `json:"snapshots"`
 	Services  map[string]*Service  `json:"services"`
+	Links     map[string]*Link     `json:"links,omitempty"`
 }
 
 func emptyState() state {
-	return state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}, Snapshots: map[string]*Snapshot{}, Services: map[string]*Service{}}
+	return state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}, Snapshots: map[string]*Snapshot{}, Services: map[string]*Service{}, Links: map[string]*Link{}}
 }
 
 func loadState(path string) state {
@@ -197,6 +200,9 @@ func loadState(path string) state {
 	}
 	if st.Services == nil {
 		st.Services = map[string]*Service{}
+	}
+	if st.Links == nil {
+		st.Links = map[string]*Link{}
 	}
 	return st
 }

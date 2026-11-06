@@ -34,6 +34,15 @@ type DaemonAPI interface {
 	SubmitRun(daemon.SubmitRun) (*daemon.Run, error)
 	Runs() ([]daemon.Run, error)
 	Run(id string) (*daemon.Run, error)
+	Graph() (*daemon.Graph, error)
+	Fleets() ([]daemon.FleetInfo, error)
+	AddFleet(file string) error
+	WriteFleet(name, text string) error
+	Fleet(name string) (json.RawMessage, error)
+	ApplyFleet(name, instance, step string) (json.RawMessage, error)
+	StartInstance(name, instance string) (json.RawMessage, error)
+	StopInstance(name, instance string) (json.RawMessage, error)
+	ForgetFleet(name string, down bool) (json.RawMessage, error)
 }
 
 // Daemon serves a snowglobe daemon to an agent: its templates, machines, snapshots, services,
@@ -61,7 +70,9 @@ func (d *Daemon) instructions() string {
 		"list_templates (or build to make one from a Dockerfile or image), then run_command with a template for a " +
 		"throwaway fork, or up for a machine that lasts and run_command / write_file / read_file on it, " +
 		"snapshot_machine to save one set up, add_service for machines behind a port that scale to zero, and " +
-		"fleet_diff / fleet_apply for a whole snowglobe.toml. status shows memory, counts and latencies."
+		"link so one machine (or a template's machines) reaches another machine or a service by a name, graph to see what runs, " +
+		"what reaches what and which host ports lead in, and fleets like compose projects: list_fleets, write_fleet or " +
+		"add_fleet, read_fleet for its plan, apply_fleet for all of it or one step. status shows memory, counts and latencies."
 }
 
 func obj(props map[string]any, required ...string) map[string]any {
@@ -143,7 +154,31 @@ var daemonTools = []map[string]any{
 	}, "port")),
 	tool("recent_events", "What the daemon did lately: machines up and stopped, replicas, templates asleep and awake, builds, refusals.", obj(map[string]any{"after": num("Only events after this sequence number")})),
 	tool("fleet_diff", "What applying a fleet file (snowglobe.toml) would change.", obj(map[string]any{"file": str("Path to the fleet file on the daemon's host")}, "file")),
-	tool("fleet_apply", "Get the daemon to what a fleet file (snowglobe.toml) says: build, create, replace and remove.", obj(map[string]any{"file": str("Path to the fleet file on the daemon's host")}, "file")),
+	tool("fleet_plan", "A fleet file's plan as steps, each with its key (kind/name), what it is made from, and whether it can be applied on its own now (ready).", obj(map[string]any{"file": str("Path to the fleet file on the daemon's host")}, "file")),
+	tool("apply_fleet", "Apply a known fleet (list_fleets) by name: one step (a key from read_fleet), or all of them, in one of its instances (main by default).", obj(map[string]any{"name": str("The fleet"), "step": str("One step's key; all of them when not given"), "instance": str("The instance (main by default)")}, "name")),
+	tool("start_instance", "Start another instance of a fleet, like docker compose -p: its own services, machines and links (each instance reaches only its own under the default exclusive network), sharing the fleet's templates. Host ports are picked by the system.", obj(map[string]any{"name": str("The fleet"), "instance": str("Its name (numbered when not given)")}, "name")),
+	tool("stop_instance", "Remove one instance of a fleet: its services, machines and links. What the instances share stays.", obj(map[string]any{"name": str("The fleet"), "instance": str("The instance")}, "name", "instance")),
+	tool("fleet_apply", "Get the daemon to what a fleet file (snowglobe.toml) says: build, create, replace and remove. With step (a key from fleet_plan), only that step.", obj(map[string]any{
+		"file": str("Path to the fleet file on the daemon's host"),
+		"step": str("One step's key (kind/name), from fleet_plan; all of them when not given")}, "file")),
+	tool("list_fleets", "The fleets the daemon knows, like compose projects: each a snowglobe.toml (added, or written with write_fleet), with how many things of it run and how many steps its plan has.", obj(map[string]any{})),
+	tool("add_fleet", "Add a fleet file (snowglobe.toml) from where it is on the daemon's host.", obj(map[string]any{"file": str("Full path to the fleet file")}, "file")),
+	tool("write_fleet", "Write a fleet's snowglobe.toml (checked first): a new fleet's file goes in the daemon's own directory, an added one's is changed where it is.", obj(map[string]any{
+		"name": str("The fleet"), "text": str("The whole snowglobe.toml")}, "name", "text")),
+	tool("read_fleet", "A fleet's snowglobe.toml and its plan: steps with keys, what each is made from, and whether it is ready.", obj(map[string]any{"name": str("The fleet")}, "name")),
+	tool("forget_fleet", "Drop a fleet from the daemon's list; with down, remove everything it made first.", obj(map[string]any{"name": str("The fleet"), "down": boolean("Remove what it made first")}, "name")),
+	tool("graph", "The daemon as a graph: templates, services, machines, snapshots and the host ports that lead in (nodes), and what was made from what, which service each replica serves, which host port goes where and links (edges).", obj(map[string]any{})),
+	tool("list_links", "Links: which machines (or a template's machines) reach which machine or service, by what name and port.", obj(map[string]any{})),
+	tool("link", "Let a machine, or every machine of a template (now and later), reach another machine or a service by a name: its guest connects to as:as_port and gets the target's guest port. Takes effect at once, while they run.", obj(map[string]any{
+		"from":      str("A machine, or a template"),
+		"to":        str("A machine, or a service (a connection goes to one of its replicas, started if none runs)"),
+		"port":      num("The target's guest port"),
+		"as":        str("The name the from side's guests connect to (default: the target's name)"),
+		"as_port":   num("The port they connect to (default: port)"),
+		"name":      str("The link's name (default: from-to-port)"),
+		"from_kind": str("machine or template, when a name is both"),
+		"to_kind":   str("machine or service, when a name is both")}, "from", "to", "port")),
+	tool("unlink", "Remove a link: the machines it was for can't reach that name any more (open connections stay).", obj(map[string]any{"name": str("The link")}, "name")),
 }
 
 func (d *Daemon) list() []map[string]any { return daemonTools }
@@ -399,7 +434,76 @@ func (d *Daemon) do(name string, a args) (string, error) {
 			evs = evs[len(evs)-50:]
 		}
 		return asJSON(evs), nil
+	case "apply_fleet":
+		v, err := api.ApplyFleet(a.str("name"), a.str("instance"), a.str("step"))
+		return string(v), err
+	case "start_instance":
+		v, err := api.StartInstance(a.str("name"), a.str("instance"))
+		return string(v), err
+	case "stop_instance":
+		v, err := api.StopInstance(a.str("name"), a.str("instance"))
+		return string(v), err
+	case "list_fleets":
+		fs, err := api.Fleets()
+		if err != nil {
+			return "", err
+		}
+		if len(fs) == 0 {
+			return "no fleets: add_fleet adds a snowglobe.toml, write_fleet writes one", nil
+		}
+		return asJSON(fs), nil
+	case "add_fleet":
+		return "added " + a.str("file"), api.AddFleet(a.str("file"))
+	case "write_fleet":
+		if err := api.WriteFleet(a.str("name"), a.str("text")); err != nil {
+			return "", err
+		}
+		v, err := api.Fleet(a.str("name"))
+		return string(v), err
+	case "read_fleet":
+		v, err := api.Fleet(a.str("name"))
+		return string(v), err
+	case "forget_fleet":
+		v, err := api.ForgetFleet(a.str("name"), a.bool("down", false))
+		return string(v), err
+	case "graph":
+
+		g, err := api.Graph()
+		return asJSON(g), err
+	case "list_links":
+		ls, err := api.Links()
+		if err != nil {
+			return "", err
+		}
+		if len(ls) == 0 {
+			return "no links: link lets one machine reach another by a name", nil
+		}
+		return asJSON(ls), nil
+	case "link":
+		l, err := api.AddLink(daemon.Link{Name: a.str("name"), From: a.str("from"), FromKind: a.str("from_kind"), To: a.str("to"), ToKind: a.str("to_kind"),
+			Port: int(a.num("port")), As: a.str("as"), AsPort: int(a.num("as_port"))})
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("link %s: %s %s reaches %s %s:%d as %s:%d", l.Name, l.FromKind, l.From, l.ToKind, l.To, l.Port, l.As, l.AsPort), nil
+	case "unlink":
+		return "removed link " + a.str("name"), api.RemoveLink(a.str("name"))
+	case "fleet_plan":
+		file := a.str("file")
+		if !filepath.IsAbs(file) {
+			return "", fmt.Errorf("file: a full path")
+		}
+		f, err := fleet.Load(file)
+		if err != nil {
+			return "", err
+		}
+		p, err := f.Plan(api)
+		if err != nil {
+			return "", err
+		}
+		return asJSON(map[string]any{"fleet": f.Name, "steps": p.Steps, "unchanged": p.Unchanged}), nil
 	case "fleet_diff", "fleet_apply":
+
 		file := a.str("file")
 		if !filepath.IsAbs(file) {
 			return "", fmt.Errorf("file: a full path")
@@ -430,7 +534,11 @@ func (d *Daemon) do(name string, a args) (string, error) {
 				return fmt.Errorf("%s: this server can't build a fleet's sites", dir)
 			}
 		}
-		err = p.Apply(api, build, func(format string, args ...any) { fmt.Fprintf(&out, format+"\n", args...) })
+		logf := func(format string, args ...any) { fmt.Fprintf(&out, format+"\n", args...) }
+		if step := a.str("step"); step != "" {
+			return out.String(), p.ApplyStep(api, build, step, logf)
+		}
+		err = p.Apply(api, build, logf)
 		return out.String(), err
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)

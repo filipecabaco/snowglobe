@@ -1,5 +1,13 @@
 // snowglobe ui: the daemon's last hour on one time axis. Everything comes from the daemon's API,
-// forwarded under /api by `snowglobe ui`.
+// forwarded under /api by `snowglobe ui`. The graph, the inspector and the tasks are Preact
+// components (graph.js, inspect.js, tasks.js) reading the same state through store.js.
+
+import { html, render as mount } from "./vendor/preact/index.js";
+import { store, publish } from "./store.js";
+import { Graph } from "./graph.js";
+import { Inspector } from "./inspect.js";
+import { Tasks } from "./tasks.js";
+import { Fleets } from "./fleets.js";
 
 const HOUR = 60 * 60 * 1000;
 const MIN = 60 * 1000;
@@ -72,7 +80,8 @@ const dur = (d) => (typeof d === "string" ? d.replace(/(\D)0s$/, "$1").replace(/
 
 const state = {
   stats: null, templates: [], machines: [], services: [], snapshots: [], builds: [], ports: [], runs: [],
-  samples: [], totals: null, events: [], lives: new Map(), selected: null,
+  samples: [], totals: null, events: [], lives: new Map(), selected: null, graph: null, links: [], plan: null,
+  fleets: [], fleet: null, fleetView: null, view: "overview",
   seen: new Set(), cursorAt: null, reachable: true,
 };
 
@@ -84,10 +93,11 @@ function banner(msg) {
 
 async function refresh() {
   try {
-    const [stats, templates, machines, services, snapshots, builds, ports, runs] = await Promise.all([
+    const [stats, templates, machines, services, snapshots, builds, ports, runs, graph, links] = await Promise.all([
       api("/v1/stats"), api("/v1/templates"), api("/v1/machines"), api("/v1/services"), api("/v1/snapshots"), api("/v1/builds"), api("/v1/ports"), api("/v1/runs"),
+      api("/v1/graph"), api("/v1/links"),
     ]);
-    Object.assign(state, { stats, templates, machines, services, snapshots, builds, ports, runs, reachable: true });
+    Object.assign(state, { stats, templates, machines, services, snapshots, builds, ports, runs, graph, links, reachable: true });
     for (const m of machines) {
       const l = state.lives.get(m.name);
       if (!l || l.end) state.lives.set(m.name, { name: m.name, template: m.template, start: new Date(m.created).getTime(), end: null });
@@ -159,7 +169,10 @@ function onEvent(ev) {
     requestAnimationFrame(() => { eventsQueued = false; renderEvents(); renderLanes(); });
   }
   // What changed the lists: look again soon
-  if (/^(machine|template|service|snapshot|build)\./.test(ev.kind)) scheduleRefresh();
+  if (/^(machine|template|service|snapshot|build|link)\./.test(ev.kind)) {
+    scheduleRefresh();
+    if (state.view === "fleets") refreshFleets();
+  }
 }
 
 let refreshTimer = null;
@@ -374,59 +387,16 @@ function wireCursor() {
 
 // --- the selection
 
-function select(kind, name) {
-  state.selected = { kind, name };
+// What is selected, and where it was selected (its inspector shows there): the timeline or the
+// graph. extra carries a link being made (linkTo).
+function select(kind, name, from = "timeline", extra = {}) {
+  state.selected = kind ? { kind, name, from, ...extra } : null;
   render();
-  $("selection").scrollIntoView({ behavior: "smooth", block: "nearest" });
-}
-
-function renderSelection() {
-  const sel = state.selected;
-  const title = $("selection-title"), caption = $("selection-caption"), figs = $("selection-figures"), actions = $("selection-actions");
-  const dl = (pairs) => pairs.map(([k, v]) => el("div", {}, el("dt", {}, k), el("dd", {}, v)));
-  const memory = state.stats?.memory || {};
-  $("selection").hidden = !sel;
-  if (sel?.kind === "machine") {
-    const m = state.machines.find((v) => v.name === sel.name);
-    const l = state.lives.get(sel.name);
-    title.textContent = sel.name;
-    if (!m) {
-      caption.textContent = l?.end ? `machine of ${l.template} · stopped ${clock(l.end)}` : "machine · gone";
-      figs.replaceChildren(); actions.replaceChildren();
-      return;
-    }
-    const labels = Object.entries(m.labels || {}).map(([k, v]) => `${k}=${v}`).join(" ");
-    caption.textContent = `machine of ${m.template}${m.snapshot ? ", from snapshot " + m.snapshot : ""}${labels ? " · " + labels : ""}`;
-    figs.replaceChildren(...dl([
-      ["Memory", figure(...size(memory[m.name] || 0))],
-      ["Up for", since(m.created)],
-      ["Ports", (m.ports || []).map((p) => `${p.host}→${p.guest}`).join(" ") || "none"],
-      ["Stops", m.expires ? "in " + since(Date.now() * 2 - new Date(m.expires)) : "when asked"],
-    ]));
-    actions.replaceChildren(
-      el("button", { class: "btn", type: "button", onclick: () => openTerminal(m.name) }, "Terminal"),
-      el("button", { class: "btn", type: "button", onclick: () => act(() => api(`/v1/machines/${m.name}/snapshots`, { method: "POST", body: {} }), "Saved a snapshot of " + m.name) }, "Snapshot"),
-      el("button", { class: "btn", type: "button", onclick: () => act(() => api(`/v1/machines/${m.name}`, { method: "DELETE" }), "Stopped " + m.name) }, "Stop"));
-  } else if (sel?.kind === "template") {
-    const t = state.templates.find((v) => v.name === sel.name);
-    title.textContent = sel.name;
-    if (!t) { caption.textContent = "template · removed"; figs.replaceChildren(); actions.replaceChildren(); return; }
-    const ms = state.machines.filter((m) => m.template === t.name);
-    caption.textContent = `template of ${t.site.split("/").filter(Boolean).at(-1) || t.site}${t.snapshot ? ", snapshot " + t.snapshot : ""}`;
-    figs.replaceChildren(...dl([
-      ["Machines", ms.length],
-      ["Memory", figure(...size(ms.reduce((a, m) => a + (memory[m.name] || 0), memory["template/" + t.name] || 0)))],
-      ["Server", t.asleep ? "asleep" : "awake"],
-      ["Sleeps", t.idle ? `after ${dur(t.idle)}` : "never"],
-    ]));
-    actions.replaceChildren(
-      el("button", { class: "btn", type: "button", onclick: () => act(() => api("/v1/machines", { method: "POST", body: { template: t.name } }), "Up from " + t.name) }, "Up a machine"),
-      el("button", { class: "btn", type: "button", onclick: () => { $("run-template").value = t.name; $("run-cmd").scrollIntoView({ block: "center" }); $("run-cmd").focus(); } }, "Run on a fork"),
-      el("button", { class: "btn", type: "button", onclick: () => confirmAct(`Remove template ${t.name} and its ${ms.length} machines?`, () => api(`/v1/templates/${t.name}`, { method: "DELETE" }), "Removed " + t.name) }, "Remove"));
-  }
+  if (kind) requestAnimationFrame(() => $(from === "graph" ? "inspect-graph" : "selection")?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
 }
 
 async function act(fn, done) {
+
   try {
     await fn();
     banner(null);
@@ -451,18 +421,19 @@ function renderTables() {
     el("td", { class: "name" }, el("span", { class: "dot " + (t.asleep ? "idle" : "live") }), t.name),
     el("td", { class: "site", title: t.site }, t.site),
     el("td", {}, t.asleep ? "asleep" : "awake"),
-    el("td", {}, state.machines.filter((m) => m.template === t.name).length),
-    el("td", {}, memory["template/" + t.name] ? size(memory["template/" + t.name]).join(" ") : "–"),
+    el("td", {}, t.egress || (t.allow_private ? "private" : "as built")),
+    el("td", { class: "num" }, state.machines.filter((m) => m.template === t.name).length),
+    el("td", { class: "num" }, memory["template/" + t.name] ? size(memory["template/" + t.name]).join(" ") : "–"),
   ], [
     el("button", { class: "link", type: "button", onclick: () => act(() => api("/v1/machines", { method: "POST", body: { template: t.name } }), "Up from " + t.name) }, "Up"),
-    el("button", { class: "link", type: "button", onclick: () => select("template", t.name) }, "Show"),
-  ], state.selected?.kind === "template" && state.selected.name === t.name)) : [none(6, "No templates.")]));
+    el("button", { class: "link", type: "button", onclick: () => select("template", t.name, "graph") }, "Show"),
+  ], state.selected?.kind === "template" && state.selected.name === t.name)) : [none(7, "No templates.")]));
 
   $("machines-table").tBodies[0].replaceChildren(...(state.machines.length ? state.machines.map((m) => row([
     el("td", { class: "name" }, el("span", { class: "dot live" }), m.name),
     el("td", {}, m.template),
     el("td", {}, since(m.created)),
-    el("td", {}, memory[m.name] ? size(memory[m.name]).join(" ") : "–"),
+    el("td", { class: "num" }, memory[m.name] ? size(memory[m.name]).join(" ") : "–"),
     el("td", { class: "mono" }, (m.ports || []).map((p) => `${p.host}→${p.guest}`).join(" ") || "–"),
   ], [
     el("button", { class: "link", type: "button", onclick: () => openTerminal(m.name) }, "Terminal"),
@@ -483,7 +454,7 @@ function renderTables() {
   $("snapshots-table").tBodies[0].replaceChildren(...(state.snapshots.length ? state.snapshots.map((s) => row([
     el("td", { class: "name" }, s.name),
     el("td", {}, s.machine || "–"),
-    el("td", {}, s.bytes ? size(s.bytes).join(" ") : "–"),
+    el("td", { class: "num" }, s.bytes ? size(s.bytes).join(" ") : "–"),
     el("td", {}, s.created ? clock(s.created) : "–"),
   ], [
     el("button", { class: "link", type: "button", onclick: () => act(() => api("/v1/templates", { method: "POST", body: { snapshot: s.name, name: s.name } }), "Template " + s.name + " added") }, "Make a template"),
@@ -542,7 +513,7 @@ function renderPorts() {
     return el("tr", { class: state.selected?.kind === "machine" && state.selected.name === p.name ? "selected" : "" },
       el("td", { class: "host" }, el("a", { href, target: "_blank", rel: "noopener" }, `${p.ip}:${p.host}`)),
       el("td", { class: "name" }, p.kind === "machine"
-        ? el("button", { class: "link", type: "button", onclick: () => select("machine", p.name) }, p.name)
+        ? el("button", { class: "link", type: "button", onclick: () => select("machine", p.name, "graph") }, p.name)
         : p.name, el("small", { class: "kind" }, ` ${p.kind}`)),
       el("td", { "data-label": "guest port" }, p.guest),
       el("td", { "data-label": "template" }, p.template),
@@ -566,29 +537,6 @@ function wirePorts() {
     const f = e.target.elements, out = $("port-check-result");
     try { sayCheck(out, await checkPort(f.port.value, f.ip.value.trim())); } catch (err) { out.textContent = err.message; }
   });
-  // The Ports fields of the up and service forms: their host ports checked as they are typed
-  for (const out of document.querySelectorAll("[data-ports-for]")) {
-    const input = $(out.dataset.portsFor).elements.ports;
-    let timer;
-    input.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(async () => {
-        const specs = input.value.split(/[\s,]+/).filter(Boolean);
-        const said = [];
-        for (const spec of specs) {
-          const parts = spec.split(":");
-          if (parts.length < 2) { said.push(el("span", {}, `${spec}: the system picks a free host port`)); continue; }
-          const host = parts.at(-2), ip = parts.length > 2 ? parts.slice(0, -2).join(":") : "";
-          if (!+host) { said.push(el("span", {}, `${spec}: the system picks a free host port`)); continue; }
-          try {
-            const c = await checkPort(host, ip);
-            said.push(el("span", {}, el("b", {}, `${c.ip}:${c.port}`), c.free ? " is free" : ` is taken by ${c.by}`));
-          } catch (err) { said.push(el("span", {}, `${spec}: ${err.message}`)); }
-        }
-        out.replaceChildren(...said.flatMap((n, i) => (i ? ["; ", n] : [n])));
-      }, 300);
-    });
-  }
 }
 
 // --- builds
@@ -609,7 +557,7 @@ function renderBuilds() {
       b.status === "done" && state.templates.some((t) => t.name === b.template)
         ? el("p", { class: "made" }, `Now the template ${b.template}. `,
           el("button", { class: "link", type: "button", onclick: () => act(() => api("/v1/machines", { method: "POST", body: { template: b.template } }), "Up from " + b.template) }, "Up a machine"),
-          el("button", { class: "link", type: "button", onclick: () => { select("template", b.template); } }, "Show"))
+          el("button", { class: "link", type: "button", onclick: () => { select("template", b.template, "graph"); } }, "Show"))
         : null,
       b.error ? el("p", { class: "error" }, plain(b.error)) : null);
   }));
@@ -669,28 +617,6 @@ function wireBuilds() {
 // --- forms
 
 function wireForms() {
-  const on = (id, fn) => $(id).addEventListener("submit", (e) => { e.preventDefault(); fn(e.target.elements, e.target); });
-  on("template-form", (f, form) => act(async () => {
-    await api("/v1/templates", { method: "POST", body: { site: f.site.value.trim(), name: f.name.value || undefined, idle: f.idle.value || undefined } });
-    form.reset();
-  }, "Template added"));
-  on("up-form", (f, form) => act(async () => {
-    const m = await api("/v1/machines", { method: "POST", body: { template: f.template.value, name: f.name.value || undefined,
-      ports: f.ports.value.split(/[\s,]+/).filter(Boolean), ttl: f.ttl.value || undefined } });
-    form.reset();
-    select("machine", m.name);
-  }, "Machine up"));
-  on("service-form", (f, form) => act(async () => {
-    const ports = f.ports.value.split(/[\s,]+/).filter(Boolean).map((p) => {
-      const parts = p.split(":");
-      const guest = +parts.pop(), host = +parts.pop(), ip = parts.join(":") || undefined;
-      return { ip, host, guest };
-    });
-    await api("/v1/services", { method: "POST", body: { name: f.name.value, template: f.template.value, ports,
-      min: +f.min.value, max: +f.max.value, idle: f.idle.value || undefined, state: f.state.value } });
-    form.reset();
-  }, "Service added"));
-
   $("run-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = e.target.elements;
@@ -779,14 +705,73 @@ function render() {
   renderSeries();
   renderLanes();
   renderEvents();
-  renderSelection();
   renderTables();
   renderPorts();
   renderRuns();
   renderBuilds();
+  publish();
 }
 
-$("selection-close").addEventListener("click", () => { state.selected = null; render(); });
+// What the components may do
+store.state = state;
+store.actions = {
+  api, act, select, openTerminal, banner,
+  refresh: () => refresh(),
+  runOn: (template) => { $("run-template").value = template; $("run-cmd").scrollIntoView({ block: "center" }); $("run-cmd").focus(); },
+  // A POST whose answer is kept even when it failed (a fleet's log)
+  post,
+  refreshFleets,
+  // The fleet shown under Fleets (and its plan's steps in the graph), in one of its instances
+  showFleet: async (name, stay, instance) => {
+    state.fleet = name;
+    if (!name) { state.fleetView = null; state.plan = null; publish(); return; }
+    if (!stay) location.hash = "#fleets";
+    try {
+      state.fleetView = await api(`/v1/fleets/${encodeURIComponent(name)}${instance ? `?instance=${encodeURIComponent(instance)}` : ""}`);
+      state.plan = state.fleetView.plan || null;
+    } catch (e) { state.fleetView = { name, error: e.message }; state.plan = null; }
+    publish();
+  },
+  // One step of the shown fleet's plan (or all of them) in an instance: its log and error
+  applyStep: async (step, instance) => {
+    const out = await post(`/v1/fleets/${encodeURIComponent(state.fleet)}/apply`, { step: step || undefined, instance: instance || state.plan?.instance });
+    if (out.plan) { state.plan = out.plan; if (state.fleetView) state.fleetView.plan = out.plan; }
+    await refresh();
+    return out;
+  },
+};
+
+async function post(path, body) {
+  const res = await fetch("/api" + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  return res.ok ? data : { ...(data.result || {}), error: data.error || res.statusText };
+}
+
+async function refreshFleets() {
+  try { state.fleets = await api("/v1/fleets"); } catch { state.fleets = []; }
+  publish();
+}
+
+// One view at a time, by the address: #overview, #network, #fleets, #machines, #run, #builds
+const OLD = { ports: "machines", fleet: "machines" };
+function route() {
+  const want = location.hash.slice(1) || "overview";
+  const view = OLD[want] || (document.querySelector(`[data-view="${want}"]`) ? want : "overview");
+  state.view = view;
+  for (const s of document.querySelectorAll("[data-view]")) s.hidden = s.dataset.view !== view;
+  for (const a of document.querySelectorAll("#views a")) a.setAttribute("aria-current", a.getAttribute("href") === `#${view}` ? "page" : "false");
+  // A view shown again draws at its width
+  if (view === "overview") { renderSeries(); renderLanes(); renderEvents(); }
+  if (view === "fleets") refreshFleets();
+  publish();
+}
+addEventListener("hashchange", route);
+mount(html`<${Graph} />`, $("graph"));
+mount(html`<${Inspector} where="graph" />`, $("inspect-graph"));
+mount(html`<${Inspector} where="timeline" />`, $("selection"));
+mount(html`<${Tasks} />`, $("tasks"));
+mount(html`<${Fleets} />`, $("fleets-root"));
+route();
 $("terminal-close").addEventListener("click", () => { closeTerminal(); $("terminal").hidden = true; });
 wireCursor();
 wireForms();

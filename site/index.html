@@ -130,6 +130,28 @@
     .step p { margin: 0 0 16px; max-width: 40em; }
     .ref-more { margin: 40px 0 0; max-width: 40em; }
 
+    /* A fleet: the UI's network view as it ran, beside what it shows; then the file behind it */
+    .fleet-show { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: calc(var(--gap) * 2); border-top: 1px solid var(--ink); padding-top: 28px; }
+    .shot { margin: 0; }
+    .shot a { display: block; border-radius: 6px; overflow: hidden; box-shadow: 0 0 0 1px var(--rule); }
+    .shot img { display: block; width: 100%; height: auto; }
+    .shot .dark { display: none; }
+    :root[data-theme="dark"] .shot .light { display: none; }
+    :root[data-theme="dark"] .shot .dark { display: block; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) .shot .light { display: none; }
+      :root:not([data-theme="light"]) .shot .dark { display: block; }
+    }
+    .shot figcaption { margin: 12px 0 0; font-size: 14px; color: var(--ink-2); max-width: 46em; }
+    .points { margin: 0; display: flex; flex-direction: column; }
+    .points div { padding: 16px 0; border-bottom: 1px solid var(--rule); }
+    .points div:first-child { padding-top: 0; }
+    .points dt { font-weight: 600; font-size: 17px; letter-spacing: -.01em; }
+    .points dd { margin: 6px 0 0; color: var(--ink-2); font-size: 15.5px; line-height: 1.5; }
+    .fleet-code { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: calc(var(--gap) * 2); margin-top: 40px; }
+    .fleet-code pre { margin: 0; }
+    .fleet-code p { margin: 0 0 12px; color: var(--ink-2); font-size: 15px; }
+
 
 
     /* The signature moment: run here morphs the transcript into the live machine */
@@ -148,6 +170,7 @@
       .run-tab .tab-name { font-size: 15px; }
       .run-tab .tab-live { margin-left: 0; }
       .runs-side { order: 0; }
+      .fleet-show, .fleet-code { grid-template-columns: minmax(0, 1fr); }
     }
     @media (max-width: 720px) {
       body { font-size: 16px; }
@@ -194,6 +217,7 @@
       <nav aria-label="Site">
         <a href="#runs">Runs</a>
         <a href="#make-your-own">Make your own</a>
+        <a href="#fleets">Fleets</a>
         <a href="docs/">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -370,8 +394,10 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
                 <p>Many machines from one site, still without KVM or root. The daemon restores a site once as a template
                   and forks machines from it in tens of milliseconds, each sharing the memory it doesn't write. Services
                   start machines on a connection and scale to zero when idle, and a fleet file says what should run.
-                  Instances outside the daemon share their snapshot's memory too, mapped from one read-only image.
-                  <a href="docs/orchestration/">Orchestration in the docs</a> covers all of it.</p>
+                  Machines reach each other only through links, and have no way out unless their template says so
+                  (<a href="#fleets">a fleet, below</a>). Instances outside the daemon share their snapshot's memory
+                  too, mapped from one read-only image. <a href="docs/orchestration/">Orchestration in the docs</a>
+                  covers all of it.</p>
 <pre><span class="dim"># a template, and machines forked from it</span>
 $ snowglobe daemon --detach
 $ snowglobe template add dist/api --name api
@@ -389,6 +415,82 @@ $ snowglobe apply</pre>
           <p class="ref-more">Every command, flag, label and setting is in the <a href="docs/reference/">docs</a>,
             with guides to building, networking, running headlessly, driving it from an agent and orchestrating
             machines.</p>
+        </section>
+
+        <section class="section" aria-labelledby="fleets-title" id="fleets">
+          <h2 id="fleets-title">A fleet, and what reaches what</h2>
+          <p>The daemon runs a whole stack from one <code>snowglobe.toml</code>, like a compose file: an app and
+            its database, each a machine of its own. <code>snowglobe ui</code> draws it as it runs: the plan the file
+            sets out, then every instance of it, its machines, the names they reach each other by and the ports
+            they open on your host.</p>
+
+          <div class="fleet-show">
+            <figure class="shot">
+              <a href="ui/network-light.webp" class="light"><img src="ui/network-light.webp" width="900" height="820" loading="lazy" decoding="async"
+                alt="The Network view of snowglobe ui: the plan, app and db templates joined by a dotted db.internal:5432 link; below it instance main and instance 2 of the todo fleet, each with its own app and db machines, the app reaching its own db as db.internal:5432, and the host ports each opens."></a>
+              <a href="ui/network-dark.webp" class="dark"><img src="ui/network-dark.webp" width="900" height="820" loading="lazy" decoding="async"
+                alt="The Network view of snowglobe ui, in the dark theme: the plan, then instance main and instance 2 of the todo fleet, each app reaching its own db as db.internal:5432."></a>
+              <figcaption><code>examples/todo-fleet</code> in <code>snowglobe ui</code>: an Elixir app and Postgres, in two
+                instances. Instance 2's app reaches its own database as <code>db.internal:5432</code>, and nothing of
+                main's.</figcaption>
+            </figure>
+            <dl class="points">
+              <div><dt>Nothing joins machines but a link</dt>
+                <dd>A link gives a machine a name to reach another by. It is a Unix socket of that machine's own,
+                  answered by the daemon, so no TCP port opens on your host for it. Links change while machines run.</dd></div>
+              <div><dt>Each instance keeps to itself</dt>
+                <dd>Start another and it gets an app and a database of its own, beside the first. The fleet's network
+                  mode (<code>exclusive</code>, <code>inclusive</code> or <code>all</code>) says what may cross between them.</dd></div>
+              <div><dt>No way out unless the file says</dt>
+                <dd>A machine's own connections go nowhere by default. A template reaches the internet, or your
+                  private network too, only when its <code>egress</code> says so.</dd></div>
+              <div><dt>From the browser, the API or an agent</dt>
+                <dd>Drag one machine onto another to link them, apply a plan one step at a time, start and remove
+                  instances: in <code>snowglobe ui</code>, over the daemon's <code>/v1</code> API, or with the same
+                  tools over MCP.</dd></div>
+            </dl>
+          </div>
+
+          <div class="fleet-code">
+            <div>
+              <p>The file behind it, the database's part shortened:</p>
+<pre><span class="dim"># examples/todo-fleet/snowglobe.toml</span>
+name = "todo"
+
+[network]
+mode = "exclusive"     <span class="dim"># each instance keeps to itself</span>
+
+[templates.app]
+build = "app"          <span class="dim"># a Dockerfile directory, built first</span>
+network = "fetch"      <span class="dim"># egress stays none: links and ports only</span>
+
+[services.app]
+template = "app"
+ports = ["8080:4000"]
+max = 2
+
+<span class="dim"># [templates.db] and [services.db]: the same, Postgres on 5432</span>
+
+[links.app-db]
+from = "app"
+to = "db"
+port = 5432
+as = "db.internal"</pre>
+            </div>
+            <div>
+              <p>Run it, see it, and give it to an agent:</p>
+<pre>$ snowglobe daemon --detach
+$ snowglobe apply -f examples/todo-fleet/snowglobe.toml
+$ curl localhost:8080/todos
+<span class="dim"># views: overview, network, fleets,</span>
+<span class="dim"># machines, run, builds</span>
+$ snowglobe ui
+<span class="dim"># fleets, links and the graph, over MCP</span>
+$ claude mcp add snowglobe -- \
+    snowglobe mcp --daemon</pre>
+              <p class="ref-more"><a href="docs/orchestration/#links">Links, instances and network modes</a> in the docs.</p>
+            </div>
+          </div>
         </section>
     </main>
 

@@ -26,7 +26,7 @@ type PortMapping struct {
 
 // Ports is every port mapping, by host port.
 func (s *Server) Ports() []PortMapping {
-	var out []PortMapping
+	out := []PortMapping{}
 	s.mu.Lock()
 	for _, m := range s.st.Machines {
 		_, open := s.forwards[m.Name]

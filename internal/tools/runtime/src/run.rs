@@ -7,7 +7,8 @@
 //!
 //! The control socket takes one JSON line, then: {"mode":"exec","command":...} answers with
 //! what the command printed; {"mode":"attach","rows":R,"cols":C} replays the screen and
-//! streams the session both ways.
+//! streams the session both ways; {"mode":"links","links":[{host,port,url}]} replaces the
+//! machine's links (names its guest reaches at a unix:// or tcp:// address the daemon chose).
 
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
@@ -649,7 +650,19 @@ fn serve(session: &Session, stream: UnixStream) {
             };
             let _ = writer.write_all(format!("{answer}\n").as_bytes());
         },
+        Some("links") => {
+            let answer = match links(&request["links"]) {
+                Ok(l) => {
+                    let n = l.len();
+                    session.host.set_links(l);
+                    json!({ "links": n })
+                },
+                Err(e) => json!({ "error": e }),
+            };
+            let _ = writer.write_all(format!("{answer}\n").as_bytes());
+        },
         Some("connect") => {
+
             // A connection to a guest port: what a forwarded port is, for whoever holds the host's
             // listener (a fork's sandbox may bind no TCP port itself). The client waits for this
             // answer before it sends, so nothing of the connection is in the reader's buffer
@@ -675,6 +688,22 @@ fn serve(session: &Session, stream: UnixStream) {
         },
     }
     let _ = writer.shutdown(std::net::Shutdown::Both);
+}
+
+/// A links request's links: each a name (or none, for any) and port the guest connects to, and
+/// the tcp://HOST:PORT its connections go to instead.
+fn links(v: &serde_json::Value) -> Result<Vec<armless::native::Tunnel>, String> {
+    let Some(list) = v.as_array() else { return Err("links: a list of {host, port, url}".into()) };
+    list.iter()
+        .map(|l| {
+            let port = l["port"].as_u64().and_then(|p| u16::try_from(p).ok()).filter(|&p| p > 0).ok_or("links: each needs a port")?;
+            let t = armless::native::Tunnel { host: l["host"].as_str().filter(|h| !h.is_empty()).map(str::to_string), port, url: l["url"].as_str().unwrap_or("").to_string() };
+            if t.tcp_address().is_none() && t.unix_path().is_none() {
+                return Err(format!("links: {}: a unix:///PATH or tcp://HOST:PORT url", t.url));
+            }
+            Ok(t)
+        })
+        .collect()
 }
 
 /// How long an attached client may leave the console's output unread before it is let go
@@ -799,6 +828,18 @@ fn jit_stats(runner: &Runner) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_are_names_and_ports_to_tcp_addresses() {
+        let l = links(&json!([{"host": "db", "port": 5432, "url": "tcp://127.0.0.1:40000"}, {"port": 6379, "url": "tcp://127.0.0.1:40001"}])).unwrap();
+        assert_eq!((l[0].host.as_deref(), l[0].port), (Some("db"), 5432));
+        assert_eq!((l[1].host.as_deref(), l[1].tcp_address()), (None, Some(("127.0.0.1".into(), 40001))));
+        assert!(links(&json!([])).unwrap().is_empty());
+        assert_eq!(links(&json!([{"host": "db", "port": 1, "url": "unix:///tmp/s/l.sock"}])).unwrap()[0].unix_path(), Some("/tmp/s/l.sock"));
+        for bad in [json!(null), json!([{"host": "db", "url": "tcp://127.0.0.1:1"}]), json!([{"port": 1, "url": "wss://x"}])] {
+            assert!(links(&bad).is_err(), "{bad}");
+        }
+    }
     use crate::testing::{self, site, tmp, write};
     use armless::dev::Event;
 
