@@ -1,7 +1,41 @@
-# Browser agents: a Snowglobe tab as an agent's workspace (planned, not started)
+# Browser agents: a Snowglobe tab as an agent's workspace (first milestone done)
 
-Status: kept for a later stage. Why: normal chat agents could run whatever they need from the
-client's own browser, delegating compute to the visitor's browser instead of servers.
+Status: the first slice is built (below); files, the accessible UI and persistence are still to
+come. Why: normal chat agents could run whatever they need from the client's own browser,
+delegating compute to the visitor's browser instead of servers.
+
+## What the first milestone implements
+
+Commands, with WebMCP as the way agents reach them. Opt-in: `snowglobe build --agent` (or the
+label `snowglobe.agent="true"`); without it the page carries none of it.
+
+- `internal/site/agent.js`: `window.snowglobeAgent` with `capabilities()`, `status()` (booting,
+  ready, busy, saving, failed), `runCommand({command, timeoutSeconds, requestId})`,
+  `readJob(jobId)` and `cancelJob(jobId)`. One job at a time; a repeated `requestId` returns the
+  same job, and one reused for a different command is refused. Output keeps the most recent
+  1 MiB and counts what it dropped. Default timeout 300 s, at most 3600.
+- `internal/site/agent-webmcp.js`: `run_command`, `job_status` and `cancel_job`, registered with
+  `document.modelContext.registerTool(tool, {signal, exposedTo})` (`navigator.modelContext` as a
+  fallback). Nothing is registered without one. `exposedTo` is empty unless the site is built with
+  `--agent-exposed-to`. The first run asks the person at the page: through the client's
+  `requestUserInteraction` when it passes one, else a modal `<dialog>`.
+- One-CPU sites only: on more CPUs nothing is registered and `status()` says why.
+
+The control channel is the guest's serial line (ttyS0), not a new device. Every snowglobe guest
+has a root shell there beside the app (the boot layer's inittab), and the page only shows the
+virtio console (hvc0), so nothing a job does reaches the terminal. The job protocol is the native
+one (`internal/tools/runtime/src/job.rs`): launcher, nonce, the `SGDONE_<id>_<nonce>_<status>_<killed>`
+marker, ctrl-c and a kill of the command's whole session. Two changes, because a page can't write
+into the guest's filesystem: the launcher and the command are typed in as base64, in short lines,
+each acknowledged by a value the shell computes; and the command's output goes straight to the
+serial line (with echo and newline translation off) between a start line carrying the nonce and
+the marker, rather than to a file. stdout and stderr are therefore one stream.
+
+Not yet: `readFile` and `writeFile` (typing base64 works for small files; larger ones want a
+transfer channel), `cwd` and `env`, separate stderr, the accessible control UI, saving only between
+jobs, and session ids that change on restore. A save taken mid-job and restored later leaves the
+serial shell busy: the next job's sync then fails with "the guest's shell is not answering" until
+the old command ends, rather than being typed into it.
 
 ---
 

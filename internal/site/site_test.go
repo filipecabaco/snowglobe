@@ -192,3 +192,42 @@ func TestTunnelToken(t *testing.T) {
 		t.Error("without a token endpoint the tunnels go in as they are")
 	}
 }
+
+func TestAgentOnlyWhenBuiltWithIt(t *testing.T) {
+	page, dir := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none"})
+	for _, s := range []string{"agent.js", "agent-webmcp.js", "snowglobeAgent", "SnowglobeWebMCP"} {
+		if strings.Contains(page, s) {
+			t.Errorf("a page without --agent mentions %s", s)
+		}
+	}
+	for _, f := range []string{"agent.js", "agent-webmcp.js"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			t.Errorf("%s written without --agent", f)
+		}
+	}
+
+	page, dir = render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "fetch", Agent: true, Version: "v9.9.9",
+		AgentExposedTo: []string{"https://agent.example"}})
+	for _, s := range []string{
+		`<script src="agent.js"></script>`, `<script src="agent-webmcp.js"></script>`,
+		"window.snowglobeAgent = agent", `version: "v9.9.9"`, `buildId: "test-build"`, `network: "fetch"`,
+		`exposedTo: ["https://agent.example"]`, "state: () => run.state",
+	} {
+		if !strings.Contains(page, s) {
+			i := strings.Index(page, "SnowglobeAgent.attach")
+			t.Errorf("page lacks %s\ngot: %s", s, page[max(i, 0):min(max(i, 0)+600, len(page))])
+		}
+	}
+	for f, want := range map[string]string{"agent.js": "SGDONE_", "agent-webmcp.js": "registerTool"} {
+		data, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil || !strings.Contains(string(data), want) {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+	// No origins: an empty list, not a broken script
+	page, _ = render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none", Agent: true})
+	if !strings.Contains(page, "exposedTo: null ?? []") {
+		i := strings.Index(page, "exposedTo")
+		t.Errorf("no origins: %s", page[i:min(i+40, len(page))])
+	}
+}

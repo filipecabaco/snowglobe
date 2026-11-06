@@ -124,6 +124,10 @@
   <script src="armless/armless.js"></script>
   <script src="sessions.js"></script>
   <script src="session-ui.js"></script>
+  {{- if .Agent}}
+  <script src="agent.js"></script>
+  <script src="agent-webmcp.js"></script>
+  {{- end}}
 </head>
 <body>
   <header id="strip">
@@ -313,6 +317,16 @@
       status.textContent = text;
       announce();
     };
+    {{- if .Agent}}
+
+    // Built with --agent: commands run in this machine for an agent, on its serial shell (never
+    // the terminal below), as window.snowglobeAgent and, where the browser has WebMCP, as tools
+    const agent = SnowglobeAgent.attach({ emulator, cpus, network: {{.Network}}, buildId: {{.BuildID}}, version: {{.Version}},
+      state: () => run.state, saving: () => sessions.captureBusy });
+    window.snowglobeAgent = agent;
+    SnowglobeWebMCP.register(agent, { jobText: SnowglobeAgent.jobText, exposedTo: {{.AgentExposedTo}} ?? [] })
+      .then((r) => { agent._controller.webmcp = r; }, (e) => { agent._controller.webmcp = { available: false, registered: [], reason: String(e?.message ?? e) }; });
+    {{- end}}
 
     if (isolationNeeded) {
       setStatus("loading", "isolating");

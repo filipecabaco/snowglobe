@@ -63,7 +63,7 @@ in `assets/cards.json` names it.
 
 ## Development checks
 
-Run `go test ./...`, `node --test internal/site/sessions.test.cjs` and `node --test
+Run `go test ./...`, `node --test internal/site/sessions.test.cjs internal/site/agent.test.cjs` and `node --test
 bench/lib.test.mjs bench/server.test.mjs` (Node 22+; no npm packages needed), or `mise run test`.
 `snowglobe-vm` has its own tests: `cargo test` in `internal/tools/runtime` (the job launcher's run
 on a pty and killed with ctrl-c on Linux only; CI runs them under dash and BusyBox ash). The
