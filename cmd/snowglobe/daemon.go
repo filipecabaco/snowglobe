@@ -20,9 +20,22 @@ import (
 	"github.com/filipecabaco/snowglobe/internal/tools"
 )
 
-// runDaemon serves the orchestrator's API until it is interrupted. Templates and machines outlive
-// it; started again, it takes back what is still running.
+// runDaemon serves the orchestrator's API until it is interrupted (or `daemon stop`), then stops
+// every template server, machine and build it started. Started again, it starts its templates
+// again from their sites, and its services' replicas as they need.
 func runDaemon(args []string) error {
+	if len(args) > 0 && args[0] == "stop" {
+		c, ok := daemon.Find()
+		if !ok {
+			fmt.Println("no snowglobe daemon is running")
+			return nil
+		}
+		if err := c.Shutdown(); err != nil {
+			return err
+		}
+		fmt.Println("snowglobe daemon stopped, and everything it started")
+		return nil
+	}
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	listen := fs.String("listen", "", "")
 	tokenFile := fs.String("token-file", "", "")
@@ -83,8 +96,30 @@ func runDaemon(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// The first signal starts the graceful stop; a second one, while it runs, skips what is left of
+	// the grace: a SIGKILL to what still runs, then out (the lifelines end whatever that misses)
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-sigs:
+			cancel()
+		case <-done:
+			return
+		}
+		select {
+		case <-sigs:
+			fmt.Fprintln(os.Stderr, "snowglobe daemon: second interrupt: killing what is left, now")
+			s.ForceStop()
+			os.Exit(130)
+		case <-done:
+		}
+	}()
 	return s.Serve(ctx)
 }
 

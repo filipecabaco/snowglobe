@@ -91,7 +91,10 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   user cache (`/v1/templates`, `/v1/machines`, `/v1/machines/{name}/jobs`,
   `/v1/templates/{name}/jobs` for a job on a fresh fork), and over TCP for requests bearing the
   token with `--listen`. `SNOWGLOBE_DAEMON=http://HOST:PORT` and `SNOWGLOBE_DAEMON_TOKEN` point
-  the CLI at a remote one. A daemon started again takes back what still runs.
+  the CLI at a remote one. Nothing it starts outlives it: stopped (ctrl-c, SIGTERM, `snowglobe
+  daemon stop`; a second ctrl-c skips the grace), it stops its template servers, machines and builds; killed outright, they stop
+  themselves (each holds a lifeline to it). Started again, it restores its templates from their
+  sites and starts its services' replicas; machines are not brought back.
   It builds too: `POST /v1/builds {"name","source"|"dockerfile","network","memory_mb","cpus",
   "builder","no_template"}` runs `snowglobe build` (a directory by its full path, an image
   reference, or a Dockerfile's text; Docker when there, else natively for images) and makes the
@@ -123,7 +126,8 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `/v1/services`, `/v1/services/{name}/jobs`.
 - `snowglobe daemon --detach` starts the daemon in the background, in a session of its own so it
   outlives the terminal, its log in `daemon.log` beside the socket; it returns once the daemon
-  answers, and does nothing if one runs.
+  answers, and does nothing if one runs. `snowglobe daemon stop` stops it, and everything it
+  started, and returns once they have stopped.
 - `snowglobe ui [--port 7777] [--no-open] [--start-daemon]` serves the daemon in a browser on 127.0.0.1
   (the link carries a session token; `--start-daemon` starts a detached daemon first when none runs),
   one view at a time: Overview (the last hour on one time axis, a lane per template with machine

@@ -79,6 +79,62 @@ pub fn wait(pid: libc::pid_t, block: bool) -> Option<(libc::pid_t, Option<i32>)>
     (r > 0).then(|| (r, libc::WIFEXITED(status).then(|| libc::WEXITSTATUS(status))))
 }
 
+// ---------------------------------------------------------------- descriptors
+
+/// Mark `fd` close-on-exec: it isn't handed to a program this process might start.
+fn cloexec(fd: libc::c_int) {
+    // SAFETY: fcntl on a descriptor number only reads or sets its flags; a closed one fails
+    unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+}
+
+/// Take descriptor `fd`, inherited from whoever started this process, as ours: None if no such
+/// descriptor is open. Marked close-on-exec.
+pub fn inherited(fd: libc::c_int) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    // Only past stdio, and only an open one
+    // SAFETY: F_GETFD reads a descriptor's flags; on a number that isn't open it fails (EBADF)
+    if fd < 3 || unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1 {
+        return None;
+    }
+    cloexec(fd);
+    // SAFETY: the descriptor is open (checked above) and was handed to this process to own (its
+    // number came in SNOWGLOBE_LIFELINE, read once, at start): nothing else here holds it
+    Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+/// A pipe: (read end, write end), both close-on-exec.
+pub fn pipe() -> io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    use std::os::fd::FromRawFd;
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: pipe writes two descriptors into the array it is given
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    cloexec(fds[0]);
+    cloexec(fds[1]);
+    // SAFETY: two new descriptors pipe just returned, owned by nothing else
+    Ok(unsafe { (std::os::fd::OwnedFd::from_raw_fd(fds[0]), std::os::fd::OwnedFd::from_raw_fd(fds[1])) })
+}
+
+/// Wait until one of `fds` can be read (or has hung up, or failed): which of them can. Retries on
+/// a signal; an error only if poll itself fails.
+pub fn readable(fds: &[BorrowedFd]) -> io::Result<Vec<bool>> {
+    let mut polled: Vec<libc::pollfd> = fds.iter().map(|f| libc::pollfd { fd: f.as_raw_fd(), events: libc::POLLIN, revents: 0 }).collect();
+    loop {
+        // SAFETY: `polled` is an array of pollfd of the length passed; poll writes only their
+        // revents, and the descriptors are open (borrowed for the call)
+        let r = unsafe { libc::poll(polled.as_mut_ptr(), polled.len() as libc::nfds_t, -1) };
+        if r >= 0 {
+            break;
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e);
+        }
+    }
+    Ok(polled.iter().map(|p| p.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0).collect())
+}
+
 // ---------------------------------------------------------------- a mapped file
 
 /// A read-only mapping of a whole file.

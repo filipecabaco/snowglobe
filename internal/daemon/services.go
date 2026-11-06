@@ -372,7 +372,7 @@ func (s *Server) scale() {
 			a := s.svc.activity[m.Name]
 			idle := a == nil || (a.active <= 0 && time.Since(a.last) >= time.Duration(svc.Idle))
 			if a == nil {
-				// Taken back by a daemon started again: idle from now
+				// Not seen doing anything yet: idle from now
 				s.svc.activity[m.Name] = &activity{last: time.Now()}
 				idle = false
 			}

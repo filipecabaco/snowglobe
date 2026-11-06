@@ -131,6 +131,11 @@ func (c *Client) call(method, path string, in, out any) error {
 	return c.do(context.Background(), method, path, in, out)
 }
 
+// Shutdown stops the daemon and everything it started, and returns once they have stopped.
+func (c *Client) Shutdown() error {
+	return c.call("POST", "/v1/shutdown", nil, nil)
+}
+
 func (c *Client) Templates() ([]Template, error) {
 	var ts []Template
 	return ts, c.call("GET", "/v1/templates", nil, &ts)

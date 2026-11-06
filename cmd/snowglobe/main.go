@@ -22,6 +22,7 @@ import (
 	"github.com/filipecabaco/snowglobe/internal/build"
 	"github.com/filipecabaco/snowglobe/internal/bundle"
 	"github.com/filipecabaco/snowglobe/internal/instance"
+	"github.com/filipecabaco/snowglobe/internal/lifeline"
 	"github.com/filipecabaco/snowglobe/internal/mcp"
 	"github.com/filipecabaco/snowglobe/internal/native"
 	"github.com/filipecabaco/snowglobe/internal/pack"
@@ -133,7 +134,10 @@ Usage:
                                                      SNOWGLOBE_DAEMON_TOKEN). --memory caps what
                                                      its servers and machines take together: a
                                                      machine that doesn't fit waits --wait for
-                                                     room, then is refused
+                                                     room, then is refused. Its servers and
+                                                     machines end with it, a crash included;
+                                                     started again, it restores its templates
+  snowglobe daemon stop                              stop the daemon, and everything it started
   snowglobe template add <site> [--name T]           restore a site once, for machines to be forked
                      [--max-machines N]              from; template ls lists them, template rm T
                      [--snapshot S] [--idle 30m]     removes one and its machines. --snapshot
@@ -258,6 +262,8 @@ func main() {
 	if version == "" {
 		version = moduleVersion()
 	}
+	// Started by the daemon (a build): it ends with the daemon, however that ends
+	lifeline.Watch(lifeline.Stop)
 	os.Exit(run(os.Args[1:]))
 }
 

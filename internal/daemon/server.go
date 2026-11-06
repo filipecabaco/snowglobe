@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/filipecabaco/snowglobe/internal/control"
+	"github.com/filipecabaco/snowglobe/internal/lifeline"
 	"github.com/filipecabaco/snowglobe/internal/remote"
 )
 
@@ -79,6 +80,15 @@ type Server struct {
 	// Each machine's link sockets, by link, and whether it was given links (guarded by mu)
 	linkSocks map[string]map[string]*linkSock
 	linked    map[string]bool
+	// The process groups of the template servers it started and that still run (each with its
+	// machines and jobs), and whether it is stopping: then it starts nothing more (guarded by mu)
+	groups  map[int]bool
+	closing bool
+	// Templates that were running when the last daemon stopped, started again once it serves
+	revive []string
+	// Stops Serve (the API's shutdown), and is closed once everything it started has stopped
+	quit    context.CancelFunc
+	stopped chan struct{}
 }
 
 // How long a template gets to restore, and a machine or server to go once asked
@@ -88,8 +98,12 @@ var (
 	reapEvery      = 2 * time.Second
 )
 
-// New opens the daemon's directory and takes back what its last run left running: templates
-// whose server is alive, machines whose control socket answers. The rest is forgotten.
+// New opens the daemon's directory. Nothing its last run started still runs: a daemon's servers
+// and machines end with it, stopped as it stops, or by their lifeline if it dies. Templates that
+// were running are started again from their sites once it serves (those asleep stay asleep);
+// services hold their ports again and start their replicas as they would (Min of them at once);
+// machines, replicas included, are forgotten. A server that a daemon from before lifelines left
+// running is stopped, with its machines, so that nothing runs that this one doesn't know of.
 func New(o Options) (*Server, error) {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
@@ -99,7 +113,7 @@ func New(o Options) (*Server, error) {
 	}
 	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery,
 		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery, runs: newRuns(),
-		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}}
+		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}, groups: map[int]bool{}, stopped: make(chan struct{})}
 	if o.memOf != nil {
 		s.memOf = o.memOf
 	}
@@ -111,25 +125,39 @@ func New(o Options) (*Server, error) {
 		s.o.Wait = 30 * time.Second
 	}
 	s.st = loadState(s.statePath)
+	for name, m := range s.st.Machines {
+		// Left running by a daemon from before lifelines: stopped
+		if m.Pid > 0 && alive(m.Pid) && control.Alive(m.Socket) {
+			o.Logf("machine %s: stopping what an earlier daemon left running (pid %d)", name, m.Pid)
+			syscall.Kill(m.Pid, syscall.SIGKILL)
+		}
+		os.Remove(m.Socket)
+		delete(s.st.Machines, name)
+	}
 	for name, t := range s.st.Templates {
 		// Asleep: it starts on its next use
-		if !t.Asleep && !alive(t.Pid) {
-			o.Logf("template %s: its server is gone", name)
-			delete(s.st.Templates, name)
-			os.RemoveAll(t.SocketDir)
-		}
-	}
-	for name, m := range s.st.Machines {
-		if _, ok := s.st.Templates[m.Template]; !ok || !control.Alive(m.Socket) {
-			o.Logf("machine %s: gone", name)
-			delete(s.st.Machines, name)
+		if t.Asleep {
 			continue
 		}
-		if err := s.forward(m); err != nil {
-			o.Logf("machine %s: its ports: %v", name, err)
+		if t.Pid > 0 && alive(t.Pid) && control.Alive(t.Server) {
+			o.Logf("template %s: stopping the server an earlier daemon left running (pid %d)", name, t.Pid)
+			// Not our child: only while it still answers on its socket is it the server left
+			stopGroups([]int{t.Pid}, nil, func(int) bool { return control.Alive(t.Server) })
 		}
+		if t.SocketDir != "" {
+			os.RemoveAll(t.SocketDir)
+		}
+		if _, err := os.Stat(filepath.Join(t.Site, "run.json")); err != nil {
+			o.Logf("template %s: its site %s is gone", name, t.Site)
+			delete(s.st.Templates, name)
+			continue
+		}
+		// Asleep until Serve starts it again (or its first use does, whichever comes first)
+		t.Pid, t.Server, t.SocketDir, t.Ready, t.Asleep = 0, "", "", "", true
+		s.revive = append(s.revive, name)
 	}
-	// Services: their ports held again (their replicas were taken back with the machines)
+	sort.Strings(s.revive)
+	// Services: their ports held again; their replicas start as they would
 	for name, svc := range s.st.Services {
 		if _, ok := s.st.Templates[svc.Template]; !ok {
 			o.Logf("service %s: its template %s is gone", name, svc.Template)
@@ -170,9 +198,14 @@ func (s *Server) has(kind, name string) bool {
 	return false
 }
 
-// Serve answers the API until ctx is done. Templates and machines outlive it: a daemon started
-// again takes them back.
+// Serve answers the API until ctx is done (or the API is asked to stop), then stops everything
+// the daemon started (stopAll) before it returns.
 func (s *Server) Serve(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.mu.Lock()
+	s.quit = cancel
+	s.mu.Unlock()
 	sock := filepath.Join(s.o.Dir, "daemon.sock")
 	if alreadyServing(sock) {
 		return fmt.Errorf("a daemon is running already on %s", sock)
@@ -203,6 +236,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	go s.reap(ctx)
 	go s.scaler(ctx)
 	go s.sampler(ctx)
+	go s.reviveTemplates()
 	errs := make(chan error, len(servers))
 	for i, srv := range servers {
 		go func() { errs <- srv.Serve(listeners[i]) }()
@@ -211,8 +245,9 @@ func (s *Server) Serve(ctx context.Context) error {
 	case <-ctx.Done():
 	case err = <-errs:
 	}
-	for _, srv := range servers {
-		srv.Close()
+	// No new connection; those open (a request to stop, waiting for it) are answered
+	for _, l := range listeners {
+		l.Close()
 	}
 	os.Remove(sock)
 	s.mu.Lock()
@@ -234,10 +269,191 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 	}
 	s.svc.mu.Unlock()
+	s.stopAll()
+	close(s.stopped)
+	answered, done := context.WithTimeout(context.Background(), time.Second)
+	defer done()
+	for _, srv := range servers {
+		srv.Shutdown(answered)
+		srv.Close()
+	}
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
 	return err
+}
+
+// reviveTemplates starts again the templates that were running when the last daemon stopped.
+func (s *Server) reviveTemplates() {
+	for _, name := range s.revive {
+		if _, err := s.awake(name); err != nil {
+			s.note("template.error", "template "+name, "starting it again: %v", err)
+		}
+	}
+}
+
+// stopAll stops everything the daemon started, as it stops: the replicas of services that keep
+// their state are saved first (as when they scale to zero); builds are interrupted; then every
+// template server's process group (the server, its machines and its jobs) and every build's gets
+// a SIGTERM, up to stopGrace to go, then a SIGKILL. Their sockets go, and state.json says that
+// nothing runs: templates, services, snapshots and links stay, for the next daemon to start again.
+func (s *Server) stopAll() {
+	s.mu.Lock()
+	s.closing = true
+	var keep []Service
+	for _, svc := range s.st.Services {
+		if svc.State == "keep" {
+			keep = append(keep, *svc)
+		}
+	}
+	s.mu.Unlock()
+	for _, svc := range keep {
+		for _, m := range s.replicas(svc.Name) {
+			s.stopReplica(svc, m)
+		}
+	}
+
+	s.builds.mu.Lock()
+	var builds []int
+	for id, b := range s.builds.all {
+		if b.finished() {
+			continue
+		}
+		now := time.Now()
+		b.Status, b.Error, b.Ended = "interrupted", "the daemon stopped while it ran", &now
+		s.builds.write(b)
+		if p := s.builds.procs[id]; p != nil {
+			builds = append(builds, p.Pid)
+		}
+	}
+	s.builds.mu.Unlock()
+
+	s.mu.Lock()
+	var groups, machines []int
+	for g := range s.groups {
+		groups = append(groups, g)
+	}
+	for _, m := range s.st.Machines {
+		machines = append(machines, m.Pid)
+	}
+	s.mu.Unlock()
+	if n := len(groups) + len(builds); n > 0 {
+		s.o.Logf("stopping %d template servers (%d machines) and %d builds", len(groups), len(machines), len(builds))
+	}
+	stopGroups(append(groups, builds...), machines, s.unreaped)
+	// Reaped: each server by the goroutine that waits for it, each build by its own
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		s.mu.Lock()
+		left := len(s.groups)
+		s.mu.Unlock()
+		if left == 0 {
+			break
+		}
+	}
+
+	s.mu.Lock()
+	for _, t := range s.st.Templates {
+		if t.SocketDir != "" {
+			os.RemoveAll(t.SocketDir)
+		}
+		t.Pid, t.Server, t.SocketDir, t.Ready = 0, "", "", ""
+	}
+	for name, m := range s.st.Machines {
+		os.Remove(m.Socket)
+		delete(s.st.Machines, name)
+	}
+	s.save()
+	s.mu.Unlock()
+	s.note("daemon.stopped", "daemon", "stopped, and everything it started with it")
+}
+
+// unreaped says whether pid is a process this daemon started (a template server or a build) and
+// has not yet waited for. Until it has, even a process that has exited is a zombie that keeps its
+// pid, and so its process group's id, reserved: signalling it can reach nothing else.
+func (s *Server) unreaped(pid int) bool {
+	s.mu.Lock()
+	ok := s.groups[pid]
+	s.mu.Unlock()
+	if ok {
+		return true
+	}
+	s.builds.mu.Lock()
+	defer s.builds.mu.Unlock()
+	for _, p := range s.builds.procs {
+		if p.Pid == pid {
+			return true
+		}
+	}
+	return false
+}
+
+// ForceStop is a second interrupt while the daemon stops: a SIGKILL, now, to every template server
+// group and build still running (and the machines in state.json that still are). Safe because
+// of the lifelines: whatever it doesn't reach ends with the daemon.
+func (s *Server) ForceStop() {
+	s.mu.Lock()
+	var groups, machines []int
+	for g := range s.groups {
+		groups = append(groups, g)
+	}
+	for _, m := range s.st.Machines {
+		machines = append(machines, m.Pid)
+	}
+	s.mu.Unlock()
+	s.builds.mu.Lock()
+	for _, p := range s.builds.procs {
+		groups = append(groups, p.Pid)
+	}
+	s.builds.mu.Unlock()
+	killNow(groups, machines, s.unreaped)
+}
+
+// stopGroups ends process groups and processes: a SIGTERM each, up to stopGrace for all of them
+// to go, then a SIGKILL to what is left. A process group is signalled only while ours says its
+// leader is still verifiably what was started (not reaped, so its id can't have been reused by
+// anything else); a pid (a machine's, from state.json) only while it is still alive.
+func stopGroups(groups, pids []int, ours func(pid int) bool) {
+	for _, g := range groups {
+		if ours(g) {
+			syscall.Kill(-g, syscall.SIGTERM)
+		}
+	}
+	for _, p := range pids {
+		if alive(p) {
+			syscall.Kill(p, syscall.SIGTERM)
+		}
+	}
+	left := func() bool {
+		for _, g := range groups {
+			if ours(g) && syscall.Kill(-g, 0) == nil {
+				return true
+			}
+		}
+		for _, p := range pids {
+			if alive(p) {
+				return true
+			}
+		}
+		return false
+	}
+	for deadline := time.Now().Add(stopGrace); time.Now().Before(deadline) && left(); {
+		time.Sleep(50 * time.Millisecond)
+	}
+	killNow(groups, pids, ours)
+}
+
+// killNow is stopGroups' last step, and ForceStop's: a SIGKILL to what is still ours.
+func killNow(groups, pids []int, ours func(pid int) bool) {
+	for _, g := range groups {
+		if ours(g) {
+			syscall.Kill(-g, syscall.SIGKILL)
+		}
+	}
+	for _, p := range pids {
+		if alive(p) {
+			syscall.Kill(p, syscall.SIGKILL)
+		}
+	}
 }
 
 func alreadyServing(sock string) bool {
@@ -406,16 +622,39 @@ func (s *Server) startServer(t *Template) error {
 	from, _ := log.Seek(0, io.SeekEnd)
 	cmd := exec.Command(s.o.VM, args...)
 	cmd.Stdout, cmd.Stderr = log, log
-	// A process group (and session) of its own: it and its machines outlive the daemon, and go
-	// together when the template is removed
+	// A process group (and session) of its own, with its machines: they go together when the
+	// template is removed or the daemon stops, and a ctrl-c meant for the daemon doesn't reach
+	// them before it has stopped them in order
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
+	// And they end with the daemon, however it ends: a crash closes their lifeline
+	if err := lifeline.Pass(cmd); err != nil {
+		os.RemoveAll(sockDir)
+		return err
+	}
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		os.RemoveAll(sockDir)
+		return errStatus(503, "the daemon is stopping")
+	}
+	err = cmd.Start()
+	if err == nil {
+		s.groups[cmd.Process.Pid] = true
+	}
+	s.mu.Unlock()
+	if err != nil {
 		os.RemoveAll(sockDir)
 		return err
 	}
 	t.Pid = cmd.Process.Pid
 	exited := make(chan struct{})
-	go func() { cmd.Wait(); close(exited) }()
+	go func() {
+		cmd.Wait()
+		s.mu.Lock()
+		delete(s.groups, t.Pid)
+		s.mu.Unlock()
+		close(exited)
+	}()
 	for deadline := time.Now().Add(restoreTimeout); ; time.Sleep(50 * time.Millisecond) {
 		if line := lineWithFrom(t.Log, from, "serving jobs"); line != "" {
 			t.Ready = line
@@ -622,6 +861,12 @@ func (s *Server) up(req Up) (*Machine, error) {
 		return nil, err
 	}
 	defer release()
+	s.mu.Lock()
+	closing := s.closing
+	s.mu.Unlock()
+	if closing {
+		return nil, errStatus(503, "the daemon is stopping")
+	}
 	spawned, err := control.Spawn(t.Server, name, state)
 	if err != nil {
 		return nil, errStatus(409, "%v", err)
@@ -804,6 +1049,11 @@ func (s *Server) reap(ctx context.Context) {
 			continue
 		}
 		s.mu.Lock()
+		// Stopping: what it stops is not to be forgotten as dead
+		if s.closing {
+			s.mu.Unlock()
+			return
+		}
 		for _, n := range deadMachines {
 			if m, ok := s.st.Machines[n]; ok && !control.Alive(m.Socket) {
 				for _, l := range s.forwards[n] {
@@ -980,6 +1230,19 @@ func (s *Server) Handler() http.Handler {
 		reply(w, map[string]any{"ok": true}, nil)
 	})
 	mux.HandleFunc("GET /v1/events", s.serveEvents)
+	// Stop the daemon, and everything it started; answered once that has stopped
+	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		quit := s.quit
+		s.mu.Unlock()
+		if quit == nil {
+			reply(w, nil, errStatus(409, "not serving"))
+			return
+		}
+		quit()
+		<-s.stopped
+		reply(w, map[string]any{"stopped": true}, nil)
+	})
 	mux.HandleFunc("GET /v1/stats", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Stats(), nil)
 	})

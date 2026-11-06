@@ -18,6 +18,7 @@ mod b64;
 mod driver;
 mod image;
 mod job;
+mod lifeline;
 mod log;
 mod machine;
 mod profile;
@@ -101,6 +102,9 @@ pub const RUN_FLAGS: &[&str] = &["egress", "max-runtime", "stop-file", "log-dir"
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // What started this (the daemon, a build) may have tied this process to its own life: taken
+    // now, before any thread, and watched where each command can (lifeline.rs)
+    lifeline::take_inherited();
     // A bundle runs the site it carries: its arguments are run's (exec and attach still work)
     if let Some(site) = site::Site::this_bundle() {
         if !matches!(args.first().map(String::as_str), Some("exec" | "attach")) {
@@ -111,8 +115,14 @@ fn main() -> ExitCode {
         return usage();
     };
     let result = match command.as_str() {
-        "snapshot" => Args::parse(rest, &["memory", "cpus", "build-cpus", "network", "ready", "exercise", "cols", "rows", "tunnel"])
-            .and_then(|a| snapshot::main(&a)),
+        "snapshot" => {
+            // A build's boot: it ends with the build that started it, however that ends
+            if let Some(line) = lifeline::inherited() {
+                lifeline::watch(line, || lifeline::stop("the build that started this snapshot"));
+            }
+            Args::parse(rest, &["memory", "cpus", "build-cpus", "network", "ready", "exercise", "cols", "rows", "tunnel"])
+                .and_then(|a| snapshot::main(&a))
+        },
         "run" => Args::parse(rest, RUN_FLAGS).and_then(|a| run::main(&a, None)),
         "sandbox-check" => sandbox::check(rest.iter().any(|a| a == "--forked")),
         "exec" => {

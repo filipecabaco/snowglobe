@@ -17,14 +17,19 @@ import (
 	"time"
 
 	"github.com/filipecabaco/snowglobe/internal/control"
+	"github.com/filipecabaco/snowglobe/internal/lifeline"
 )
 
 // With SNOWGLOBE_FAKE_VM=serve this test binary is a fork server (`run SITE --serve SOCK ...`):
 // a spawn starts a machine (this binary again, with SNOWGLOBE_FAKE_MACHINE) whose socket answers
 // jobs with how many it has run (what a machine keeps from one job to the next) and connects to
-// an echo server. A job sent to the server runs on a fresh machine: always the first.
+// an echo server. A job sent to the server runs on a fresh machine: always the first. As
+// snowglobe-vm does, the server ends when the daemon's lifeline breaks, and its machines when
+// the server's does. With SNOWGLOBE_FAKE_DAEMON=DIR it is a daemon serving DIR, to be killed.
 func TestMain(m *testing.M) {
 	switch {
+	case os.Getenv("SNOWGLOBE_FAKE_DAEMON") != "":
+		fakeDaemon(os.Getenv("SNOWGLOBE_FAKE_DAEMON"))
 	case len(os.Args) > 1 && os.Args[1] == "build" && os.Getenv("SNOWGLOBE_FAKE_BUILD") != "":
 		fakeBuild()
 	case os.Getenv("SNOWGLOBE_FAKE_MACHINE") != "":
@@ -78,8 +83,22 @@ func send(c net.Conn, v any) {
 	c.Write(append(data, '\n'))
 }
 
+// fakeDaemon serves dir until it is killed.
+func fakeDaemon(dir string) {
+	// Not for the servers it starts
+	os.Unsetenv("SNOWGLOBE_FAKE_DAEMON")
+	self, _ := os.Executable()
+	s, err := New(Options{Dir: dir, VM: self})
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	s.Serve(context.Background())
+}
+
 func fakeServer() {
 	sock := flagOf("serve")
+	lifeline.Watch(func() { os.Remove(sock); os.Exit(143) })
 	l, err := net.Listen("unix", sock)
 	if err != nil {
 		fmt.Println(err)
@@ -108,6 +127,7 @@ func fakeServer() {
 			} else if st := flagOf("state"); st != "" {
 				cmd.Env = append(cmd.Env, "SNOWGLOBE_FAKE_STATE="+st)
 			}
+			lifeline.Pass(cmd)
 			cmd.Start()
 			go cmd.Wait()
 			for i := 0; i < 200 && !control.Alive(msock); i++ {
@@ -122,6 +142,7 @@ func fakeServer() {
 }
 
 func fakeMachine(sock string) {
+	lifeline.Watch(func() { os.Remove(sock); os.Exit(143) })
 	os.Remove(sock)
 	l, err := net.Listen("unix", sock)
 	if err != nil {
@@ -351,38 +372,160 @@ func TestTemplatesAndMachinesLiveAndDie(t *testing.T) {
 	}
 }
 
-func TestADaemonStartedAgainTakesBackWhatRuns(t *testing.T) {
+// started is what a daemon has running: its servers' and machines' pids.
+func started(t *testing.T, c *Client) []int {
+	t.Helper()
+	var pids []int
+	ts, err := c.Templates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tpl := range ts {
+		if tpl.Pid > 0 {
+			pids = append(pids, tpl.Pid)
+		}
+	}
+	ms, _ := c.Machines(nil)
+	for _, m := range ms {
+		pids = append(pids, m.Pid)
+	}
+	return pids
+}
+
+// withEverything gives a daemon a template, a machine on it with a port, and a service with a
+// replica always running: what it starts; their pids.
+func withEverything(t *testing.T, c *Client, site string) []int {
+	t.Helper()
+	if _, err := c.AddTemplate(AddTemplate{Site: site, Name: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Up(Up{Template: "t1", Name: "m", Ports: []string{"0:80"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddService(Service{Name: "web", Template: "t1", Min: 1, Ports: []Port{{IP: "127.0.0.1", Guest: 80}}}); err != nil {
+		t.Fatal(err)
+	}
+	pids := started(t, c)
+	if len(pids) != 3 {
+		t.Fatalf("a server, a machine and a replica: %v", pids)
+	}
+	for _, p := range pids {
+		if !alive(p) {
+			t.Fatalf("pid %d isn't running", p)
+		}
+	}
+	return pids
+}
+
+func TestADaemonThatStopsStopsWhatItStarted(t *testing.T) {
 	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
 	dir := shortTemp(t)
 	d := startDaemon(t, dir, Options{})
-	c := d.c
-	tpl, err := c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "t1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, err := c.Up(Up{Template: "t1", Name: "m", Ports: []string{"0:80"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Job("m", control.JobRequest{Cmd: "x"})
+	pids := withEverything(t, d.c, fakeSite(t))
+	ts, _ := d.c.Templates()
+	sockDir := ts[0].SocketDir
 	d.stop(t)
-	defer syscall.Kill(-tpl.Pid, syscall.SIGKILL)
+	for _, p := range pids {
+		if !gone(p, 2*time.Second) {
+			t.Errorf("pid %d outlived its daemon", p)
+			syscall.Kill(p, syscall.SIGKILL)
+		}
+	}
+	if _, err := os.Stat(sockDir); !os.IsNotExist(err) {
+		t.Errorf("its sockets are left: %v", err)
+	}
+	// What it keeps says that nothing runs, and keeps the rest
+	st := loadState(filepath.Join(dir, "state.json"))
+	if len(st.Machines) != 0 || len(st.Templates) != 1 || st.Templates["t1"].Pid != 0 || len(st.Services) != 1 {
+		t.Errorf("its state: %+v %+v", st.Machines, st.Templates)
+	}
+}
 
-	// The machines outlived it; the next daemon has them, their state and their ports
+func TestADaemonStartedAgainStartsItsTemplatesAndServicesAgain(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	fastScaling(t)
+	dir := shortTemp(t)
+	d := startDaemon(t, dir, Options{})
+	old := withEverything(t, d.c, fakeSite(t))
+	d.stop(t)
+
 	d = startDaemon(t, dir, Options{})
 	defer d.stop(t)
-	ms, err := d.c.Machines(nil)
-	if err != nil || len(ms) != 1 || ms[0].Ports[0].Host != m.Ports[0].Host {
-		t.Fatalf("taken back: %+v %v", ms, err)
+	// The template from its site, the service's replica at its min; the machine is not back
+	waitFor(t, func() bool { ts, _ := d.c.Templates(); return len(ts) == 1 && !ts[0].Asleep && alive(ts[0].Pid) })
+	waitFor(t, func() bool { return len(running(t, d.c, "web")) == 1 })
+	if _, err := d.c.Machine("m"); !NotFound(err) {
+		t.Errorf("a machine back from a stopped daemon: %v", err)
 	}
-	if out := output(t)(d.c.Job("m", control.JobRequest{Cmd: "x"})); out != "x: 2\n" {
-		t.Errorf("its state: %q", out)
+	for _, p := range started(t, d.c) {
+		for _, o := range old {
+			if p == o {
+				t.Errorf("pid %d taken back", p)
+			}
+		}
 	}
-	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", m.Ports[0].Host))
+	svc, _ := d.c.Service("web")
+	if got := echo(t, svc.Ports[0].Host, "again"); got != "again" {
+		t.Errorf("the service after a restart: %q", got)
+	}
+}
+
+// A daemon killed outright (kill -9, the OOM killer, a crash) can't stop anything: what it
+// started stops itself, as its lifeline breaks.
+func TestWhatADaemonStartedEndsWhenItIsKilled(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	dir := shortTemp(t)
+	self, _ := os.Executable()
+	cmd := exec.Command(self)
+	cmd.Env = append(os.Environ(), "SNOWGLOBE_FAKE_DAEMON="+dir)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	sock := filepath.Join(dir, "daemon.sock")
+	waitFor(t, func() bool { return control.Alive(sock) })
+	c, _ := NewClient("unix://"+sock, "")
+	pids := withEverything(t, c, fakeSite(t))
+
+	cmd.Process.Signal(syscall.SIGKILL)
+	cmd.Wait()
+	for _, p := range pids {
+		if !gone(p, 3*time.Second) {
+			t.Errorf("pid %d outlived its daemon", p)
+			syscall.Kill(p, syscall.SIGKILL)
+		}
+	}
+	// Started again, it doesn't take back what is gone, and starts the template again
+	d := startDaemon(t, dir, Options{})
+	defer d.stop(t)
+	waitFor(t, func() bool { ts, _ := d.c.Templates(); return len(ts) == 1 && !ts[0].Asleep && alive(ts[0].Pid) })
+	if _, err := d.c.Machine("m"); !NotFound(err) {
+		t.Errorf("a machine of a killed daemon: %v", err)
+	}
+}
+
+func TestTheAPIStopsTheDaemon(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	d := startDaemon(t, shortTemp(t), Options{})
+	tpl, err := d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "t"})
 	if err != nil {
-		t.Fatalf("its port: %v", err)
+		t.Fatal(err)
 	}
-	conn.Close()
+	// Answered once it has stopped
+	if err := d.c.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	if alive(tpl.Pid) {
+		t.Error("its server outlived it")
+	}
+	select {
+	case err := <-d.done:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve didn't return")
+	}
 }
 
 func TestStoppedMachinesAndServersAreReaped(t *testing.T) {

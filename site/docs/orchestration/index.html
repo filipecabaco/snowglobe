@@ -86,8 +86,11 @@ snowglobe template rm api                        <span class="dim"># and its mac
             <code>/v1/templates</code>, <code>/v1/machines</code>, <code>/v1/machines/{name}/jobs</code> and
             <code>/v1/templates/{name}/jobs</code> (a job on a fresh fork). <code>--listen ADDR --token-file F</code>
             also serves it over TCP, to requests bearing the token, and <code>SNOWGLOBE_DAEMON=http://HOST:PORT</code>
-            with <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it. A daemon started again takes back the
-            templates and machines that are still running.</p>
+            with <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it. Nothing the daemon starts outlives it:
+            stopped (ctrl-c, SIGTERM, <code>snowglobe daemon stop</code>; a second ctrl-c skips the grace), it stops its template servers, machines
+            and builds; killed outright, they stop themselves, each holding a lifeline to it. Started again, it
+            restores its templates from their sites and starts its services' replicas; machines are not brought
+            back.</p>
           <p>It also builds: <code>POST /v1/builds</code> takes a directory with a Dockerfile (by its full path), an
             image reference, or a Dockerfile's text, runs <code>snowglobe build</code> (Docker when it's there; an
             image builds natively without it), and makes the result a template. <code>/v1/builds/{id}/log</code>
