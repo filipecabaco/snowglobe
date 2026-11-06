@@ -1,0 +1,4755 @@
+{
+  "schema": 1,
+  "sha": "5ddb3b781812009996fe33d375b52f2bcfa82d3d",
+  "created_at": "2026-11-06T14:41:21.477Z",
+  "sites": {
+    "typescript": {
+      "schema": 1,
+      "site": "typescript",
+      "title": "TypeScript + Zod in the browser",
+      "cpus": 1,
+      "network": "fetch",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:43:00Z",
+      "measured_at": "2026-11-06T14:39:38.491Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 653,
+              "running_ms": 681,
+              "first_output_ms": 1051,
+              "requests": 19,
+              "bytes": 63931568,
+              "not_modified": 0,
+              "sw_served": 3,
+              "heap_peak_bytes": 2749996
+            },
+            {
+              "ready_ms": 585,
+              "running_ms": 624,
+              "first_output_ms": 961,
+              "requests": 19,
+              "bytes": 63931568,
+              "not_modified": 0,
+              "sw_served": 3,
+              "heap_peak_bytes": 2710776
+            },
+            {
+              "ready_ms": 607,
+              "running_ms": 648,
+              "first_output_ms": 1041,
+              "requests": 19,
+              "bytes": 63931568,
+              "not_modified": 0,
+              "sw_served": 3,
+              "heap_peak_bytes": 2790228
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 607,
+              "min": 585,
+              "max": 653,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 648,
+              "min": 624,
+              "max": 681,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1041,
+              "min": 961,
+              "max": 1051,
+              "n": 3
+            },
+            "requests": {
+              "median": 19,
+              "min": 19,
+              "max": 19,
+              "n": 3
+            },
+            "bytes": {
+              "median": 63931568,
+              "min": 63931568,
+              "max": 63931568,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2749996,
+              "min": 2710776,
+              "max": 2790228,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 652,
+              "running_ms": 679,
+              "first_output_ms": 963,
+              "requests": 3,
+              "bytes": 61258744,
+              "not_modified": 1,
+              "sw_served": 14,
+              "heap_peak_bytes": 2625132
+            },
+            {
+              "ready_ms": 666,
+              "running_ms": 705,
+              "first_output_ms": 984,
+              "requests": 3,
+              "bytes": 61258744,
+              "not_modified": 1,
+              "sw_served": 14,
+              "heap_peak_bytes": 2617672
+            },
+            {
+              "ready_ms": 664,
+              "running_ms": 703,
+              "first_output_ms": 992,
+              "requests": 3,
+              "bytes": 61258744,
+              "not_modified": 1,
+              "sw_served": 14,
+              "heap_peak_bytes": 2610768
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 664,
+              "min": 652,
+              "max": 666,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 703,
+              "min": 679,
+              "max": 705,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 984,
+              "min": 963,
+              "max": 992,
+              "n": 3
+            },
+            "requests": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 3
+            },
+            "bytes": {
+              "median": 61258744,
+              "min": 61258744,
+              "max": 61258744,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 14,
+              "min": 14,
+              "max": 14,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2617672,
+              "min": 2610768,
+              "max": 2625132,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 30499,
+              "running_ms": 30535,
+              "first_output_ms": 30745,
+              "requests": 20,
+              "bytes": 49984078,
+              "not_modified": 0,
+              "sw_served": 5,
+              "heap_peak_bytes": 3333612
+            },
+            {
+              "ready_ms": 30513,
+              "running_ms": 30550,
+              "first_output_ms": 30766,
+              "requests": 20,
+              "bytes": 49967694,
+              "not_modified": 0,
+              "sw_served": 5,
+              "heap_peak_bytes": 3727664
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 30506,
+              "min": 30499,
+              "max": 30513,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 30542.5,
+              "min": 30535,
+              "max": 30550,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 30755.5,
+              "min": 30745,
+              "max": 30766,
+              "n": 2
+            },
+            "requests": {
+              "median": 20,
+              "min": 20,
+              "max": 20,
+              "n": 2
+            },
+            "bytes": {
+              "median": 49975886,
+              "min": 49967694,
+              "max": 49984078,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 5,
+              "min": 5,
+              "max": 5,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 3530638,
+              "min": 3333612,
+              "max": 3727664,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 4829,
+              "commands": [
+                {
+                  "command": "User.parse({ name: \"Ada\", email: \"ada@example.com\" })",
+                  "ms": 2682,
+                  "done": "quiet"
+                },
+                {
+                  "command": "User.safeParse({ name: \"\", email: \"nope\" }).error?.issues.map((i) => i.message)",
+                  "ms": 1022,
+                  "done": "quiet"
+                },
+                {
+                  "command": "const Point = z.object({ x: z.number(), y: z.number() })",
+                  "ms": 250,
+                  "done": "quiet"
+                },
+                {
+                  "command": "type Point = z.infer<typeof Point>",
+                  "ms": 186,
+                  "done": "quiet"
+                },
+                {
+                  "command": "const p: Point = Point.parse({ x: 1, y: 2 }); p",
+                  "ms": 248,
+                  "done": "quiet"
+                },
+                {
+                  "command": "z.array(z.coerce.number()).parse([\"1\", \"2\", \"3\"])",
+                  "ms": 263,
+                  "done": "quiet"
+                },
+                {
+                  "command": "Repo.parse(await (await fetch(\"https://api.github.com/repos/copy/v86\")).json())",
+                  "ms": 134,
+                  "done": "quiet"
+                },
+                {
+                  "command": "const ws = new WebSocket(\"wss://echo.websocket.org\"); ws.onmessage = (e) => console.log(\"<\", e.data)",
+                  "ms": 21,
+                  "done": "quiet"
+                },
+                {
+                  "command": "ws.send(\"hello from a sandboxed tab\")",
+                  "ms": 23,
+                  "done": "quiet"
+                }
+              ]
+            },
+            {
+              "total_ms": 4938,
+              "commands": [
+                {
+                  "command": "User.parse({ name: \"Ada\", email: \"ada@example.com\" })",
+                  "ms": 2604,
+                  "done": "quiet"
+                },
+                {
+                  "command": "User.safeParse({ name: \"\", email: \"nope\" }).error?.issues.map((i) => i.message)",
+                  "ms": 1145,
+                  "done": "quiet"
+                },
+                {
+                  "command": "const Point = z.object({ x: z.number(), y: z.number() })",
+                  "ms": 248,
+                  "done": "quiet"
+                },
+                {
+                  "command": "type Point = z.infer<typeof Point>",
+                  "ms": 195,
+                  "done": "quiet"
+                },
+                {
+                  "command": "const p: Point = Point.parse({ x: 1, y: 2 }); p",
+                  "ms": 277,
+                  "done": "quiet"
+                },
+                {
+                  "command": "z.array(z.coerce.number()).parse([\"1\", \"2\", \"3\"])",
+                  "ms": 278,
+                  "done": "quiet"
+                },
+                {
+                  "command": "Repo.parse(await (await fetch(\"https://api.github.com/repos/copy/v86\")).json())",
+                  "ms": 138,
+                  "done": "quiet"
+                },
+                {
+                  "command": "const ws = new WebSocket(\"wss://echo.websocket.org\"); ws.onmessage = (e) => console.log(\"<\", e.data)",
+                  "ms": 26,
+                  "done": "quiet"
+                },
+                {
+                  "command": "ws.send(\"hello from a sandboxed tab\")",
+                  "ms": 27,
+                  "done": "quiet"
+                }
+              ]
+            },
+            {
+              "total_ms": 4813,
+              "commands": [
+                {
+                  "command": "User.parse({ name: \"Ada\", email: \"ada@example.com\" })",
+                  "ms": 2556,
+                  "done": "quiet"
+                },
+                {
+                  "command": "User.safeParse({ name: \"\", email: \"nope\" }).error?.issues.map((i) => i.message)",
+                  "ms": 1134,
+                  "done": "quiet"
+                },
+                {
+                  "command": "const Point = z.object({ x: z.number(), y: z.number() })",
+                  "ms": 242,
+                  "done": "quiet"
+                },
+                {
+                  "command": "type Point = z.infer<typeof Point>",
+                  "ms": 185,
+                  "done": "quiet"
+                },
+                {
+                  "command": "const p: Point = Point.parse({ x: 1, y: 2 }); p",
+                  "ms": 247,
+                  "done": "quiet"
+                },
+                {
+                  "command": "z.array(z.coerce.number()).parse([\"1\", \"2\", \"3\"])",
+                  "ms": 260,
+                  "done": "quiet"
+                },
+                {
+                  "command": "Repo.parse(await (await fetch(\"https://api.github.com/repos/copy/v86\")).json())",
+                  "ms": 136,
+                  "done": "quiet"
+                },
+                {
+                  "command": "const ws = new WebSocket(\"wss://echo.websocket.org\"); ws.onmessage = (e) => console.log(\"<\", e.data)",
+                  "ms": 26,
+                  "done": "quiet"
+                },
+                {
+                  "command": "ws.send(\"hello from a sandboxed tab\")",
+                  "ms": 27,
+                  "done": "quiet"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 4829,
+              "min": 4813,
+              "max": 4938,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "User.parse({ name: \"Ada\", email: \"ada@example.com\" })",
+              "median": 2604,
+              "min": 2556,
+              "max": 2682,
+              "n": 3
+            },
+            {
+              "command": "User.safeParse({ name: \"\", email: \"nope\" }).error?.issues.map((i) => i.message)",
+              "median": 1134,
+              "min": 1022,
+              "max": 1145,
+              "n": 3
+            },
+            {
+              "command": "const Point = z.object({ x: z.number(), y: z.number() })",
+              "median": 248,
+              "min": 242,
+              "max": 250,
+              "n": 3
+            },
+            {
+              "command": "type Point = z.infer<typeof Point>",
+              "median": 186,
+              "min": 185,
+              "max": 195,
+              "n": 3
+            },
+            {
+              "command": "const p: Point = Point.parse({ x: 1, y: 2 }); p",
+              "median": 248,
+              "min": 247,
+              "max": 277,
+              "n": 3
+            },
+            {
+              "command": "z.array(z.coerce.number()).parse([\"1\", \"2\", \"3\"])",
+              "median": 263,
+              "min": 260,
+              "max": 278,
+              "n": 3
+            },
+            {
+              "command": "Repo.parse(await (await fetch(\"https://api.github.com/repos/copy/v86\")).json())",
+              "median": 136,
+              "min": 134,
+              "max": 138,
+              "n": 3
+            },
+            {
+              "command": "const ws = new WebSocket(\"wss://echo.websocket.org\"); ws.onmessage = (e) => console.log(\"<\", e.data)",
+              "median": 26,
+              "min": 21,
+              "max": 26,
+              "n": 3
+            },
+            {
+              "command": "ws.send(\"hello from a sandboxed tab\")",
+              "median": 27,
+              "min": 23,
+              "max": 27,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "supabase-1cpu": {
+      "schema": 1,
+      "site": "supabase-1cpu",
+      "title": "Supabase in the browser",
+      "cpus": 1,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:43:35Z",
+      "measured_at": "2026-11-06T14:40:39.592Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 1077,
+              "running_ms": 1132,
+              "first_output_ms": 1182,
+              "requests": 17,
+              "bytes": 151644548,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 3602200
+            },
+            {
+              "ready_ms": 1056,
+              "running_ms": 1114,
+              "first_output_ms": 1169,
+              "requests": 17,
+              "bytes": 151644548,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 3547348
+            },
+            {
+              "ready_ms": 1044,
+              "running_ms": 1099,
+              "first_output_ms": 1156,
+              "requests": 17,
+              "bytes": 151644548,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 3654136
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1056,
+              "min": 1044,
+              "max": 1077,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1114,
+              "min": 1099,
+              "max": 1132,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1169,
+              "min": 1156,
+              "max": 1182,
+              "n": 3
+            },
+            "requests": {
+              "median": 17,
+              "min": 17,
+              "max": 17,
+              "n": 3
+            },
+            "bytes": {
+              "median": 151644548,
+              "min": 151644548,
+              "max": 151644548,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3602200,
+              "min": 3547348,
+              "max": 3654136,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 1297,
+              "running_ms": 1345,
+              "first_output_ms": 1409,
+              "requests": 3,
+              "bytes": 149411640,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3407068
+            },
+            {
+              "ready_ms": 1311,
+              "running_ms": 1359,
+              "first_output_ms": 1424,
+              "requests": 3,
+              "bytes": 149411640,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3203772
+            },
+            {
+              "ready_ms": 1303,
+              "running_ms": 1350,
+              "first_output_ms": 1401,
+              "requests": 3,
+              "bytes": 149411640,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3016756
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1303,
+              "min": 1297,
+              "max": 1311,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1350,
+              "min": 1345,
+              "max": 1359,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1409,
+              "min": 1401,
+              "max": 1424,
+              "n": 3
+            },
+            "requests": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 3
+            },
+            "bytes": {
+              "median": 149411640,
+              "min": 149411640,
+              "max": 149411640,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3203772,
+              "min": 3016756,
+              "max": 3407068,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 64131,
+              "running_ms": 64179,
+              "first_output_ms": 64235,
+              "requests": 17,
+              "bytes": 87430194,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 3848924
+            },
+            {
+              "ready_ms": 64041,
+              "running_ms": 64089,
+              "first_output_ms": 64152,
+              "requests": 17,
+              "bytes": 87430194,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 3985912
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 64086,
+              "min": 64041,
+              "max": 64131,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 64134,
+              "min": 64089,
+              "max": 64179,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 64193.5,
+              "min": 64152,
+              "max": 64235,
+              "n": 2
+            },
+            "requests": {
+              "median": 17,
+              "min": 17,
+              "max": 17,
+              "n": 2
+            },
+            "bytes": {
+              "median": 87430194,
+              "min": 87430194,
+              "max": 87430194,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 3917418,
+              "min": 3848924,
+              "max": 3985912,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 7112,
+              "commands": [
+                {
+                  "command": "notes signup ada@example.com lovelace-1815",
+                  "ms": 899,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes add first program, for the analytical engine",
+                  "ms": 33,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes search engine",
+                  "ms": 30,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 730,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes signup grace@example.com hopper-1906",
+                  "ms": 2121,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 1229,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+                  "ms": 2070,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 8122,
+              "commands": [
+                {
+                  "command": "notes signup ada@example.com lovelace-1815",
+                  "ms": 881,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes add first program, for the analytical engine",
+                  "ms": 23,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes search engine",
+                  "ms": 3186,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 1989,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes signup grace@example.com hopper-1906",
+                  "ms": 644,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 1372,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+                  "ms": 27,
+                  "done": "quiet"
+                }
+              ]
+            },
+            {
+              "total_ms": 7834,
+              "commands": [
+                {
+                  "command": "notes signup ada@example.com lovelace-1815",
+                  "ms": 1029,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes add first program, for the analytical engine",
+                  "ms": 24,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes search engine",
+                  "ms": 2976,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 2081,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes signup grace@example.com hopper-1906",
+                  "ms": 535,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 1153,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+                  "ms": 36,
+                  "done": "quiet"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 7834,
+              "min": 7112,
+              "max": 8122,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "notes signup ada@example.com lovelace-1815",
+              "median": 899,
+              "min": 881,
+              "max": 1029,
+              "n": 3
+            },
+            {
+              "command": "notes add first program, for the analytical engine",
+              "median": 24,
+              "min": 23,
+              "max": 33,
+              "n": 3
+            },
+            {
+              "command": "notes search engine",
+              "median": 2976,
+              "min": 30,
+              "max": 3186,
+              "n": 3
+            },
+            {
+              "command": "notes ls",
+              "median": 1300.5,
+              "min": 730,
+              "max": 2081,
+              "n": 6
+            },
+            {
+              "command": "notes signup grace@example.com hopper-1906",
+              "median": 644,
+              "min": 535,
+              "max": 2121,
+              "n": 3
+            },
+            {
+              "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+              "median": 36,
+              "min": 27,
+              "max": 2070,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "supabase": {
+      "schema": 1,
+      "site": "supabase",
+      "title": "Supabase in the browser",
+      "cpus": 2,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:43:19Z",
+      "measured_at": "2026-11-06T14:40:04.519Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 1691,
+              "running_ms": 1742,
+              "first_output_ms": 1810,
+              "requests": 19,
+              "bytes": 152561605,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 3367420
+            },
+            {
+              "ready_ms": 1626,
+              "running_ms": 1680,
+              "first_output_ms": 1753,
+              "requests": 19,
+              "bytes": 152561605,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 3352584
+            },
+            {
+              "ready_ms": 1546,
+              "running_ms": 1596,
+              "first_output_ms": 1657,
+              "requests": 19,
+              "bytes": 152561605,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 3299460
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1626,
+              "min": 1546,
+              "max": 1691,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1680,
+              "min": 1596,
+              "max": 1742,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1753,
+              "min": 1657,
+              "max": 1810,
+              "n": 3
+            },
+            "requests": {
+              "median": 19,
+              "min": 19,
+              "max": 19,
+              "n": 3
+            },
+            "bytes": {
+              "median": 152561605,
+              "min": 152561605,
+              "max": 152561605,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3352584,
+              "min": 3299460,
+              "max": 3367420,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 1352,
+              "running_ms": 1399,
+              "first_output_ms": 1461,
+              "requests": 3,
+              "bytes": 150311662,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3308936
+            },
+            {
+              "ready_ms": 1412,
+              "running_ms": 1452,
+              "first_output_ms": 1523,
+              "requests": 3,
+              "bytes": 150311662,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3276692
+            },
+            {
+              "ready_ms": 1338,
+              "running_ms": 1390,
+              "first_output_ms": 1447,
+              "requests": 3,
+              "bytes": 150311662,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3300244
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1352,
+              "min": 1338,
+              "max": 1412,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1399,
+              "min": 1390,
+              "max": 1452,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1461,
+              "min": 1447,
+              "max": 1523,
+              "n": 3
+            },
+            "requests": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 3
+            },
+            "bytes": {
+              "median": 150311662,
+              "min": 150311662,
+              "max": 150311662,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3300244,
+              "min": 3276692,
+              "max": 3308936,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 65194,
+              "running_ms": 65250,
+              "first_output_ms": 65316,
+              "requests": 19,
+              "bytes": 88380343,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 3669876
+            },
+            {
+              "ready_ms": 65191,
+              "running_ms": 65244,
+              "first_output_ms": 65310,
+              "requests": 19,
+              "bytes": 88396727,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 3676472
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 65192.5,
+              "min": 65191,
+              "max": 65194,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 65247,
+              "min": 65244,
+              "max": 65250,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 65313,
+              "min": 65310,
+              "max": 65316,
+              "n": 2
+            },
+            "requests": {
+              "median": 19,
+              "min": 19,
+              "max": 19,
+              "n": 2
+            },
+            "bytes": {
+              "median": 88388535,
+              "min": 88380343,
+              "max": 88396727,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 3673174,
+              "min": 3669876,
+              "max": 3676472,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 3390,
+              "commands": [
+                {
+                  "command": "notes signup ada@example.com lovelace-1815",
+                  "ms": 107,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes add first program, for the analytical engine",
+                  "ms": 11,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes search engine",
+                  "ms": 694,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 1783,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes signup grace@example.com hopper-1906",
+                  "ms": 443,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 347,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+                  "ms": 5,
+                  "done": "quiet"
+                }
+              ]
+            },
+            {
+              "total_ms": 3640,
+              "commands": [
+                {
+                  "command": "notes signup ada@example.com lovelace-1815",
+                  "ms": 102,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes add first program, for the analytical engine",
+                  "ms": 8,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes search engine",
+                  "ms": 900,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 1816,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes signup grace@example.com hopper-1906",
+                  "ms": 449,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 359,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+                  "ms": 6,
+                  "done": "quiet"
+                }
+              ]
+            },
+            {
+              "total_ms": 2781,
+              "commands": [
+                {
+                  "command": "notes signup ada@example.com lovelace-1815",
+                  "ms": 89,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes add first program, for the analytical engine",
+                  "ms": 4,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes search engine",
+                  "ms": 411,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 1586,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes signup grace@example.com hopper-1906",
+                  "ms": 346,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 340,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+                  "ms": 5,
+                  "done": "quiet"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 3390,
+              "min": 2781,
+              "max": 3640,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "notes signup ada@example.com lovelace-1815",
+              "median": 102,
+              "min": 89,
+              "max": 107,
+              "n": 3
+            },
+            {
+              "command": "notes add first program, for the analytical engine",
+              "median": 8,
+              "min": 4,
+              "max": 11,
+              "n": 3
+            },
+            {
+              "command": "notes search engine",
+              "median": 694,
+              "min": 411,
+              "max": 900,
+              "n": 3
+            },
+            {
+              "command": "notes ls",
+              "median": 972.5,
+              "min": 340,
+              "max": 1816,
+              "n": 6
+            },
+            {
+              "command": "notes signup grace@example.com hopper-1906",
+              "median": 443,
+              "min": 346,
+              "max": 449,
+              "n": 3
+            },
+            {
+              "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+              "median": 5,
+              "min": 5,
+              "max": 6,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "rust": {
+      "schema": 1,
+      "site": "rust",
+      "title": "Rust + clap in the browser",
+      "cpus": 1,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:41:23Z",
+      "measured_at": "2026-11-06T14:37:08.389Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 432,
+              "running_ms": 470,
+              "first_output_ms": 511,
+              "requests": 17,
+              "bytes": 13487102,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 3286832
+            },
+            {
+              "ready_ms": 398,
+              "running_ms": 436,
+              "first_output_ms": 488,
+              "requests": 18,
+              "bytes": 23590995,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2484540
+            },
+            {
+              "ready_ms": 328,
+              "running_ms": 365,
+              "first_output_ms": 413,
+              "requests": 18,
+              "bytes": 23590995,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2410508
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 398,
+              "min": 328,
+              "max": 432,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 436,
+              "min": 365,
+              "max": 470,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 488,
+              "min": 413,
+              "max": 511,
+              "n": 3
+            },
+            "requests": {
+              "median": 18,
+              "min": 17,
+              "max": 18,
+              "n": 3
+            },
+            "bytes": {
+              "median": 23590995,
+              "min": 13487102,
+              "max": 23590995,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2484540,
+              "min": 2410508,
+              "max": 3286832,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 352,
+              "running_ms": 381,
+              "first_output_ms": 436,
+              "requests": 2,
+              "bytes": 10103893,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 2402960
+            },
+            {
+              "ready_ms": 352,
+              "running_ms": 380,
+              "first_output_ms": 434,
+              "requests": 2,
+              "bytes": 10103893,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 2396544
+            },
+            {
+              "ready_ms": 378,
+              "running_ms": 416,
+              "first_output_ms": 468,
+              "requests": 2,
+              "bytes": 10103893,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 2420196
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 352,
+              "min": 352,
+              "max": 378,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 381,
+              "min": 380,
+              "max": 416,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 436,
+              "min": 434,
+              "max": 468,
+              "n": 3
+            },
+            "requests": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 3
+            },
+            "bytes": {
+              "median": 10103893,
+              "min": 10103893,
+              "max": 10103893,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2402960,
+              "min": 2396544,
+              "max": 2420196,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 11317,
+              "running_ms": 11356,
+              "first_output_ms": 11412,
+              "requests": 17,
+              "bytes": 13487102,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 2774528
+            },
+            {
+              "ready_ms": 11309,
+              "running_ms": 11349,
+              "first_output_ms": 11397,
+              "requests": 17,
+              "bytes": 13487102,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 2775024
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 11313,
+              "min": 11309,
+              "max": 11317,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 11352.5,
+              "min": 11349,
+              "max": 11356,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 11404.5,
+              "min": 11397,
+              "max": 11412,
+              "n": 2
+            },
+            "requests": {
+              "median": 17,
+              "min": 17,
+              "max": 17,
+              "n": 2
+            },
+            "bytes": {
+              "median": 13487102,
+              "min": 13487102,
+              "max": 13487102,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 2774776,
+              "min": 2774528,
+              "max": 2775024,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 396,
+              "commands": [
+                {
+                  "command": "jtab data/languages.json",
+                  "ms": 164,
+                  "done": "prompt"
+                },
+                {
+                  "command": "jtab data/languages.json --where typing=static --sort year -r",
+                  "ms": 68,
+                  "done": "prompt"
+                },
+                {
+                  "command": "echo [] | jtab",
+                  "ms": 85,
+                  "done": "prompt"
+                },
+                {
+                  "command": "jtab --help",
+                  "ms": 79,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 330,
+              "commands": [
+                {
+                  "command": "jtab data/languages.json",
+                  "ms": 126,
+                  "done": "prompt"
+                },
+                {
+                  "command": "jtab data/languages.json --where typing=static --sort year -r",
+                  "ms": 70,
+                  "done": "prompt"
+                },
+                {
+                  "command": "echo [] | jtab",
+                  "ms": 68,
+                  "done": "prompt"
+                },
+                {
+                  "command": "jtab --help",
+                  "ms": 66,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 340,
+              "commands": [
+                {
+                  "command": "jtab data/languages.json",
+                  "ms": 132,
+                  "done": "prompt"
+                },
+                {
+                  "command": "jtab data/languages.json --where typing=static --sort year -r",
+                  "ms": 69,
+                  "done": "prompt"
+                },
+                {
+                  "command": "echo [] | jtab",
+                  "ms": 66,
+                  "done": "prompt"
+                },
+                {
+                  "command": "jtab --help",
+                  "ms": 73,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 340,
+              "min": 330,
+              "max": 396,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "jtab data/languages.json",
+              "median": 132,
+              "min": 126,
+              "max": 164,
+              "n": 3
+            },
+            {
+              "command": "jtab data/languages.json --where typing=static --sort year -r",
+              "median": 69,
+              "min": 68,
+              "max": 70,
+              "n": 3
+            },
+            {
+              "command": "echo [] | jtab",
+              "median": 68,
+              "min": 66,
+              "max": 85,
+              "n": 3
+            },
+            {
+              "command": "jtab --help",
+              "median": 73,
+              "min": 66,
+              "max": 79,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "python": {
+      "schema": 1,
+      "site": "python",
+      "title": "Python + Rich in the browser",
+      "cpus": 1,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:41:15Z",
+      "measured_at": "2026-11-06T14:38:16.839Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 421,
+              "running_ms": 465,
+              "requests": 17,
+              "bytes": 22434952,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 3118864
+            },
+            {
+              "ready_ms": 378,
+              "running_ms": 423,
+              "requests": 18,
+              "bytes": 37112165,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2670756
+            },
+            {
+              "ready_ms": 376,
+              "running_ms": 417,
+              "requests": 17,
+              "bytes": 22434952,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2678180
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 378,
+              "min": 376,
+              "max": 421,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 423,
+              "min": 417,
+              "max": 465,
+              "n": 3
+            },
+            "requests": {
+              "median": 17,
+              "min": 17,
+              "max": 18,
+              "n": 3
+            },
+            "bytes": {
+              "median": 22434952,
+              "min": 22434952,
+              "max": 37112165,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2678180,
+              "min": 2670756,
+              "max": 3118864,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 396,
+              "running_ms": 441,
+              "requests": 2,
+              "bytes": 14677213,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 2677668
+            },
+            {
+              "ready_ms": 394,
+              "running_ms": 440,
+              "requests": 2,
+              "bytes": 14677213,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 2678868
+            },
+            {
+              "ready_ms": 421,
+              "running_ms": 468,
+              "requests": 2,
+              "bytes": 14677213,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3249280
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 396,
+              "min": 394,
+              "max": 421,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 441,
+              "min": 440,
+              "max": 468,
+              "n": 3
+            },
+            "requests": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 3
+            },
+            "bytes": {
+              "median": 14677213,
+              "min": 14677213,
+              "max": 14677213,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2678868,
+              "min": 2677668,
+              "max": 3249280,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 15631,
+              "running_ms": 15675,
+              "requests": 17,
+              "bytes": 22434952,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 2939268
+            },
+            {
+              "ready_ms": 15700,
+              "running_ms": 15743,
+              "requests": 17,
+              "bytes": 22434952,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 2932928
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 15665.5,
+              "min": 15631,
+              "max": 15700,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 15709,
+              "min": 15675,
+              "max": 15743,
+              "n": 2
+            },
+            "requests": {
+              "median": 17,
+              "min": 17,
+              "max": 17,
+              "n": 2
+            },
+            "bytes": {
+              "median": 22434952,
+              "min": 22434952,
+              "max": 22434952,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 2936098,
+              "min": 2932928,
+              "max": 2939268,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 12415,
+              "commands": [
+                {
+                  "command": "print(\"[bold magenta]hello[/] from [green]Rich[/]\")",
+                  "ms": 2496,
+                  "done": "prompt"
+                },
+                {
+                  "command": "t = Table(\"language\", \"year\"); t.add_row(\"Python\", \"1991\"); t",
+                  "ms": 2935,
+                  "done": "prompt"
+                },
+                {
+                  "command": "Syntax(\"def fib(n):\\n    return n\", \"python\")",
+                  "ms": 1660,
+                  "done": "quiet"
+                },
+                {
+                  "command": "inspect(str.split)",
+                  "ms": 2368,
+                  "done": "prompt"
+                },
+                {
+                  "command": "{\"nested\": {\"data\": [1, 2, 3]}}",
+                  "ms": 1505,
+                  "done": "prompt"
+                },
+                {
+                  "command": "Tree(\"root\").add(\"leaf\")",
+                  "ms": 1076,
+                  "done": "prompt"
+                },
+                {
+                  "command": "1 / 0",
+                  "ms": 375,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 11735,
+              "commands": [
+                {
+                  "command": "print(\"[bold magenta]hello[/] from [green]Rich[/]\")",
+                  "ms": 2344,
+                  "done": "prompt"
+                },
+                {
+                  "command": "t = Table(\"language\", \"year\"); t.add_row(\"Python\", \"1991\"); t",
+                  "ms": 2772,
+                  "done": "prompt"
+                },
+                {
+                  "command": "Syntax(\"def fib(n):\\n    return n\", \"python\")",
+                  "ms": 1540,
+                  "done": "quiet"
+                },
+                {
+                  "command": "inspect(str.split)",
+                  "ms": 2292,
+                  "done": "prompt"
+                },
+                {
+                  "command": "{\"nested\": {\"data\": [1, 2, 3]}}",
+                  "ms": 1439,
+                  "done": "prompt"
+                },
+                {
+                  "command": "Tree(\"root\").add(\"leaf\")",
+                  "ms": 975,
+                  "done": "prompt"
+                },
+                {
+                  "command": "1 / 0",
+                  "ms": 373,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 12443,
+              "commands": [
+                {
+                  "command": "print(\"[bold magenta]hello[/] from [green]Rich[/]\")",
+                  "ms": 2631,
+                  "done": "prompt"
+                },
+                {
+                  "command": "t = Table(\"language\", \"year\"); t.add_row(\"Python\", \"1991\"); t",
+                  "ms": 3129,
+                  "done": "prompt"
+                },
+                {
+                  "command": "Syntax(\"def fib(n):\\n    return n\", \"python\")",
+                  "ms": 1694,
+                  "done": "quiet"
+                },
+                {
+                  "command": "inspect(str.split)",
+                  "ms": 2209,
+                  "done": "prompt"
+                },
+                {
+                  "command": "{\"nested\": {\"data\": [1, 2, 3]}}",
+                  "ms": 1381,
+                  "done": "prompt"
+                },
+                {
+                  "command": "Tree(\"root\").add(\"leaf\")",
+                  "ms": 1026,
+                  "done": "prompt"
+                },
+                {
+                  "command": "1 / 0",
+                  "ms": 373,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 12415,
+              "min": 11735,
+              "max": 12443,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "print(\"[bold magenta]hello[/] from [green]Rich[/]\")",
+              "median": 2496,
+              "min": 2344,
+              "max": 2631,
+              "n": 3
+            },
+            {
+              "command": "t = Table(\"language\", \"year\"); t.add_row(\"Python\", \"1991\"); t",
+              "median": 2935,
+              "min": 2772,
+              "max": 3129,
+              "n": 3
+            },
+            {
+              "command": "Syntax(\"def fib(n):\\n    return n\", \"python\")",
+              "median": 1660,
+              "min": 1540,
+              "max": 1694,
+              "n": 3
+            },
+            {
+              "command": "inspect(str.split)",
+              "median": 2292,
+              "min": 2209,
+              "max": 2368,
+              "n": 3
+            },
+            {
+              "command": "{\"nested\": {\"data\": [1, 2, 3]}}",
+              "median": 1439,
+              "min": 1381,
+              "max": 1505,
+              "n": 3
+            },
+            {
+              "command": "Tree(\"root\").add(\"leaf\")",
+              "median": 1026,
+              "min": 975,
+              "max": 1076,
+              "n": 3
+            },
+            {
+              "command": "1 / 0",
+              "median": 373,
+              "min": 373,
+              "max": 375,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "postgres": {
+      "schema": 1,
+      "site": "postgres",
+      "title": "PostgreSQL in the browser",
+      "cpus": 1,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:41:06Z",
+      "measured_at": "2026-11-06T14:37:47.873Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 471,
+              "running_ms": 506,
+              "first_output_ms": 539,
+              "requests": 17,
+              "bytes": 32366917,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2935116
+            },
+            {
+              "ready_ms": 1081,
+              "running_ms": 1442,
+              "first_output_ms": 1490,
+              "requests": 18,
+              "bytes": 49255851,
+              "not_modified": 0,
+              "sw_served": 0,
+              "heap_peak_bytes": 3302240
+            },
+            {
+              "ready_ms": 440,
+              "running_ms": 469,
+              "first_output_ms": 506,
+              "requests": 17,
+              "bytes": 32366917,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 3008836
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 471,
+              "min": 440,
+              "max": 1081,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 506,
+              "min": 469,
+              "max": 1442,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 539,
+              "min": 506,
+              "max": 1490,
+              "n": 3
+            },
+            "requests": {
+              "median": 17,
+              "min": 17,
+              "max": 18,
+              "n": 3
+            },
+            "bytes": {
+              "median": 32366917,
+              "min": 32366917,
+              "max": 49255851,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 1,
+              "min": 0,
+              "max": 1,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3008836,
+              "min": 2935116,
+              "max": 3302240,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 464,
+              "running_ms": 491,
+              "first_output_ms": 525,
+              "requests": 3,
+              "bytes": 30259555,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3516016
+            },
+            {
+              "ready_ms": 455,
+              "running_ms": 482,
+              "first_output_ms": 518,
+              "requests": 3,
+              "bytes": 30259555,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3525520
+            },
+            {
+              "ready_ms": 470,
+              "running_ms": 498,
+              "first_output_ms": 534,
+              "requests": 3,
+              "bytes": 30259555,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 3467772
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 464,
+              "min": 455,
+              "max": 470,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 491,
+              "min": 482,
+              "max": 498,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 525,
+              "min": 518,
+              "max": 534,
+              "n": 3
+            },
+            "requests": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 3
+            },
+            "bytes": {
+              "median": 30259555,
+              "min": 30259555,
+              "max": 30259555,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3516016,
+              "min": 3467772,
+              "max": 3525520,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 17583,
+              "running_ms": 17616,
+              "first_output_ms": 17650,
+              "requests": 17,
+              "bytes": 32366917,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 3179364
+            },
+            {
+              "ready_ms": 17618,
+              "running_ms": 17649,
+              "first_output_ms": 17682,
+              "requests": 17,
+              "bytes": 32366917,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 3176444
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 17600.5,
+              "min": 17583,
+              "max": 17618,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 17632.5,
+              "min": 17616,
+              "max": 17649,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 17666,
+              "min": 17650,
+              "max": 17682,
+              "n": 2
+            },
+            "requests": {
+              "median": 17,
+              "min": 17,
+              "max": 17,
+              "n": 2
+            },
+            "bytes": {
+              "median": 32366917,
+              "min": 32366917,
+              "max": 32366917,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 3177904,
+              "min": 3176444,
+              "max": 3179364,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 1411,
+              "commands": [
+                {
+                  "command": "SELECT * FROM planets ORDER BY moons DESC LIMIT 3;",
+                  "ms": 279,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT kind, count(*), sum(moons) FROM planets GROUP BY kind;",
+                  "ms": 166,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT n, n * n AS square FROM generate_series(1, 5) AS n;",
+                  "ms": 69,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT name, moons, rank() OVER (ORDER BY moons DESC) FROM planets LIMIT 5;",
+                  "ms": 55,
+                  "done": "prompt"
+                },
+                {
+                  "command": "\\dt+",
+                  "ms": 842,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 1330,
+              "commands": [
+                {
+                  "command": "SELECT * FROM planets ORDER BY moons DESC LIMIT 3;",
+                  "ms": 272,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT kind, count(*), sum(moons) FROM planets GROUP BY kind;",
+                  "ms": 154,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT n, n * n AS square FROM generate_series(1, 5) AS n;",
+                  "ms": 69,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT name, moons, rank() OVER (ORDER BY moons DESC) FROM planets LIMIT 5;",
+                  "ms": 51,
+                  "done": "prompt"
+                },
+                {
+                  "command": "\\dt+",
+                  "ms": 784,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 1353,
+              "commands": [
+                {
+                  "command": "SELECT * FROM planets ORDER BY moons DESC LIMIT 3;",
+                  "ms": 294,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT kind, count(*), sum(moons) FROM planets GROUP BY kind;",
+                  "ms": 163,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT n, n * n AS square FROM generate_series(1, 5) AS n;",
+                  "ms": 67,
+                  "done": "prompt"
+                },
+                {
+                  "command": "SELECT name, moons, rank() OVER (ORDER BY moons DESC) FROM planets LIMIT 5;",
+                  "ms": 48,
+                  "done": "prompt"
+                },
+                {
+                  "command": "\\dt+",
+                  "ms": 781,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 1353,
+              "min": 1330,
+              "max": 1411,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "SELECT * FROM planets ORDER BY moons DESC LIMIT 3;",
+              "median": 279,
+              "min": 272,
+              "max": 294,
+              "n": 3
+            },
+            {
+              "command": "SELECT kind, count(*), sum(moons) FROM planets GROUP BY kind;",
+              "median": 163,
+              "min": 154,
+              "max": 166,
+              "n": 3
+            },
+            {
+              "command": "SELECT n, n * n AS square FROM generate_series(1, 5) AS n;",
+              "median": 69,
+              "min": 67,
+              "max": 69,
+              "n": 3
+            },
+            {
+              "command": "SELECT name, moons, rank() OVER (ORDER BY moons DESC) FROM planets LIMIT 5;",
+              "median": 51,
+              "min": 48,
+              "max": 55,
+              "n": 3
+            },
+            {
+              "command": "\\dt+",
+              "median": 784,
+              "min": 781,
+              "max": 842,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "java": {
+      "schema": 1,
+      "site": "java",
+      "title": "Java + Gson in the browser",
+      "cpus": 2,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:41:56Z",
+      "measured_at": "2026-11-06T14:40:38.754Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 975,
+              "running_ms": 1007,
+              "requests": 27,
+              "bytes": 63275515,
+              "not_modified": 2,
+              "sw_served": 20,
+              "heap_peak_bytes": 3242896
+            },
+            {
+              "ready_ms": 928,
+              "running_ms": 959,
+              "requests": 27,
+              "bytes": 63275515,
+              "not_modified": 2,
+              "sw_served": 20,
+              "heap_peak_bytes": 3227564
+            },
+            {
+              "ready_ms": 918,
+              "running_ms": 948,
+              "requests": 27,
+              "bytes": 63275515,
+              "not_modified": 2,
+              "sw_served": 20,
+              "heap_peak_bytes": 3142060
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 928,
+              "min": 918,
+              "max": 975,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 959,
+              "min": 948,
+              "max": 1007,
+              "n": 3
+            },
+            "requests": {
+              "median": 27,
+              "min": 27,
+              "max": 27,
+              "n": 3
+            },
+            "bytes": {
+              "median": 63275515,
+              "min": 63275515,
+              "max": 63275515,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 20,
+              "min": 20,
+              "max": 20,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3227564,
+              "min": 3142060,
+              "max": 3242896,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 768,
+              "running_ms": 810,
+              "requests": 3,
+              "bytes": 58705952,
+              "not_modified": 1,
+              "sw_served": 20,
+              "heap_peak_bytes": 3183344
+            },
+            {
+              "ready_ms": 746,
+              "running_ms": 787,
+              "requests": 3,
+              "bytes": 58705952,
+              "not_modified": 1,
+              "sw_served": 20,
+              "heap_peak_bytes": 3174356
+            },
+            {
+              "ready_ms": 749,
+              "running_ms": 779,
+              "requests": 3,
+              "bytes": 58705952,
+              "not_modified": 1,
+              "sw_served": 20,
+              "heap_peak_bytes": 3190024
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 749,
+              "min": 746,
+              "max": 768,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 787,
+              "min": 779,
+              "max": 810,
+              "n": 3
+            },
+            "requests": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 3
+            },
+            "bytes": {
+              "median": 58705952,
+              "min": 58705952,
+              "max": 58705952,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 20,
+              "min": 20,
+              "max": 20,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3183344,
+              "min": 3174356,
+              "max": 3190024,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 31497,
+              "running_ms": 31536,
+              "requests": 36,
+              "bytes": 61493948,
+              "not_modified": 2,
+              "sw_served": 29,
+              "heap_peak_bytes": 3673700
+            },
+            {
+              "ready_ms": 31512,
+              "running_ms": 31542,
+              "requests": 36,
+              "bytes": 61051580,
+              "not_modified": 2,
+              "sw_served": 29,
+              "heap_peak_bytes": 3679616
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 31504.5,
+              "min": 31497,
+              "max": 31512,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 31539,
+              "min": 31536,
+              "max": 31542,
+              "n": 2
+            },
+            "requests": {
+              "median": 36,
+              "min": 36,
+              "max": 36,
+              "n": 2
+            },
+            "bytes": {
+              "median": 61272764,
+              "min": 61051580,
+              "max": 61493948,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 29,
+              "min": 29,
+              "max": 29,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 3676658,
+              "min": 3673700,
+              "max": 3679616,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 21211,
+              "commands": [
+                {
+                  "command": "gson.toJson(new Planet(\"Mars\", 0.107, 2))",
+                  "ms": 3427,
+                  "done": "quiet"
+                },
+                {
+                  "command": "gson.fromJson(\"{\\\"name\\\": \\\"Jupiter\\\", \\\"massEarths\\\": 317.8}\", Planet.class)",
+                  "ms": 2068,
+                  "done": "prompt"
+                },
+                {
+                  "command": "JsonParser.parseString(\"{\\\"a\\\": [1, 2, 3]}\").getAsJsonObject().get(\"a\")",
+                  "ms": 845,
+                  "done": "quiet"
+                },
+                {
+                  "command": "java.time.LocalDate.now().plusDays(30)",
+                  "ms": 14871,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 30848,
+              "commands": [
+                {
+                  "command": "gson.toJson(new Planet(\"Mars\", 0.107, 2))",
+                  "ms": 4068,
+                  "done": "quiet"
+                },
+                {
+                  "command": "gson.fromJson(\"{\\\"name\\\": \\\"Jupiter\\\", \\\"massEarths\\\": 317.8}\", Planet.class)",
+                  "ms": 11718,
+                  "done": "prompt"
+                },
+                {
+                  "command": "JsonParser.parseString(\"{\\\"a\\\": [1, 2, 3]}\").getAsJsonObject().get(\"a\")",
+                  "ms": 746,
+                  "done": "quiet"
+                },
+                {
+                  "command": "java.time.LocalDate.now().plusDays(30)",
+                  "ms": 14316,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 31030,
+              "commands": [
+                {
+                  "command": "gson.toJson(new Planet(\"Mars\", 0.107, 2))",
+                  "ms": 4084,
+                  "done": "quiet"
+                },
+                {
+                  "command": "gson.fromJson(\"{\\\"name\\\": \\\"Jupiter\\\", \\\"massEarths\\\": 317.8}\", Planet.class)",
+                  "ms": 11307,
+                  "done": "prompt"
+                },
+                {
+                  "command": "JsonParser.parseString(\"{\\\"a\\\": [1, 2, 3]}\").getAsJsonObject().get(\"a\")",
+                  "ms": 1013,
+                  "done": "quiet"
+                },
+                {
+                  "command": "java.time.LocalDate.now().plusDays(30)",
+                  "ms": 14626,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 30848,
+              "min": 21211,
+              "max": 31030,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "gson.toJson(new Planet(\"Mars\", 0.107, 2))",
+              "median": 4068,
+              "min": 3427,
+              "max": 4084,
+              "n": 3
+            },
+            {
+              "command": "gson.fromJson(\"{\\\"name\\\": \\\"Jupiter\\\", \\\"massEarths\\\": 317.8}\", Planet.class)",
+              "median": 11307,
+              "min": 2068,
+              "max": 11718,
+              "n": 3
+            },
+            {
+              "command": "JsonParser.parseString(\"{\\\"a\\\": [1, 2, 3]}\").getAsJsonObject().get(\"a\")",
+              "median": 845,
+              "min": 746,
+              "max": 1013,
+              "n": 3
+            },
+            {
+              "command": "java.time.LocalDate.now().plusDays(30)",
+              "median": 14626,
+              "min": 14316,
+              "max": 14871,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "iex": {
+      "schema": 1,
+      "site": "iex",
+      "title": "Elixir IEx in the browser",
+      "cpus": 1,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:41:40Z",
+      "measured_at": "2026-11-06T14:38:26.067Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 521,
+              "running_ms": 560,
+              "requests": 18,
+              "bytes": 48148740,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2593464
+            },
+            {
+              "ready_ms": 494,
+              "running_ms": 533,
+              "requests": 18,
+              "bytes": 48148740,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2598904
+            },
+            {
+              "ready_ms": 459,
+              "running_ms": 495,
+              "requests": 18,
+              "bytes": 48148740,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 3480588
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 494,
+              "min": 459,
+              "max": 521,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 533,
+              "min": 495,
+              "max": 560,
+              "n": 3
+            },
+            "requests": {
+              "median": 18,
+              "min": 18,
+              "max": 18,
+              "n": 3
+            },
+            "bytes": {
+              "median": 48148740,
+              "min": 48148740,
+              "max": 48148740,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2598904,
+              "min": 2593464,
+              "max": 3480588,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 534,
+              "running_ms": 576,
+              "requests": 3,
+              "bytes": 28769676,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 2466128
+            },
+            {
+              "ready_ms": 515,
+              "running_ms": 555,
+              "requests": 3,
+              "bytes": 28769676,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 2478816
+            },
+            {
+              "ready_ms": 572,
+              "running_ms": 612,
+              "requests": 3,
+              "bytes": 28769676,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 2457160
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 534,
+              "min": 515,
+              "max": 572,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 576,
+              "min": 555,
+              "max": 612,
+              "n": 3
+            },
+            "requests": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 3
+            },
+            "bytes": {
+              "median": 28769676,
+              "min": 28769676,
+              "max": 28769676,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2466128,
+              "min": 2457160,
+              "max": 2478816,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 17885,
+              "running_ms": 17919,
+              "requests": 17,
+              "bytes": 30989205,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 2937188
+            },
+            {
+              "ready_ms": 17898,
+              "running_ms": 17932,
+              "requests": 17,
+              "bytes": 30989205,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 2937132
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 17891.5,
+              "min": 17885,
+              "max": 17898,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 17925.5,
+              "min": 17919,
+              "max": 17932,
+              "n": 2
+            },
+            "requests": {
+              "median": 17,
+              "min": 17,
+              "max": 17,
+              "n": 2
+            },
+            "bytes": {
+              "median": 30989205,
+              "min": 30989205,
+              "max": 30989205,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 2937160,
+              "min": 2937132,
+              "max": 2937188,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 5623,
+              "commands": [
+                {
+                  "command": "Enum.map(1..5, &(&1 * &1))",
+                  "ms": 2506,
+                  "done": "prompt"
+                },
+                {
+                  "command": "for x <- 1..3, y <- [:a, :b], do: {x, y}",
+                  "ms": 2136,
+                  "done": "prompt"
+                },
+                {
+                  "command": "1..4 |> Task.async_stream(&(&1 * 10)) |> Enum.to_list()",
+                  "ms": 120,
+                  "done": "prompt"
+                },
+                {
+                  "command": "pid = spawn(fn -> receive do msg -> IO.inspect(msg, label: \"got\") end end)",
+                  "ms": 741,
+                  "done": "prompt"
+                },
+                {
+                  "command": "send(pid, {:hello, \"from a browser tab\"})",
+                  "ms": 94,
+                  "done": "prompt"
+                },
+                {
+                  "command": "h Enum.chunk_every",
+                  "ms": 26,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 5376,
+              "commands": [
+                {
+                  "command": "Enum.map(1..5, &(&1 * &1))",
+                  "ms": 2544,
+                  "done": "prompt"
+                },
+                {
+                  "command": "for x <- 1..3, y <- [:a, :b], do: {x, y}",
+                  "ms": 2074,
+                  "done": "prompt"
+                },
+                {
+                  "command": "1..4 |> Task.async_stream(&(&1 * 10)) |> Enum.to_list()",
+                  "ms": 54,
+                  "done": "prompt"
+                },
+                {
+                  "command": "pid = spawn(fn -> receive do msg -> IO.inspect(msg, label: \"got\") end end)",
+                  "ms": 601,
+                  "done": "prompt"
+                },
+                {
+                  "command": "send(pid, {:hello, \"from a browser tab\"})",
+                  "ms": 89,
+                  "done": "prompt"
+                },
+                {
+                  "command": "h Enum.chunk_every",
+                  "ms": 14,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 5450,
+              "commands": [
+                {
+                  "command": "Enum.map(1..5, &(&1 * &1))",
+                  "ms": 2513,
+                  "done": "prompt"
+                },
+                {
+                  "command": "for x <- 1..3, y <- [:a, :b], do: {x, y}",
+                  "ms": 1989,
+                  "done": "prompt"
+                },
+                {
+                  "command": "1..4 |> Task.async_stream(&(&1 * 10)) |> Enum.to_list()",
+                  "ms": 134,
+                  "done": "prompt"
+                },
+                {
+                  "command": "pid = spawn(fn -> receive do msg -> IO.inspect(msg, label: \"got\") end end)",
+                  "ms": 703,
+                  "done": "prompt"
+                },
+                {
+                  "command": "send(pid, {:hello, \"from a browser tab\"})",
+                  "ms": 95,
+                  "done": "prompt"
+                },
+                {
+                  "command": "h Enum.chunk_every",
+                  "ms": 16,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 5450,
+              "min": 5376,
+              "max": 5623,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "Enum.map(1..5, &(&1 * &1))",
+              "median": 2513,
+              "min": 2506,
+              "max": 2544,
+              "n": 3
+            },
+            {
+              "command": "for x <- 1..3, y <- [:a, :b], do: {x, y}",
+              "median": 2074,
+              "min": 1989,
+              "max": 2136,
+              "n": 3
+            },
+            {
+              "command": "1..4 |> Task.async_stream(&(&1 * 10)) |> Enum.to_list()",
+              "median": 120,
+              "min": 54,
+              "max": 134,
+              "n": 3
+            },
+            {
+              "command": "pid = spawn(fn -> receive do msg -> IO.inspect(msg, label: \"got\") end end)",
+              "median": 703,
+              "min": 601,
+              "max": 741,
+              "n": 3
+            },
+            {
+              "command": "send(pid, {:hello, \"from a browser tab\"})",
+              "median": 94,
+              "min": 89,
+              "max": 95,
+              "n": 3
+            },
+            {
+              "command": "h Enum.chunk_every",
+              "median": 16,
+              "min": 14,
+              "max": 26,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "go": {
+      "schema": 1,
+      "site": "go",
+      "title": "Go + Bubble Tea in the browser",
+      "cpus": 1,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:41:09Z",
+      "measured_at": "2026-11-06T14:37:28.134Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 373,
+              "running_ms": 413,
+              "first_output_ms": 634,
+              "requests": 19,
+              "bytes": 28018460,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 3924592
+            },
+            {
+              "ready_ms": 362,
+              "running_ms": 392,
+              "first_output_ms": 599,
+              "requests": 19,
+              "bytes": 28018460,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 3889612
+            },
+            {
+              "ready_ms": 334,
+              "running_ms": 363,
+              "first_output_ms": 576,
+              "requests": 19,
+              "bytes": 28018460,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 3539356
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 362,
+              "min": 334,
+              "max": 373,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 392,
+              "min": 363,
+              "max": 413,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 599,
+              "min": 576,
+              "max": 634,
+              "n": 3
+            },
+            "requests": {
+              "median": 19,
+              "min": 19,
+              "max": 19,
+              "n": 3
+            },
+            "bytes": {
+              "median": 28018460,
+              "min": 28018460,
+              "max": 28018460,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3889612,
+              "min": 3539356,
+              "max": 3924592,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 381,
+              "running_ms": 417,
+              "first_output_ms": 587,
+              "requests": 1,
+              "bytes": 11445106,
+              "not_modified": 0,
+              "sw_served": 13,
+              "heap_peak_bytes": 4070924
+            },
+            {
+              "ready_ms": 378,
+              "running_ms": 416,
+              "first_output_ms": 585,
+              "requests": 1,
+              "bytes": 11445106,
+              "not_modified": 0,
+              "sw_served": 13,
+              "heap_peak_bytes": 3678044
+            },
+            {
+              "ready_ms": 352,
+              "running_ms": 377,
+              "first_output_ms": 569,
+              "requests": 1,
+              "bytes": 11445106,
+              "not_modified": 0,
+              "sw_served": 13,
+              "heap_peak_bytes": 4214760
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 378,
+              "min": 352,
+              "max": 381,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 416,
+              "min": 377,
+              "max": 417,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 585,
+              "min": 569,
+              "max": 587,
+              "n": 3
+            },
+            "requests": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "bytes": {
+              "median": 11445106,
+              "min": 11445106,
+              "max": 11445106,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 13,
+              "min": 13,
+              "max": 13,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 4070924,
+              "min": 3678044,
+              "max": 4214760,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 12612,
+              "running_ms": 12655,
+              "first_output_ms": 14383,
+              "requests": 18,
+              "bytes": 16573354,
+              "not_modified": 0,
+              "sw_served": 3,
+              "heap_peak_bytes": 4815948
+            },
+            {
+              "ready_ms": 12494,
+              "running_ms": 12535,
+              "first_output_ms": 14276,
+              "requests": 18,
+              "bytes": 16573354,
+              "not_modified": 0,
+              "sw_served": 3,
+              "heap_peak_bytes": 4268948
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 12553,
+              "min": 12494,
+              "max": 12612,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 12595,
+              "min": 12535,
+              "max": 12655,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 14329.5,
+              "min": 14276,
+              "max": 14383,
+              "n": 2
+            },
+            "requests": {
+              "median": 18,
+              "min": 18,
+              "max": 18,
+              "n": 2
+            },
+            "bytes": {
+              "median": 16573354,
+              "min": 16573354,
+              "max": 16573354,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 4542448,
+              "min": 4268948,
+              "max": 4815948,
+              "n": 2
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    "elixir": {
+      "schema": 1,
+      "site": "elixir",
+      "title": "Elixir + Postgres in the browser",
+      "cpus": 2,
+      "network": "none",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:42:36Z",
+      "measured_at": "2026-11-06T14:38:30.948Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 1087,
+              "running_ms": 1118,
+              "requests": 19,
+              "bytes": 60182112,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 4065352
+            },
+            {
+              "ready_ms": 1099,
+              "running_ms": 1145,
+              "requests": 19,
+              "bytes": 60182112,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 4139624
+            },
+            {
+              "ready_ms": 1147,
+              "running_ms": 1190,
+              "requests": 19,
+              "bytes": 60182112,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 4267732
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1099,
+              "min": 1087,
+              "max": 1147,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1145,
+              "min": 1118,
+              "max": 1190,
+              "n": 3
+            },
+            "requests": {
+              "median": 19,
+              "min": 19,
+              "max": 19,
+              "n": 3
+            },
+            "bytes": {
+              "median": 60182112,
+              "min": 60182112,
+              "max": 60182112,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 4139624,
+              "min": 4065352,
+              "max": 4267732,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 867,
+              "running_ms": 913,
+              "requests": 3,
+              "bytes": 57970919,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 4073516
+            },
+            {
+              "ready_ms": 840,
+              "running_ms": 870,
+              "requests": 3,
+              "bytes": 57970919,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 4030340
+            },
+            {
+              "ready_ms": 821,
+              "running_ms": 850,
+              "requests": 3,
+              "bytes": 57970919,
+              "not_modified": 1,
+              "sw_served": 12,
+              "heap_peak_bytes": 4586156
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 840,
+              "min": 821,
+              "max": 867,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 870,
+              "min": 850,
+              "max": 913,
+              "n": 3
+            },
+            "requests": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 3
+            },
+            "bytes": {
+              "median": 57970919,
+              "min": 57970919,
+              "max": 57970919,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 4073516,
+              "min": 4030340,
+              "max": 4586156,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 33585,
+              "running_ms": 33629,
+              "requests": 19,
+              "bytes": 53132222,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 3656080
+            },
+            {
+              "ready_ms": 33606,
+              "running_ms": 33646,
+              "requests": 19,
+              "bytes": 53050302,
+              "not_modified": 2,
+              "sw_served": 12,
+              "heap_peak_bytes": 3670624
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 33595.5,
+              "min": 33585,
+              "max": 33606,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 33637.5,
+              "min": 33629,
+              "max": 33646,
+              "n": 2
+            },
+            "requests": {
+              "median": 19,
+              "min": 19,
+              "max": 19,
+              "n": 2
+            },
+            "bytes": {
+              "median": 53091262,
+              "min": 53050302,
+              "max": 53132222,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 12,
+              "min": 12,
+              "max": 12,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 3663352,
+              "min": 3656080,
+              "max": 3670624,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 996,
+              "commands": [
+                {
+                  "command": "sql \"SHOW server_version\"",
+                  "ms": 44,
+                  "done": "prompt"
+                },
+                {
+                  "command": "sql \"SELECT app, count(*) AS modules, pg_size_pretty(sum(bytes)) AS size FROM modules GROUP BY app ORDER BY sum(bytes) DESC LIMIT 8\"",
+                  "ms": 226,
+                  "done": "prompt"
+                },
+                {
+                  "command": "Repo.all(from m in ModuleRow, where: m.app == \"postgrex\", order_by: [desc: m.functions], limit: 5, select: {m.name, m.functions})",
+                  "ms": 157,
+                  "done": "prompt"
+                },
+                {
+                  "command": "sql \"SELECT app, name, functions, rank() OVER (PARTITION BY app ORDER BY functions DESC) FROM modules WHERE app IN ('ecto', 'postgrex') ORDER BY 4, 1 LIMIT 6\"",
+                  "ms": 208,
+                  "done": "prompt"
+                },
+                {
+                  "command": "h Ecto.Query.from",
+                  "ms": 361,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 1399,
+              "commands": [
+                {
+                  "command": "sql \"SHOW server_version\"",
+                  "ms": 55,
+                  "done": "prompt"
+                },
+                {
+                  "command": "sql \"SELECT app, count(*) AS modules, pg_size_pretty(sum(bytes)) AS size FROM modules GROUP BY app ORDER BY sum(bytes) DESC LIMIT 8\"",
+                  "ms": 268,
+                  "done": "prompt"
+                },
+                {
+                  "command": "Repo.all(from m in ModuleRow, where: m.app == \"postgrex\", order_by: [desc: m.functions], limit: 5, select: {m.name, m.functions})",
+                  "ms": 208,
+                  "done": "prompt"
+                },
+                {
+                  "command": "sql \"SELECT app, name, functions, rank() OVER (PARTITION BY app ORDER BY functions DESC) FROM modules WHERE app IN ('ecto', 'postgrex') ORDER BY 4, 1 LIMIT 6\"",
+                  "ms": 220,
+                  "done": "prompt"
+                },
+                {
+                  "command": "h Ecto.Query.from",
+                  "ms": 648,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 1061,
+              "commands": [
+                {
+                  "command": "sql \"SHOW server_version\"",
+                  "ms": 38,
+                  "done": "prompt"
+                },
+                {
+                  "command": "sql \"SELECT app, count(*) AS modules, pg_size_pretty(sum(bytes)) AS size FROM modules GROUP BY app ORDER BY sum(bytes) DESC LIMIT 8\"",
+                  "ms": 215,
+                  "done": "prompt"
+                },
+                {
+                  "command": "Repo.all(from m in ModuleRow, where: m.app == \"postgrex\", order_by: [desc: m.functions], limit: 5, select: {m.name, m.functions})",
+                  "ms": 147,
+                  "done": "prompt"
+                },
+                {
+                  "command": "sql \"SELECT app, name, functions, rank() OVER (PARTITION BY app ORDER BY functions DESC) FROM modules WHERE app IN ('ecto', 'postgrex') ORDER BY 4, 1 LIMIT 6\"",
+                  "ms": 223,
+                  "done": "prompt"
+                },
+                {
+                  "command": "h Ecto.Query.from",
+                  "ms": 438,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 1061,
+              "min": 996,
+              "max": 1399,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "sql \"SHOW server_version\"",
+              "median": 44,
+              "min": 38,
+              "max": 55,
+              "n": 3
+            },
+            {
+              "command": "sql \"SELECT app, count(*) AS modules, pg_size_pretty(sum(bytes)) AS size FROM modules GROUP BY app ORDER BY sum(bytes) DESC LIMIT 8\"",
+              "median": 226,
+              "min": 215,
+              "max": 268,
+              "n": 3
+            },
+            {
+              "command": "Repo.all(from m in ModuleRow, where: m.app == \"postgrex\", order_by: [desc: m.functions], limit: 5, select: {m.name, m.functions})",
+              "median": 157,
+              "min": 147,
+              "max": 208,
+              "n": 3
+            },
+            {
+              "command": "sql \"SELECT app, name, functions, rank() OVER (PARTITION BY app ORDER BY functions DESC) FROM modules WHERE app IN ('ecto', 'postgrex') ORDER BY 4, 1 LIMIT 6\"",
+              "median": 220,
+              "min": 208,
+              "max": 223,
+              "n": 3
+            },
+            {
+              "command": "h Ecto.Query.from",
+              "median": 438,
+              "min": 361,
+              "max": 648,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "curl": {
+      "schema": 1,
+      "site": "curl",
+      "title": "curl + jq in the browser",
+      "cpus": 1,
+      "network": "fetch",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:41:08Z",
+      "measured_at": "2026-11-06T14:41:08.704Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 379,
+              "running_ms": 414,
+              "first_output_ms": 448,
+              "requests": 18,
+              "bytes": 18491424,
+              "not_modified": 0,
+              "sw_served": 2,
+              "heap_peak_bytes": 2689740
+            },
+            {
+              "ready_ms": 373,
+              "running_ms": 414,
+              "first_output_ms": 467,
+              "requests": 19,
+              "bytes": 28813506,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2528568
+            },
+            {
+              "ready_ms": 328,
+              "running_ms": 368,
+              "first_output_ms": 453,
+              "requests": 19,
+              "bytes": 28813506,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2455564
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 373,
+              "min": 328,
+              "max": 379,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 414,
+              "min": 368,
+              "max": 414,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 453,
+              "min": 448,
+              "max": 467,
+              "n": 3
+            },
+            "requests": {
+              "median": 19,
+              "min": 18,
+              "max": 19,
+              "n": 3
+            },
+            "bytes": {
+              "median": 28813506,
+              "min": 18491424,
+              "max": 28813506,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 1,
+              "min": 1,
+              "max": 2,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2528568,
+              "min": 2455564,
+              "max": 2689740,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 324,
+              "running_ms": 358,
+              "first_output_ms": 408,
+              "requests": 2,
+              "bytes": 10322082,
+              "not_modified": 1,
+              "sw_served": 13,
+              "heap_peak_bytes": 2458364
+            },
+            {
+              "ready_ms": 345,
+              "running_ms": 370,
+              "first_output_ms": 419,
+              "requests": 2,
+              "bytes": 10322082,
+              "not_modified": 1,
+              "sw_served": 13,
+              "heap_peak_bytes": 2458912
+            },
+            {
+              "ready_ms": 334,
+              "running_ms": 360,
+              "first_output_ms": 411,
+              "requests": 2,
+              "bytes": 10322082,
+              "not_modified": 1,
+              "sw_served": 13,
+              "heap_peak_bytes": 2461116
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 334,
+              "min": 324,
+              "max": 345,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 360,
+              "min": 358,
+              "max": 370,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 411,
+              "min": 408,
+              "max": 419,
+              "n": 3
+            },
+            "requests": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 3
+            },
+            "bytes": {
+              "median": 10322082,
+              "min": 10322082,
+              "max": 10322082,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 13,
+              "min": 13,
+              "max": 13,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2458912,
+              "min": 2458364,
+              "max": 2461116,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 11594,
+              "running_ms": 11635,
+              "first_output_ms": 11678,
+              "requests": 18,
+              "bytes": 18491424,
+              "not_modified": 0,
+              "sw_served": 3,
+              "heap_peak_bytes": 2817224
+            },
+            {
+              "ready_ms": 11641,
+              "running_ms": 11683,
+              "first_output_ms": 11729,
+              "requests": 18,
+              "bytes": 18491424,
+              "not_modified": 0,
+              "sw_served": 3,
+              "heap_peak_bytes": 2809440
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 11617.5,
+              "min": 11594,
+              "max": 11641,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 11659,
+              "min": 11635,
+              "max": 11683,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 11703.5,
+              "min": 11678,
+              "max": 11729,
+              "n": 2
+            },
+            "requests": {
+              "median": 18,
+              "min": 18,
+              "max": 18,
+              "n": 2
+            },
+            "bytes": {
+              "median": 18491424,
+              "min": 18491424,
+              "max": 18491424,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 2813332,
+              "min": 2809440,
+              "max": 2817224,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 10309,
+              "commands": [
+                {
+                  "command": "curl -sS https://api.github.com/zen; echo",
+                  "ms": 2429,
+                  "done": "prompt"
+                },
+                {
+                  "command": "curl -sS https://api.github.com/repos/copy/v86 | jq \"{name: .full_name, stars: .stargazers_count, language}\"",
+                  "ms": 2696,
+                  "done": "prompt"
+                },
+                {
+                  "command": "curl -sS \"https://api.github.com/users/copy/repos?per_page=5&sort=updated\" | jq -r \".[].name\"",
+                  "ms": 2606,
+                  "done": "prompt"
+                },
+                {
+                  "command": "curl -sS https://httpbin.org/post -H \"content-type: application/json\" -d \"{\\\"from\\\": \\\"a sandboxed tab\\\"}\" | jq .json",
+                  "ms": 2578,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 10355,
+              "commands": [
+                {
+                  "command": "curl -sS https://api.github.com/zen; echo",
+                  "ms": 2401,
+                  "done": "prompt"
+                },
+                {
+                  "command": "curl -sS https://api.github.com/repos/copy/v86 | jq \"{name: .full_name, stars: .stargazers_count, language}\"",
+                  "ms": 2744,
+                  "done": "prompt"
+                },
+                {
+                  "command": "curl -sS \"https://api.github.com/users/copy/repos?per_page=5&sort=updated\" | jq -r \".[].name\"",
+                  "ms": 2649,
+                  "done": "prompt"
+                },
+                {
+                  "command": "curl -sS https://httpbin.org/post -H \"content-type: application/json\" -d \"{\\\"from\\\": \\\"a sandboxed tab\\\"}\" | jq .json",
+                  "ms": 2561,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 10926,
+              "commands": [
+                {
+                  "command": "curl -sS https://api.github.com/zen; echo",
+                  "ms": 2549,
+                  "done": "prompt"
+                },
+                {
+                  "command": "curl -sS https://api.github.com/repos/copy/v86 | jq \"{name: .full_name, stars: .stargazers_count, language}\"",
+                  "ms": 2939,
+                  "done": "prompt"
+                },
+                {
+                  "command": "curl -sS \"https://api.github.com/users/copy/repos?per_page=5&sort=updated\" | jq -r \".[].name\"",
+                  "ms": 2780,
+                  "done": "prompt"
+                },
+                {
+                  "command": "curl -sS https://httpbin.org/post -H \"content-type: application/json\" -d \"{\\\"from\\\": \\\"a sandboxed tab\\\"}\" | jq .json",
+                  "ms": 2658,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 10355,
+              "min": 10309,
+              "max": 10926,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "curl -sS https://api.github.com/zen; echo",
+              "median": 2429,
+              "min": 2401,
+              "max": 2549,
+              "n": 3
+            },
+            {
+              "command": "curl -sS https://api.github.com/repos/copy/v86 | jq \"{name: .full_name, stars: .stargazers_count, language}\"",
+              "median": 2744,
+              "min": 2696,
+              "max": 2939,
+              "n": 3
+            },
+            {
+              "command": "curl -sS \"https://api.github.com/users/copy/repos?per_page=5&sort=updated\" | jq -r \".[].name\"",
+              "median": 2649,
+              "min": 2606,
+              "max": 2780,
+              "n": 3
+            },
+            {
+              "command": "curl -sS https://httpbin.org/post -H \"content-type: application/json\" -d \"{\\\"from\\\": \\\"a sandboxed tab\\\"}\" | jq .json",
+              "median": 2578,
+              "min": 2561,
+              "max": 2658,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "apk": {
+      "schema": 1,
+      "site": "apk",
+      "title": "apk: packages into a running machine",
+      "cpus": 1,
+      "network": "fetch",
+      "snowglobe": "v0.0.0-20261106093803-a5a6ebc6ea4d+dirty",
+      "built_at": "2026-11-06T09:40:59Z",
+      "measured_at": "2026-11-06T14:37:17.836Z",
+      "env": {
+        "sha": "38e29a3f557d29bbdfe4c53d423fcf01e9c989b9",
+        "ref": "refs/pull/68/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 383,
+              "running_ms": 411,
+              "first_output_ms": 449,
+              "requests": 19,
+              "bytes": 23840813,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2595072
+            },
+            {
+              "ready_ms": 330,
+              "running_ms": 366,
+              "first_output_ms": 408,
+              "requests": 19,
+              "bytes": 23840813,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2580996
+            },
+            {
+              "ready_ms": 325,
+              "running_ms": 364,
+              "first_output_ms": 431,
+              "requests": 19,
+              "bytes": 23840813,
+              "not_modified": 0,
+              "sw_served": 1,
+              "heap_peak_bytes": 2469852
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 330,
+              "min": 325,
+              "max": 383,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 366,
+              "min": 364,
+              "max": 411,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 431,
+              "min": 408,
+              "max": 449,
+              "n": 3
+            },
+            "requests": {
+              "median": 19,
+              "min": 19,
+              "max": 19,
+              "n": 3
+            },
+            "bytes": {
+              "median": 23840813,
+              "min": 23840813,
+              "max": 23840813,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2580996,
+              "min": 2469852,
+              "max": 2595072,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 362,
+              "running_ms": 390,
+              "first_output_ms": 445,
+              "requests": 2,
+              "bytes": 10331145,
+              "not_modified": 1,
+              "sw_served": 13,
+              "heap_peak_bytes": 2470872
+            },
+            {
+              "ready_ms": 341,
+              "running_ms": 369,
+              "first_output_ms": 418,
+              "requests": 2,
+              "bytes": 10331145,
+              "not_modified": 1,
+              "sw_served": 13,
+              "heap_peak_bytes": 2450908
+            },
+            {
+              "ready_ms": 341,
+              "running_ms": 369,
+              "first_output_ms": 421,
+              "requests": 2,
+              "bytes": 10331145,
+              "not_modified": 1,
+              "sw_served": 13,
+              "heap_peak_bytes": 2478488
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 341,
+              "min": 341,
+              "max": 362,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 369,
+              "min": 369,
+              "max": 390,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 421,
+              "min": 418,
+              "max": 445,
+              "n": 3
+            },
+            "requests": {
+              "median": 2,
+              "min": 2,
+              "max": 2,
+              "n": 3
+            },
+            "bytes": {
+              "median": 10331145,
+              "min": 10331145,
+              "max": 10331145,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 13,
+              "min": 13,
+              "max": 13,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 2470872,
+              "min": 2450908,
+              "max": 2478488,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 11597,
+              "running_ms": 11634,
+              "first_output_ms": 11686,
+              "requests": 18,
+              "bytes": 13509668,
+              "not_modified": 0,
+              "sw_served": 3,
+              "heap_peak_bytes": 2815712
+            },
+            {
+              "ready_ms": 11597,
+              "running_ms": 11635,
+              "first_output_ms": 11679,
+              "requests": 18,
+              "bytes": 13509668,
+              "not_modified": 0,
+              "sw_served": 3,
+              "heap_peak_bytes": 2813688
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 11597,
+              "min": 11597,
+              "max": 11597,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 11634.5,
+              "min": 11634,
+              "max": 11635,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 11682.5,
+              "min": 11679,
+              "max": 11686,
+              "n": 2
+            },
+            "requests": {
+              "median": 18,
+              "min": 18,
+              "max": 18,
+              "n": 2
+            },
+            "bytes": {
+              "median": 13509668,
+              "min": 13509668,
+              "max": 13509668,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 3,
+              "min": 3,
+              "max": 3,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 2814700,
+              "min": 2813688,
+              "max": 2815712,
+              "n": 2
+            }
+          }
+        }
+      },
+      "errors": []
+    }
+  }
+}
