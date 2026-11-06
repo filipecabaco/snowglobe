@@ -43,10 +43,12 @@ type Template struct {
 	Snapshot string `json:"snapshot,omitempty"`
 	// How long it may serve no machine before its server stops (0: never), and whether it has:
 	// asleep, it starts again on its next use
-	Idle    Duration          `json:"idle,omitempty"`
-	Asleep  bool              `json:"asleep,omitempty"`
-	Labels  map[string]string `json:"labels,omitempty"`
-	Started time.Time         `json:"started"`
+	Idle   Duration `json:"idle,omitempty"`
+	Asleep bool     `json:"asleep,omitempty"`
+	// Its machines may reach the host's loopback and private addresses (--allow-private)
+	AllowPrivate bool              `json:"allow_private,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Started      time.Time         `json:"started"`
 }
 
 // Machine is a machine forked from a template, lasting until it is removed.

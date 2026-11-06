@@ -51,6 +51,9 @@ type TemplateSpec struct {
 	Snapshot    string `toml:"snapshot" json:"snapshot,omitempty"`
 	Idle        string `toml:"idle" json:"idle,omitempty"`
 	MaxMachines int    `toml:"max_machines" json:"max_machines,omitempty"`
+	// Its machines may reach the host's loopback and private addresses: another template's service
+	// through a tcp:// tunnel the site was built with, say
+	AllowPrivate bool `toml:"allow_private" json:"allow_private,omitempty"`
 	// What the build saw of its directory (a hash of its files' names, sizes and times): a change
 	// rebuilds
 	Source string `toml:"-" json:"source,omitempty"`

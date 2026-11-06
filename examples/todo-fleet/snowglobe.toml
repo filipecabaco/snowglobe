@@ -1,0 +1,33 @@
+# A todo app and its database, each a machine of its own: `snowglobe daemon --detach`, then
+# `snowglobe apply` here, and open http://127.0.0.1:8080. `snowglobe down` removes it all.
+#
+# The app reaches Postgres as db.internal:5432, a tunnel its image declares
+# (snowglobe.tunnels): each connection becomes one to the db service's host port, 15432. The app's
+# machines may reach the host's loopback for it (allow_private).
+name = "todo"
+
+# Postgres, with the todos table made when the image was built
+[templates.db]
+build = "db"
+network = "fetch"       # a service's ports need a guest with a network
+
+# Elixir: Francis for HTTP, Ecto and Postgrex for the database
+[templates.app]
+build = "app"
+network = "fetch"
+allow_private = true
+
+# One database machine: its data lives in its memory, so it stays up
+[services.db]
+template = "db"
+ports = ["15432:5432"]
+min = 1
+max = 1
+
+# The app behind localhost:8080
+[services.app]
+template = "app"
+ports = ["8080:4000"]
+min = 1
+max = 2
+concurrency = 50

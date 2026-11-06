@@ -237,6 +237,9 @@ type AddTemplate struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	// A snapshot to restore instead of the site's own state (its site, unless Site says it)
 	Snapshot string `json:"snapshot,omitempty"`
+	// Its machines may reach the host's loopback and private addresses (--allow-private): another
+	// template's service through a tcp:// tunnel, say
+	AllowPrivate bool `json:"allow_private,omitempty"`
 }
 
 // AddTemplate restores a site once, in a fork server of its own, for machines to be forked from.
@@ -298,6 +301,7 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	t := &Template{
 		Name: name, Site: site, JobsRoot: filepath.Join(dir, "jobs"), Log: filepath.Join(dir, "log"),
 		MaxMachines: max, VM: s.o.VM, Idle: req.Idle, Labels: req.Labels, Started: time.Now(),
+		AllowPrivate: req.AllowPrivate,
 	}
 	if snap != nil {
 		t.Snapshot = snap.Name
@@ -327,6 +331,9 @@ func (s *Server) startServer(t *Template) error {
 	}
 	t.SocketDir, t.Server = sockDir, filepath.Join(sockDir, "_server.sock")
 	args := []string{"run", t.Site, "--serve", t.Server, "--jobs-root", t.JobsRoot, "--max-machines", fmt.Sprint(t.MaxMachines)}
+	if t.AllowPrivate {
+		args = append(args, "--allow-private")
+	}
 	if t.Snapshot != "" {
 		s.mu.Lock()
 		snap, ok := s.st.Snapshots[t.Snapshot]

@@ -271,7 +271,7 @@ impl Net {
         let tunnels = if !specs.is_empty() {
             specs
                 .iter()
-                .map(|s| Tunnel::parse(s).ok_or_else(|| format!("--tunnel {s}: use [HOST:]PORT=ws://... or wss://...")))
+                .map(|s| Tunnel::parse(s).ok_or_else(|| format!("--tunnel {s}: use [HOST:]PORT=ws://..., wss://... or tcp://HOST:PORT")))
                 .collect::<Result<_, _>>()?
         } else {
             saved
