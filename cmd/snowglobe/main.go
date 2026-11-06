@@ -230,12 +230,19 @@ Build flags:
   --no-chunks     store every guest file in one blob, however large (default: files of 2 MiB
                   and more are split into content-defined chunks, so a read fetches only what it
                   covers and sites share identical chunks; the page then needs armless 0.3.0)
+  --agent         let an agent run commands in the page's machine: window.snowglobeAgent, and
+                  WebMCP tools (run_command, job_status, cancel_job) where the browser has
+                  WebMCP. One-CPU sites only; off by default
+  --agent-exposed-to ORIGIN
+                  also share the WebMCP tools with this origin (https://host); repeatable.
+                  Default: none, only the page's own
 
 An image can carry its own settings as labels, which flags override:
   LABEL snowglobe.ready="iex(1)> " snowglobe.title="My app" snowglobe.memory="256" \
         snowglobe.exercise='["h Enum.map", "Task.async(fn -> 1 end)"]'
   LABEL snowglobe.network="fetch" snowglobe.cpus="2" snowglobe.build-cpus="2"
   LABEL snowglobe.tunnels='["db.internal:5432=wss://db-proxy.example.com/"]'
+  LABEL snowglobe.agent="true" snowglobe.agent-exposed-to='["https://agent.example"]'
 
 The image must be 64-bit ARM Alpine: FROM alpine (multi-arch; snowglobe builds it for arm64)
 or arm64v8/alpine. Docker is the only requirement. On an x86 host, building arm64 images needs
@@ -412,6 +419,8 @@ func runBuild(args []string) error {
 	fs.StringVar(&o.Builder, "builder", os.Getenv("SNOWGLOBE_BUILDER"), "")
 	fs.IntVar(&o.BuildCPUs, "build-cpus", 0, "")
 	fs.BoolVar(&o.NoChunks, "no-chunks", false, "")
+	fs.BoolVar(&o.Agent, "agent", false, "")
+	fs.Func("agent-exposed-to", "", func(v string) error { o.AgentExposedTo = append(o.AgentExposedTo, v); return nil })
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)

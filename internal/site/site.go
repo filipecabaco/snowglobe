@@ -26,6 +26,12 @@ var sessionsJS []byte
 //go:embed session-ui.js
 var sessionUIJS []byte
 
+//go:embed agent.js
+var agentJS []byte
+
+//go:embed agent-webmcp.js
+var agentWebMCPJS []byte
+
 var tmpl = template.Must(template.New("index").Parse(page))
 
 // Page holds what varies between sites.
@@ -41,6 +47,13 @@ type Page struct {
 	TunnelToken string
 	// The console size the snapshot was taken at: its screen is replayed at this size
 	ConsoleCols, ConsoleRows int
+	// Agent puts window.snowglobeAgent in the page, and offers it as WebMCP tools where the
+	// browser has WebMCP: commands run in the machine for an agent (one-CPU sites only)
+	Agent bool
+	// AgentExposedTo is the origins, other than the page's own, its WebMCP tools are shared with
+	AgentExposedTo []string
+	// Version is snowglobe's, which the agent controller reports
+	Version string
 }
 
 // Fingerprint binds checkpoints to the exact machine and base assets. It is unchanged by pooling.
@@ -85,7 +98,12 @@ func Render(out string, p Page) error {
 			return err
 		}
 	}
-	for name, source := range map[string][]byte{"sessions.js": sessionsJS, "session-ui.js": sessionUIJS} {
+	scripts := map[string][]byte{"sessions.js": sessionsJS, "session-ui.js": sessionUIJS}
+	if p.Agent {
+		scripts["agent.js"] = agentJS
+		scripts["agent-webmcp.js"] = agentWebMCPJS
+	}
+	for name, source := range scripts {
 		if err := os.WriteFile(filepath.Join(out, name), source, 0o644); err != nil {
 			return err
 		}

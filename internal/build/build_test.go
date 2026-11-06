@@ -125,3 +125,35 @@ func TestResolveTunnels(t *testing.T) {
 		t.Errorf("token endpoint from the label: %q, %v", s.TunnelToken, err)
 	}
 }
+
+func TestResolveAgentIsOptIn(t *testing.T) {
+	s, _ := Resolve(Options{}, image(nil, "sh"))
+	if s.Agent || Page(s, "v1").Agent {
+		t.Errorf("agent jobs are off unless asked for: %+v", s)
+	}
+	s, _ = Resolve(Options{}, image(map[string]string{"snowglobe.agent": "true", "snowglobe.agent-exposed-to": `["https://agent.example"]`}, "sh"))
+	if !s.Agent || len(s.AgentExposedTo) != 1 || s.AgentExposedTo[0] != "https://agent.example" {
+		t.Errorf("labels: %+v", s)
+	}
+	p := Page(s, "v1.2.3")
+	if !p.Agent || p.Version != "v1.2.3" || len(p.AgentExposedTo) != 1 {
+		t.Errorf("page: %+v", p)
+	}
+	s, _ = Resolve(Options{Agent: true, AgentExposedTo: []string{"https://a.example:8443"}}, image(map[string]string{"snowglobe.agent": "false"}, "sh"))
+	if !s.Agent || s.AgentExposedTo[0] != "https://a.example:8443" {
+		t.Errorf("the flag wins: %+v", s)
+	}
+	for _, bad := range []Options{
+		{AgentExposedTo: []string{"https://a.example"}},                   // without --agent
+		{Agent: true, AgentExposedTo: []string{"http://a.example"}},       // not https
+		{Agent: true, AgentExposedTo: []string{"https://a.example/path"}}, // not an origin
+		{Agent: true, AgentExposedTo: []string{"a.example"}},              // no scheme
+	} {
+		if _, err := Resolve(bad, image(nil, "sh")); err == nil {
+			t.Errorf("%+v should fail", bad)
+		}
+	}
+	if _, err := Resolve(Options{}, image(map[string]string{"snowglobe.agent": "yes please"}, "sh")); err == nil {
+		t.Error("a label that isn't a boolean should fail")
+	}
+}

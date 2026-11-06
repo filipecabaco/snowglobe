@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +66,11 @@ type Options struct {
 	// archive, the boot layer is written rather than built, and snowglobe-vm runs here). Native
 	// takes an image reference or archive, not a Dockerfile
 	Builder string
+	// Agent lets an agent run commands in the page's machine: window.snowglobeAgent, and WebMCP
+	// tools where the browser has WebMCP. Off unless asked for (or the label snowglobe.agent=true)
+	Agent bool
+	// AgentExposedTo is the origins, beyond the page's own, its WebMCP tools are shared with
+	AgentExposedTo []string
 }
 
 // Settings are the resolved values a build runs with.
@@ -81,6 +87,9 @@ type Settings struct {
 	CPUs        int
 	BuildCPUs   int
 	Console     boot.Console
+	// Agent and AgentExposedTo: as in Options
+	Agent          bool
+	AgentExposedTo []string
 }
 
 // The guest is 64-bit ARM: the armless machine
@@ -290,9 +299,15 @@ func Run(o Options, version string) error {
 		if err := writeRunInfo(out, o, s, fs, files, bytes, version); err != nil {
 			return err
 		}
-		return site.Render(out, site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, CPUs: s.CPUs,
-			Tunnels: s.Tunnels, TunnelToken: s.TunnelToken, ConsoleCols: tools.ConsoleCols, ConsoleRows: tools.ConsoleRows})
+		return site.Render(out, Page(s, version))
 	})
+}
+
+// Page is the page a build with these settings renders.
+func Page(s *Settings, version string) site.Page {
+	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, CPUs: s.CPUs,
+		Tunnels: s.Tunnels, TunnelToken: s.TunnelToken, ConsoleCols: tools.ConsoleCols, ConsoleRows: tools.ConsoleRows,
+		Agent: s.Agent, AgentExposedTo: s.AgentExposedTo, Version: version}
 }
 
 // RunInfo is what a site says about itself: the measured facts of its build, for pages that
@@ -508,6 +523,31 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 			return nil, fmt.Errorf("warm pattern: %w", err)
 		}
 		s.Warm = re
+	}
+
+	// Agent jobs: opt-in, and only for a one-CPU site (several CPUs: the page says why it has none)
+	s.Agent = o.Agent
+	if !s.Agent && label("agent") != "" {
+		b, err := strconv.ParseBool(label("agent"))
+		if err != nil {
+			return nil, fmt.Errorf("label %sagent: %q is not true or false", labelPrefix, label("agent"))
+		}
+		s.Agent = b
+	}
+	s.AgentExposedTo = o.AgentExposedTo
+	if len(s.AgentExposedTo) == 0 && label("agent-exposed-to") != "" {
+		if err := json.Unmarshal([]byte(label("agent-exposed-to")), &s.AgentExposedTo); err != nil {
+			return nil, fmt.Errorf("label %sagent-exposed-to must be a JSON array of origins: %w", labelPrefix, err)
+		}
+	}
+	for _, origin := range s.AgentExposedTo {
+		u, err := url.Parse(origin)
+		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return nil, fmt.Errorf("agent-exposed-to %q: an origin, https://host[:port]", origin)
+		}
+	}
+	if len(s.AgentExposedTo) > 0 && !s.Agent {
+		return nil, errors.New("agent-exposed-to needs --agent")
 	}
 
 	s.Console = boot.Console{Env: img.Config.Env, Workdir: img.Config.WorkingDir, Command: s.Command}

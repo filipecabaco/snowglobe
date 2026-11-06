@@ -75,6 +75,36 @@ snowglobe stop tpl</pre>
             lists and checks ports, diffs and applies fleet files, and reads the daemon's status and events. <code>SNOWGLOBE_DAEMON</code> points it at a daemon on another host.</p>
           <pre>claude mcp add snowglobe -- snowglobe mcp --daemon</pre>
 
+          <h2 class="h3" id="in-the-page">In the page: --agent and WebMCP</h2>
+          <p>A site built with <code>--agent</code> (or the label <code>snowglobe.agent="true"</code>) lets an agent
+            run commands in the machine in the visitor's own tab. Nothing runs on a server. It is off unless asked
+            for, and only for one-CPU sites: on more CPUs nothing is offered and the status says why.</p>
+          <pre>snowglobe build examples/curl --agent</pre>
+          <p>Where the browser has WebMCP (<code>document.modelContext</code>), the page registers three tools, named
+            as <code>snowglobe mcp</code> names its own. Any WebMCP client can use them: a browser's built-in agent,
+            an extension, a chat page. A page in a browser without WebMCP can load a polyfill, such as MCP-B's
+            <code>@mcp-b/global</code>, before snowglobe's scripts.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>run_command</code></td><td>starts <code>command</code> and returns its job id at once; <code>timeout_seconds</code> (default 300, at most 3600) and <code>request_id</code> (a retry returns the same job) are optional</td></tr>
+                <tr><td><code>job_status</code></td><td>the job's output so far, ending <code>[running]</code>, or as <code>snowglobe mcp</code>'s ends: <code>[exit N]</code>, <code>[timed out]</code>, <code>[stopped]</code></td></tr>
+                <tr><td><code>cancel_job</code></td><td>stops the job: its command and everything it started are killed</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>One job runs at a time; starting another while one runs is refused. The first run asks the person at the
+            page to allow it. The tools are the page's own: <code>--agent-exposed-to https://host</code> (repeatable)
+            shares them with other origins too.</p>
+          <p>Scripts and tests can use the same thing directly as <code>window.snowglobeAgent</code>:
+            <code>capabilities()</code>, <code>status()</code> (booting, ready, busy, saving or failed),
+            <code>runCommand({command, timeoutSeconds, requestId})</code>, <code>readJob(jobId)</code> and
+            <code>cancelJob(jobId)</code>. A job's output keeps its most recent 1 MiB and says when it dropped some.</p>
+          <p>Jobs run as root on the guest's serial shell, beside the app, as <code>snowglobe sh</code>'s do: the
+            terminal on the page never shows them. Each starts in a fresh <code>/sgjob/&lt;id&gt;</code>; files elsewhere
+            persist. There is no file transfer in the page yet.</p>
+
           <h2 class="h3" id="limits">Limits, stopping and logs</h2>
           <div class="table-wrap">
             <table>
