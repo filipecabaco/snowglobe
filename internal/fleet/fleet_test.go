@@ -352,7 +352,7 @@ func TestAChangeReplacesWhatChangedAndWhatIsMadeFromIt(t *testing.T) {
 	f, _ = Load(path)
 	p, _ = f.Plan(api)
 	got := strings.Join(steps(p), "|")
-	if !strings.Contains(got, "- service web (not in the file)") || !strings.Contains(got, "~ machine worker") {
+	if !strings.Contains(got, "- service web (not in the file)") || !strings.Contains(got, "~ machine worker (changed)") {
 		t.Errorf("entry gone and count changed: %v", got)
 	}
 	p.Apply(api, b.build, quiet)

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -107,6 +108,11 @@ func TestThePageInChrome(t *testing.T) {
 	base := strings.Replace(ts.URL, "127.0.0.1", "localhost", 1)
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.WindowSize(1440, 1000))
+	// Ubuntu 24.04's AppArmor refuses Chrome the user namespaces its sandbox needs, and Chrome
+	// aborts at start: on CI (a throwaway runner, a page of our own) it runs without one
+	if os.Getenv("CI") != "" {
+		opts = append(opts, chromedp.NoSandbox)
+	}
 	actx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancel()
 	ctx, cancel := chromedp.NewContext(actx)

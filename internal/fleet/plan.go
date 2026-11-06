@@ -256,7 +256,12 @@ func (f *File) PlanInstance(api API, inst string) (*Plan, error) {
 		if o.Kind == KindMachine && same && len(hashes) != len(p.names(o)) {
 			same = false
 		}
-		step := Step{Kind: o.Kind, Name: p.names(o)[0], Key: o.Key(), Deps: o.Deps, PerInstance: perInstance(o)}
+		// Named as the entry is (in this instance): a machine entry with count is one step
+		name := o.Name
+		if perInstance(o) {
+			name = nameIn(o.Name, p.Instance)
+		}
+		step := Step{Kind: o.Kind, Name: name, Key: o.Key(), Deps: o.Deps, PerInstance: perInstance(o)}
 		switch {
 		case same:
 			p.Unchanged++
