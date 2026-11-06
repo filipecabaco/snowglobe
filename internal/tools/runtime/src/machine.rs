@@ -261,10 +261,12 @@ pub struct Net {
     pub tunnels: Vec<Tunnel>,
     /// Loopback and private addresses are off limits unless allowed
     pub allow_private: bool,
+    /// Nothing leaves at all but links (`--egress none`)
+    pub deny_all: bool,
 }
 
 impl Net {
-    /// `--tunnel [HOST:]PORT=URL` (repeatable) and `--allow-private`; without --tunnel, the
+    /// `--tunnel [HOST:]PORT=URL` (repeatable), `--egress` and `--allow-private`; without --tunnel, the
     /// ones the site was built with (run.json's `tunnels`), if any.
     pub fn from_args(args: &crate::Args, saved: Option<&serde_json::Value>) -> Result<Net, String> {
         let specs = args.all("tunnel");
@@ -288,7 +290,14 @@ impl Net {
                 .collect::<Option<_>>()
                 .ok_or("run.json: tunnels must be { host, port, url }")?
         };
-        Ok(Net { tunnels, allow_private: args.has("allow-private") })
+        // --egress none | internet | private (--allow-private is private)
+        let (allow_private, deny_all) = match args.get("egress") {
+            None | Some("internet") => (args.has("allow-private"), false),
+            Some("private") => (true, false),
+            Some("none") => (false, true),
+            Some(other) => return Err(format!("--egress {other}: none, internet or private")),
+        };
+        Ok(Net { tunnels, allow_private, deny_all })
     }
 }
 
@@ -304,7 +313,7 @@ pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, a
             network: network == "fetch",
             // Direct, or through the proxy the environment names: sandboxes that only let HTTPS
             // out through a (TLS-intercepting) proxy work too
-            egress: Egress { allow_private: net.allow_private, ..Egress::from_env() },
+            egress: Egress { allow_private: net.allow_private, deny_all: net.deny_all, ..Egress::from_env() },
             tunnels: net.tunnels,
         },
         Box::new(move |e| a.observe(e)),
@@ -529,7 +538,20 @@ mod tests {
     }
 
     #[test]
+    fn egress_is_none_internet_or_private() {
+        let n = Net::from_args(&args(&["--egress", "none"]), None).unwrap();
+        assert!(n.deny_all && !n.allow_private);
+        let n = Net::from_args(&args(&["--egress", "private"]), None).unwrap();
+        assert!(!n.deny_all && n.allow_private);
+        let n = Net::from_args(&args(&["--allow-private"]), None).unwrap();
+        assert!(!n.deny_all && n.allow_private);
+        assert!(!Net::from_args(&args(&[]), None).unwrap().deny_all);
+        assert!(Net::from_args(&args(&["--egress", "sometimes"]), None).is_err());
+    }
+
+    #[test]
     fn tunnels_come_from_the_flags_else_from_run_json() {
+
         let saved = serde_json::json!([{ "host": "db", "port": 5432, "url": "wss://a/db" }, { "port": 6379, "url": "ws://b" }]);
         let n = Net::from_args(&args(&[]), Some(&saved)).unwrap();
         assert_eq!(n.tunnels.len(), 2);

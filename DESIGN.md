@@ -264,8 +264,21 @@ sent to its section's page.
 
 ### Orchestration UI (Operate surface)
 `snowglobe ui` (`internal/ui/static/`) shows a running daemon in a browser, in the same world. It
-embeds copies of `base.css`, `theme.js` and the fonts (a test keeps them identical to `site/`). Its
-layout is a timeline: the main column opens on one time axis spanning what the daemon has lived (10
+embeds copies of `base.css`, `theme.js` and the fonts (a test keeps them identical to `site/`), all
+served gzipped from the binary. It is one view at a time, chosen in the masthead (the open one
+underlined in ink): Overview, Network, Fleets, Machines, Run, Builds. Each view opens with its title
+and, at the right, what it says or a legend.
+
+**Network** draws what reaches what: the templates and their links dotted at the top (the plan), then
+a ruled group per fleet instance with its machines in their template's column, solid ink edges where
+one really reaches another (the name it uses in a mono chip), and a signal square tagging each host
+port on the node it opens. Template nodes sit on Bone, the others on paper with a hairline; a selected
+one takes an ink edge and fades the rest. **Fleets** is the run list's two zones: the fleets on the
+left (a 2px ink bar marks the open one), the open fleet on the right with its instances as underlined
+tabs, its steps as ruled rows each with its own outlined Apply, and its file in a mono editor.
+**Machines** has one control per task as underlined tabs, each a small form, over the ruled tables.
+
+The Overview's layout is a timeline: the main column opens on one time axis spanning what the daemon has lived (10
 minutes to an hour). Ruled series rows hold memory against the budget (dashed), the templates running
 (one 24px ink step-area strip per template on a shared scale, named at the left with its machine count,
 grey when none run) and jobs: a label, a figure-scale value, and a 1.5px ink line or ink bars. Under them come event ticks,

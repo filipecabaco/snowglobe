@@ -40,9 +40,9 @@ fn usage() -> ExitCode {
         "usage:
   snowglobe-vm snapshot <system dir> [--memory MB] [--cpus N] [--network none|fetch]
                         [--ready TEXT] [--exercise COMMAND ...]
-                        [--tunnel [HOST:]PORT=URL ...] [--allow-private]
+                        [--tunnel [HOST:]PORT=URL ...] [--egress none|internet|private] [--allow-private]
   snowglobe-vm run <site dir> [--blobs DIR] [--detached] [--socket PATH] [--forward PORT:GUEST ...]
-                   [--tunnel [HOST:]PORT=URL ...] [--allow-private] [--record-reads FILE]
+                   [--tunnel [HOST:]PORT=URL ...] [--egress none|internet|private] [--allow-private] [--record-reads FILE]
                    [--workspace DIR --cmd COMMAND [--env K=V ...] [--env-file JSON] [--timeout SECS]]
                    [--max-runtime SECS] [--stop-file PATH ...] [--log-dir DIR]
                    [--serve SOCKET --jobs-root DIR [--max-jobs N]]   (jobs forked from one restore)
@@ -97,7 +97,7 @@ impl Args {
     }
 }
 
-pub const RUN_FLAGS: &[&str] = &["max-runtime", "stop-file", "log-dir", "blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "max-machines", "state", "server"];
+pub const RUN_FLAGS: &[&str] = &["egress", "max-runtime", "stop-file", "log-dir", "blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "max-machines", "state", "server"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

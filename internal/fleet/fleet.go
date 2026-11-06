@@ -6,6 +6,17 @@
 // What a fleet makes carries two labels: snowglobe.fleet (its name) and snowglobe.spec (a hash of
 // the entry that made it). What has the fleet's label and isn't in the file is removed; what is in
 // it with another hash is replaced, with everything made from it.
+//
+// Nothing joins its machines but what the file says. [network] mode says how its links resolve:
+// "exclusive" (the default) keeps each instance to itself (app#2 reaches db#2), "inclusive" lets
+// every machine of a template reach any machine of the target's template across instances, and
+// "all" also links every template to every other one's exposed ports (expose). A template's
+// egress is "none" unless the file says "internet" or "private".
+//
+// A fleet runs as instances, like `docker compose -p`: templates and snapshots are shared (built
+// and restored once), services, machines and exclusive links are made per instance, labelled
+// snowglobe.instance. Instance main keeps the file's names; another's carry its name
+// (db-2), and its host ports are picked by the system.
 package fleet
 
 import (
@@ -38,6 +49,8 @@ type File struct {
 	Snapshots map[string]SnapshotSpec `toml:"snapshots"`
 	Services  map[string]ServiceSpec  `toml:"services"`
 	Machines  map[string]MachineSpec  `toml:"machines"`
+	Links     map[string]LinkSpec     `toml:"links"`
+	Network   NetworkSpec             `toml:"network"`
 	// Where the file is: relative paths in it are from here
 	Dir string `toml:"-"`
 }
@@ -54,6 +67,11 @@ type TemplateSpec struct {
 	// Its machines may reach the host's loopback and private addresses: another template's service
 	// through a tcp:// tunnel the site was built with, say
 	AllowPrivate bool `toml:"allow_private" json:"allow_private,omitempty"`
+	// Where its machines' connections may go: none (the default: only links and forwarded ports),
+	// internet, or private (also the host's loopback and private addresses)
+	Egress string `toml:"egress" json:"egress,omitempty"`
+	// Guest ports the other templates reach it on under [network] mode = "all"
+	Expose []int `toml:"expose" json:"expose,omitempty"`
 	// What the build saw of its directory (a hash of its files' names, sizes and times): a change
 	// rebuilds
 	Source string `toml:"-" json:"source,omitempty"`
@@ -87,6 +105,50 @@ type MachineSpec struct {
 	Ports    []string          `toml:"ports" json:"ports,omitempty"`
 	TTL      string            `toml:"ttl" json:"ttl,omitempty"`
 	Labels   map[string]string `toml:"labels" json:"labels,omitempty"`
+}
+
+// NetworkSpec is a fleet's network profile.
+type NetworkSpec struct {
+	// exclusive (the default), inclusive or all
+	Mode string `toml:"mode"`
+}
+
+// Network modes
+const (
+	Exclusive = "exclusive"
+	Inclusive = "inclusive"
+	All       = "all"
+)
+
+// mode is the fleet's network mode.
+func (f *File) mode() string {
+	if f.Network.Mode == "" {
+		return Exclusive
+	}
+	return f.Network.Mode
+}
+
+// egress is a template's egress: none unless it says, private with allow_private.
+func (t TemplateSpec) egress() string {
+	switch {
+	case t.Egress != "":
+		return t.Egress
+	case t.AllowPrivate:
+		return "private"
+	}
+	return "none"
+}
+
+// LinkSpec is a link: the guests of From (a template or machine of the file) reach To (a service
+// or machine of the file) at its guest Port as As:AsPort (To and Port by default).
+type LinkSpec struct {
+	From   string `toml:"from" json:"from"`
+	To     string `toml:"to" json:"to"`
+	Port   int    `toml:"port" json:"port"`
+	As     string `toml:"as" json:"as,omitempty"`
+	AsPort int    `toml:"as_port" json:"as_port,omitempty"`
+	// The network mode it resolves under (the file's)
+	Mode string `toml:"-" json:"mode,omitempty"`
 }
 
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
@@ -155,6 +217,19 @@ func (f *File) check() error {
 		if t.Network != "" && t.Build == "" {
 			bad("template %s: network is for build", n)
 		}
+		switch t.Egress {
+		case "", "none", "internet", "private":
+		default:
+			bad("template %s: egress %q: none, internet or private", n, t.Egress)
+		}
+		if t.AllowPrivate && t.Egress != "" && t.Egress != "private" {
+			bad("template %s: allow_private with egress %s", n, t.Egress)
+		}
+		for _, p := range t.Expose {
+			if p < 1 || p > 65535 {
+				bad("template %s: expose %d: 1 to 65535", n, p)
+			}
+		}
 		duration("template "+n+": idle", t.Idle)
 	}
 	for n, s := range f.Snapshots {
@@ -185,6 +260,27 @@ func (f *File) check() error {
 		}
 		duration("machine "+n+": ttl", m.TTL)
 	}
+	switch f.Network.Mode {
+	case "", Exclusive, Inclusive, All:
+	default:
+		bad("network mode %q: exclusive, inclusive or all", f.Network.Mode)
+	}
+	for n, l := range f.Links {
+		name("link", n)
+		if _, ok := f.Templates[l.From]; !ok {
+			if m, ok := f.Machines[l.From]; !ok || m.Count > 1 {
+				bad("link %s: from a template, or a machine (count 1), of the file; not %q", n, l.From)
+			}
+		}
+		if _, ok := f.Services[l.To]; !ok {
+			if m, ok := f.Machines[l.To]; !ok || m.Count > 1 {
+				bad("link %s: to a service, or a machine (count 1), of the file; not %q", n, l.To)
+			}
+		}
+		if l.Port < 1 || l.Port > 65535 || l.AsPort < 0 || l.AsPort > 65535 {
+			bad("link %s: port (the target's guest port) and as_port 1 to 65535", n)
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return err
 	}
@@ -195,7 +291,18 @@ func (f *File) check() error {
 	return nil
 }
 
+// linkEnd is the key of a link's end: the file's kind (a template or service, else a machine).
+func (f *File) linkEnd(name, kind string) string {
+	_, isTemplate := f.Templates[name]
+	_, isService := f.Services[name]
+	if kind == KindTemplate && isTemplate || kind == KindService && isService {
+		return kind + "/" + name
+	}
+	return KindMachine + "/" + name
+}
+
 // path resolves a path in the file against its directory.
+
 func (f *File) path(p string) string {
 	if p == "" || filepath.IsAbs(p) || strings.Contains(p, "://") {
 		return p
@@ -209,6 +316,7 @@ const (
 	KindSnapshot = "snapshot"
 	KindService  = "service"
 	KindMachine  = "machine"
+	KindLink     = "link"
 )
 
 // Object is one thing the fleet wants: its spec, a hash of it, and what it is made from.
@@ -248,8 +356,32 @@ func (f *File) objects() ([]Object, error) {
 	for n, m := range f.Machines {
 		all = append(all, Object{Kind: KindMachine, Name: n, Spec: m, Deps: []string{KindTemplate + "/" + m.Template}})
 	}
-	// Templates (and the snapshots they need) first, then services, then machines; by name within
-	rank := map[string]int{KindTemplate: 0, KindSnapshot: 1, KindService: 2, KindMachine: 3}
+	for n, l := range f.Links {
+		l.Mode = f.mode()
+		all = append(all, Object{Kind: KindLink, Name: n, Spec: l, Deps: []string{f.linkEnd(l.From, KindTemplate), f.linkEnd(l.To, KindService)}})
+	}
+	// Mode all: every template reaches every other one's exposed ports by its name
+	if f.mode() == All {
+		for a := range f.Templates {
+			for b, tb := range f.Templates {
+				if a == b {
+					continue
+				}
+				for _, port := range tb.Expose {
+					n := fmt.Sprintf("all-%s-%s-%d", a, b, port)
+					if !nameRE.MatchString(n) {
+						sum := sha256.Sum256([]byte(n))
+						n = "all-" + hex.EncodeToString(sum[:6])
+					}
+					all = append(all, Object{Kind: KindLink, Name: n, Spec: LinkSpec{From: a, To: b, Port: port, As: b, Mode: All},
+						Deps: []string{KindTemplate + "/" + a, KindTemplate + "/" + b}})
+				}
+			}
+		}
+	}
+	// Templates (and the snapshots they need) first, then services, machines and links; by name within
+	rank := map[string]int{KindTemplate: 0, KindSnapshot: 1, KindService: 2, KindMachine: 3, KindLink: 4}
+
 	sort.Slice(all, func(i, j int) bool {
 		if rank[all[i].Kind] != rank[all[j].Kind] {
 			return rank[all[i].Kind] < rank[all[j].Kind]

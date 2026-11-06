@@ -3,7 +3,9 @@ package ui
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -126,21 +128,48 @@ func TestLocalHost(t *testing.T) {
 	}
 }
 
-// The vendored ghostty-web is the release it says it is (ghostty-web 0.4.0 from npm; its
-// WebAssembly is inline in ghostty-web.js, loaded from a data: URL)
-func TestVendoredGhosttyWebIsPinned(t *testing.T) {
-	for name, want := range map[string]string{
-		"ghostty-web.js":  "078b3fe37e4ef469d3f3d7772ee263070f8613e5a6f5ff305c85778907f45e72",
-		"__vite-browser-external-2447137e.js": "f8c456031e5001c0cda4837cd9ee3a33d79beeba120ec633ec9d990632fb2aa6",
-	} {
-		data, err := os.ReadFile(filepath.Join("static", "vendor", "ghostty-web", name))
-		if err != nil {
-			t.Fatal(err)
+// The vendored libraries are what vendor.json pins (vendor.go took them from npm, checked
+// against each tarball's integrity): every file the manifest lists, byte for byte, and nothing
+// else under static/vendor
+func TestVendoredLibrariesAreTheManifests(t *testing.T) {
+	data, err := os.ReadFile("vendor.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Packages []struct {
+			Name   string            `json:"name"`
+			SHA256 map[string]string `json:"sha256"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{"vendor/preact/index.js": true}
+	for _, p := range m.Packages {
+		if len(p.SHA256) == 0 {
+			t.Errorf("%s: no sha256 in vendor.json (go run vendor.go -update %s)", p.Name, p.Name)
 		}
-		if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != want {
-			t.Errorf("%s changed: %x", name, sum)
+		for name, want := range p.SHA256 {
+			listed[name] = true
+			data, err := os.ReadFile(filepath.Join("static", name))
+			if err != nil {
+				t.Error(err)
+				continue
+			}
+			if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != want {
+				t.Errorf("static/%s isn't %s's as vendor.json pins it", name, p.Name)
+			}
 		}
 	}
+	filepath.WalkDir(filepath.Join("static", "vendor"), func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			if name := filepath.ToSlash(strings.TrimPrefix(path, "static/")); !listed[name] {
+				t.Errorf("static/%s isn't in vendor.json", name)
+			}
+		}
+		return nil
+	})
 }
 
 // The UI's copies of the site's stylesheet, theme toggle and fonts are the site's own

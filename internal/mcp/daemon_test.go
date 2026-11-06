@@ -76,6 +76,26 @@ func (f *fakeDaemon) Up(u daemon.Up) (*daemon.Machine, error) {
 	f.machines[u.Name] = m
 	return &m, nil
 }
+func (f *fakeDaemon) Links() ([]daemon.Link, error)               { return nil, nil }
+func (f *fakeDaemon) AddLink(l daemon.Link) (*daemon.Link, error) { return &l, nil }
+func (f *fakeDaemon) RemoveLink(string) error                     { return nil }
+func (f *fakeDaemon) Graph() (*daemon.Graph, error)               { return &daemon.Graph{}, nil }
+func (f *fakeDaemon) Fleets() ([]daemon.FleetInfo, error)         { return nil, nil }
+func (f *fakeDaemon) AddFleet(string) error                       { return nil }
+func (f *fakeDaemon) WriteFleet(string, string) error             { return nil }
+func (f *fakeDaemon) Fleet(string) (json.RawMessage, error)       { return json.RawMessage(`{}`), nil }
+func (f *fakeDaemon) StartInstance(string, string) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
+func (f *fakeDaemon) StopInstance(string, string) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
+func (f *fakeDaemon) ApplyFleet(string, string, string) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
+func (f *fakeDaemon) ForgetFleet(string, bool) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
 func (f *fakeDaemon) RemoveMachine(name string) error { delete(f.machines, name); return nil }
 func (f *fakeDaemon) Job(name string, req control.JobRequest) (*control.JobResult, error) {
 	f.jobs = append(f.jobs, "machine "+name+": "+req.Cmd)

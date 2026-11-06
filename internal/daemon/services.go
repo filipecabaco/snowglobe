@@ -313,6 +313,12 @@ func (s *Server) startReplica(name string) (*Machine, error) {
 	var req Up
 	if ok {
 		req = Up{Template: svc.Template, Name: randomName(name), Labels: map[string]string{serviceLabel: name}}
+		// A replica is of its service's fleet and instance: its instance's links are its own
+		for _, k := range []string{"snowglobe.fleet", InstanceLabel} {
+			if v := svc.Labels[k]; v != "" {
+				req.Labels[k] = v
+			}
+		}
 		if svc.State == "keep" {
 			req.Snapshot = svc.Saved
 		}
@@ -454,6 +460,7 @@ func (s *Server) RemoveService(name string) error {
 	s.save()
 	s.mu.Unlock()
 	s.note("service.removed", "service "+name, "removed")
+	s.dropLinks(KindService, name)
 	return nil
 }
 

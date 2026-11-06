@@ -155,6 +155,16 @@ func fakeMachine(sock string) {
 				send(c, map[string]any{"bytes": 1, "ms": 1})
 			}
 			c.Close()
+		case "links":
+			// Kept beside the socket, for the test to read
+			data, _ := json.Marshal(req["links"])
+			os.WriteFile(sock+".links", data, 0o600)
+			n := 0
+			if l, ok := req["links"].([]any); ok {
+				n = len(l)
+			}
+			send(c, map[string]any{"links": n})
+			c.Close()
 		case "connect":
 			send(c, map[string]any{"connected": req["port"]})
 			go func() { io.Copy(c, r); c.Close() }()

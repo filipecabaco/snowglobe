@@ -42,6 +42,9 @@ type Options struct {
 	Logf func(format string, a ...any)
 	// Snowglobe is the snowglobe command builds run (empty: this program)
 	Snowglobe string
+	// Routes, when set, adds routes of its own to the API (the fleet's, which this package can't
+	// import)
+	Routes func(*http.ServeMux)
 	// Whether Docker can build here (nil: ask it); for tests
 	dockerThere func() bool
 }
@@ -73,6 +76,9 @@ type Server struct {
 	builds *builds
 	// Fire-and-forget runs, for /v1/runs
 	runs *runs
+	// Each machine's link sockets, by link, and whether it was given links (guarded by mu)
+	linkSocks map[string]map[string]*linkSock
+	linked    map[string]bool
 }
 
 // How long a template gets to restore, and a machine or server to go once asked
@@ -92,7 +98,8 @@ func New(o Options) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery,
-		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery, runs: newRuns()}
+		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery, runs: newRuns(),
+		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}}
 	if o.memOf != nil {
 		s.memOf = o.memOf
 	}
@@ -133,10 +140,34 @@ func New(o Options) (*Server, error) {
 			o.Logf("service %s: %v", name, err)
 		}
 	}
+	// Links: what they are from or to must still be there
+	for name, l := range s.st.Links {
+		if !s.has(l.FromKind, l.From) || !s.has(l.ToKind, l.To) {
+			o.Logf("link %s: what it joined is gone", name)
+			delete(s.st.Links, name)
+		}
+	}
 	if err := saveState(s.statePath, s.st); err != nil {
 		return nil, err
 	}
+	s.relink()
 	return s, nil
+}
+
+// has says whether the daemon has kind name. Called with s.mu held, or before serving.
+func (s *Server) has(kind, name string) bool {
+	switch kind {
+	case KindMachine:
+		_, ok := s.st.Machines[name]
+		return ok
+	case KindTemplate:
+		_, ok := s.st.Templates[name]
+		return ok
+	case KindService:
+		_, ok := s.st.Services[name]
+		return ok
+	}
+	return false
 }
 
 // Serve answers the API until ctx is done. Templates and machines outlive it: a daemon started
@@ -190,6 +221,11 @@ func (s *Server) Serve(ctx context.Context) error {
 			l.Close()
 		}
 	}
+	for _, mine := range s.linkSocks {
+		for _, ls := range mine {
+			ls.ln.Close()
+		}
+	}
 	s.mu.Unlock()
 	s.svc.mu.Lock()
 	for _, ls := range s.svc.listeners {
@@ -240,6 +276,10 @@ type AddTemplate struct {
 	// Its machines may reach the host's loopback and private addresses (--allow-private): another
 	// template's service through a tcp:// tunnel, say
 	AllowPrivate bool `json:"allow_private,omitempty"`
+	// Where its machines' connections may go: "none" (only links and forwarded ports), "internet"
+	// (public addresses), "private" (also the host's loopback and private ones); empty: as the
+	// site was built (internet when it has a network), or private with AllowPrivate
+	Egress string `json:"egress,omitempty"`
 }
 
 // AddTemplate restores a site once, in a fork server of its own, for machines to be forked from.
@@ -284,6 +324,11 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	if max <= 0 {
 		max = 256
 	}
+	switch req.Egress {
+	case "", "none", "internet", "private":
+	default:
+		return nil, errStatus(400, "egress %q: none, internet or private", req.Egress)
+	}
 	if req.Idle != 0 && req.Idle < Duration(time.Second) {
 		return nil, errStatus(400, "idle %s: 0 (never), or a second or more", time.Duration(req.Idle))
 	}
@@ -301,7 +346,7 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	t := &Template{
 		Name: name, Site: site, JobsRoot: filepath.Join(dir, "jobs"), Log: filepath.Join(dir, "log"),
 		MaxMachines: max, VM: s.o.VM, Idle: req.Idle, Labels: req.Labels, Started: time.Now(),
-		AllowPrivate: req.AllowPrivate,
+		AllowPrivate: req.AllowPrivate, Egress: req.Egress,
 	}
 	if snap != nil {
 		t.Snapshot = snap.Name
@@ -333,6 +378,9 @@ func (s *Server) startServer(t *Template) error {
 	args := []string{"run", t.Site, "--serve", t.Server, "--jobs-root", t.JobsRoot, "--max-machines", fmt.Sprint(t.MaxMachines)}
 	if t.AllowPrivate {
 		args = append(args, "--allow-private")
+	}
+	if t.Egress != "" {
+		args = append(args, "--egress", t.Egress)
 	}
 	if t.Snapshot != "" {
 		s.mu.Lock()
@@ -426,6 +474,7 @@ func (s *Server) RemoveTemplate(name string) error {
 	s.save()
 	s.mu.Unlock()
 	s.note("template.removed", "template "+name, "removed")
+	s.dropLinks(KindTemplate, name)
 	return nil
 }
 
@@ -594,6 +643,7 @@ func (s *Server) up(req Up) (*Machine, error) {
 	s.save()
 	s.mu.Unlock()
 	s.note("machine.up", "machine "+name, "up from %s (pid %d)", t.Name, m.Pid)
+	s.linkUp(m)
 	return m, nil
 }
 
@@ -617,6 +667,8 @@ func (s *Server) RemoveMachine(name string) error {
 	s.mu.Unlock()
 	s.used(m.Template)
 	s.note("machine.removed", "machine "+name, "removed")
+	s.unlinkMachine(name)
+	s.dropLinks(KindMachine, name)
 	return nil
 }
 
@@ -786,7 +838,25 @@ func (s *Server) reap(ctx context.Context) {
 		}
 		s.save()
 		s.mu.Unlock()
+		for _, n := range deadMachines {
+			if !s.hasLocked(KindMachine, n) {
+				s.unlinkMachine(n)
+				s.dropLinks(KindMachine, n)
+			}
+		}
+		for _, n := range deadTemplates {
+			if !s.hasLocked(KindTemplate, n) {
+				s.dropLinks(KindTemplate, n)
+			}
+		}
 	}
+}
+
+// hasLocked is has, taking s.mu.
+func (s *Server) hasLocked(kind, name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.has(kind, name)
 }
 
 // --- snapshots
@@ -918,6 +988,11 @@ func (s *Server) Handler() http.Handler {
 	s.buildRoutes(mux)
 	s.portRoutes(mux)
 	s.runRoutes(mux)
+	s.linkRoutes(mux)
+	s.graphRoutes(mux)
+	if s.o.Routes != nil {
+		s.o.Routes(mux)
+	}
 	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
 	mux.HandleFunc("GET /v1/templates", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Templates(), nil)

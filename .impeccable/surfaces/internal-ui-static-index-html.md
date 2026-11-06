@@ -2,16 +2,19 @@
 version: 1
 slug: "internal-ui-static-index-html"
 primary_target: "internal/ui/static/index.html"
-related_targets: ["internal/ui/static/app.js","internal/ui/static/ui.css"]
+related_targets: ["internal/ui/static/app.js","internal/ui/static/ui.css","internal/ui/static/graph.js","internal/ui/static/fleets.js","internal/ui/static/inspect.js","internal/ui/static/tasks.js"]
 ---
 
 # snowglobe ui (internal/ui/static)
 
 Mode: Operate. Users: a developer running `snowglobe daemon` on their own machine (or a demo audience
 watching one), checking what runs, starting machines, running commands, building images. Constraints:
-served by `snowglobe ui` on 127.0.0.1, embedded, no build step, no framework; live data from the daemon
-API (/v1/stats, /v1/metrics every 5 s, /v1/events SSE, /v1/builds, attach WebSocket); terminal is
-ghostty-web. Inherits DESIGN.md wholesale (paper, ink, one signal for live, Switzer + Fragment Mono,
+served by `snowglobe ui` on 127.0.0.1, embedded gzipped (internal/ui/packed, `go generate`), no build
+step; Preact + htm vendored by internal/ui/vendor.go (the timeline stays hand-written DOM); live data
+from the daemon API (/v1/stats, /v1/metrics every 5 s, /v1/events SSE, /v1/graph, /v1/links,
+/v1/fleets, attach WebSocket), the same API the CLI and MCP use; terminal is ghostty-web. Views, one
+at a time from the masthead: Overview (the timeline), Network (the graph), Fleets, Machines, Run,
+Builds (2026-11-05: the single long page had too much in one place). Inherits DESIGN.md wholesale (paper, ink, one signal for live, Switzer + Fragment Mono,
 hairlines, black terminal panels), light and dark.
 
 ## Direction contract
@@ -27,3 +30,13 @@ FIRST VIEWPORT: Masthead (wordmark with live dot, sections: Overview, Fleet, Bui
 FORM: Timeline, position 4 on the ordered list, dealt lead. seed:bd099d60d99dc6ae. Signature interaction: hovering the time axis drives one hairline cursor across every row and lane at once, reading out the figures and machines at that minute; clicking a bar selects that machine in the rail. Motion grammar: new samples slide the series left by one step; a new machine's bar grows from its start; nothing else moves.
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+
+## Network view (2026-11-05)
+
+What reaches what, read top down: the plan (a strip of templates in columns, the links between them
+dotted, labelled with the name they are reached as), then a ruled group per fleet instance (and one
+for what no fleet made) with its services and machines in their template's column, solid ink edges
+where a machine really reaches another (label chips in mono), and a signal-square tag above each node
+for the host port it opens. A fleet's steps still to apply are dashed ghosts with their own Apply.
+Selecting fades everything unrelated; a handle on machines and templates drags a link onto a target.
+Under 720px it becomes a list per group with the same facts in words.

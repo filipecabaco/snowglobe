@@ -16,7 +16,10 @@ type fake struct {
 	snapshots map[string]daemon.Snapshot
 	services  map[string]daemon.ServiceStatus
 	machines  map[string]daemon.Machine
-	calls     []string
+	links     map[string]daemon.Link
+	// Shown each template asked for
+	onAddTemplate func(daemon.AddTemplate)
+	calls         []string
 	// A job's exit status by command (0 if not here); readyAfter makes a command fail that many
 	// times first
 	status     map[string]int
@@ -25,7 +28,7 @@ type fake struct {
 
 func newFake() *fake {
 	return &fake{templates: map[string]daemon.Template{}, snapshots: map[string]daemon.Snapshot{},
-		services: map[string]daemon.ServiceStatus{}, machines: map[string]daemon.Machine{},
+		services: map[string]daemon.ServiceStatus{}, machines: map[string]daemon.Machine{}, links: map[string]daemon.Link{},
 		status: map[string]int{}, readyAfter: map[string]int{}}
 }
 
@@ -59,8 +62,31 @@ func (f *fake) Machines(map[string]string) ([]daemon.Machine, error) {
 	}
 	return out, nil
 }
+func (f *fake) Links() ([]daemon.Link, error) {
+	var out []daemon.Link
+	for _, l := range f.links {
+		out = append(out, l)
+	}
+	return out, nil
+}
+func (f *fake) AddLink(l daemon.Link) (*daemon.Link, error) {
+	f.calls = append(f.calls, "add link "+l.Name+" "+l.FromKind+":"+l.From+" "+l.ToKind+":"+l.To)
+	f.links[l.Name] = l
+	return &l, nil
+}
+func (f *fake) RemoveLink(n string) error {
+	f.calls = append(f.calls, "rm link "+n)
+	if _, ok := f.links[n]; !ok {
+		return notFound(n)
+	}
+	delete(f.links, n)
+	return nil
+}
 func (f *fake) AddTemplate(r daemon.AddTemplate) (*daemon.Template, error) {
 	f.calls = append(f.calls, "add template "+r.Name+" "+r.Site+" "+r.Snapshot)
+	if f.onAddTemplate != nil {
+		f.onAddTemplate(r)
+	}
 	t := daemon.Template{Name: r.Name, Site: r.Site, Snapshot: r.Snapshot, Labels: r.Labels, Idle: r.Idle}
 	f.templates[r.Name] = t
 	return &t, nil
@@ -402,5 +428,62 @@ func TestTheExampleFleetLoads(t *testing.T) {
 	if got := strings.Join(steps(p), "|"); !strings.Contains(got, "+ template py (build "+filepath.Join(f.Dir, "..", "python")) ||
 		!strings.Contains(got, "+ service web") || len(p.Steps) != 5 {
 		t.Errorf("the example's plan: %v", got)
+	}
+}
+
+func TestLinksJoinTheFleetsMachinesAndAStepAppliesOnItsOwn(t *testing.T) {
+	f := load(t, "name = \"todo\"\n[templates.db]\nsite = \"/sites/db\"\n[templates.app]\nsite = \"/sites/app\"\n"+
+		"[services.db]\ntemplate = \"db\"\nports = [\"15432:5432\"]\n[links.app-db]\nfrom = \"app\"\nto = \"db\"\nport = 5432\nas = \"db.internal\"\n")
+	api := newFake()
+	p, err := f.Plan(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := map[string]bool{}
+	for _, s := range p.Steps {
+		ready[s.Key] = s.Ready
+	}
+	// Templates can go now; the service and the link wait for what they are made from
+	if !ready["template/db"] || !ready["template/app"] || ready["service/db"] || ready["link/app-db"] {
+		t.Fatalf("ready: %v", ready)
+	}
+	if err := p.ApplyStep(api, nil, "link/app-db", quiet); err == nil || !strings.Contains(err.Error(), "apply that first") {
+		t.Errorf("a link before its ends: %v", err)
+	}
+	// One step at a time, planning again after each
+	for _, key := range []string{"template/db", "template/app", "service/db", "link/app-db"} {
+		p, err := f.Plan(api)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.ApplyStep(api, nil, key, quiet); err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+	}
+	if !strings.Contains(strings.Join(api.calls, "\n"), "add link app-db template:app service:db") {
+		t.Errorf("calls: %v", api.calls)
+	}
+	if l := api.links["app-db"]; l.As != "db.internal" || l.Port != 5432 || l.Labels[FleetLabel] != "todo" {
+		t.Errorf("link: %+v", l)
+	}
+	if p, _ := f.Plan(api); !p.Empty() {
+		t.Errorf("after every step: %v", steps(p))
+	}
+	// Down takes the link first
+	api.calls = nil
+	if _, err := Down(api, "todo", quiet); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.calls) == 0 || api.calls[0] != "rm link app-db" {
+		t.Errorf("down: %v", api.calls)
+	}
+	for text, want := range map[string]string{
+		"[templates.a]\nsite = \"x\"\n[links.l]\nfrom = \"a\"\nto = \"nope\"\nport = 1\n":                              "to a service",
+		"[templates.a]\nsite = \"x\"\n[services.s]\ntemplate = \"a\"\n[links.l]\nfrom = \"s\"\nto = \"s\"\nport = 1\n": "from a template",
+		"[templates.a]\nsite = \"x\"\n[services.s]\ntemplate = \"a\"\n[links.l]\nfrom = \"a\"\nto = \"s\"\n":           "port",
+	} {
+		if _, err := Load(write(t, text)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", text, err, want)
+		}
 	}
 }

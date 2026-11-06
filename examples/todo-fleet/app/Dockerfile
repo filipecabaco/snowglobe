@@ -1,6 +1,6 @@
 # The todo fleet's app: Francis (HTTP) with Ecto and Postgrex, in a Mix release on Elixir 1.20.5
-# and Erlang/OTP 29.1.2. It reaches Postgres as db.internal:5432, which the fleet carries to the db
-# service (snowglobe.tunnels below; see ../snowglobe.toml).
+# and Erlang/OTP 29.1.2. It reaches Postgres as db.internal:5432, a link the fleet makes to the db
+# service (see ../snowglobe.toml).
 FROM hexpm/elixir:1.20.5-erlang-29.1.2-alpine-3.24.3 AS build
 RUN apk add --no-cache git build-base
 ENV MIX_ENV=prod LANG=C.UTF-8
@@ -23,5 +23,4 @@ CMD ["/app/start.sh"]
 
 LABEL snowglobe.title="Todo app (Francis + Ecto)" \
       snowglobe.ready="todo app on port 4000" \
-      snowglobe.memory="512" snowglobe.cpus="2" snowglobe.build-cpus="2" \
-      snowglobe.tunnels='["db.internal:5432=tcp://127.0.0.1:15432"]'
+      snowglobe.memory="512" snowglobe.cpus="2" snowglobe.build-cpus="2"
