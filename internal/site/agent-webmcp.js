@@ -1,8 +1,9 @@
 // window.snowglobeAgent as WebMCP tools (https://github.com/webmachinelearning/webmcp), for any
 // client that reads a page's tools: a browser's own agent, an extension, a chat page. Registered
-// with the standard API only: document.modelContext (navigator.modelContext in earlier drafts)
-// .registerTool(tool, { signal, exposedTo }). A page without it registers nothing; a polyfill
-// (MCP-B's @mcp-b/global, say) loaded before this file provides one.
+// with document.modelContext (navigator.modelContext in earlier drafts) .registerTool(tool,
+// { signal, exposedTo }), or, where only the first drafts' shape is there, .provideContext({ tools }).
+// A model context that an extension or a polyfill (MCP-B's @mcp-b/global, say) adds after the page
+// starts is still found, for a while; a page that never gets one registers nothing.
 //
 // The tools are named as `snowglobe mcp` names its own: run_command starts a job and returns its
 // id; job_status reads its state and output, which ends as run_command's does natively ([exit N],
@@ -136,60 +137,123 @@
     });
   }
 
+  const ASK_MESSAGE = "An agent (or someone at this page) wants to run commands in this tab's Linux machine. They run as root " +
+    "in the machine (not on your computer) and can change or read anything in it.";
+
+  /**
+   * The page's one question, shared by everything that runs commands (the WebMCP tools and the
+   * agent panel): asked at the first run, and not again in this page load once allowed. A refusal
+   * asks again next time. `options` is what a tool's execute() was given: a client that has
+   * requestUserInteraction is asked through it.
+   */
+  function consent({ doc = root.document, confirm } = {}) {
+    let allowed = null;
+    const show = (m) => (confirm ?? ((text) => confirmInPage(doc, text)))(m);
+    return async (options) => {
+      if (allowed === null) {
+        allowed = (async () => {
+          const client = options?.client ?? options;
+          if (typeof client?.requestUserInteraction === "function") return client.requestUserInteraction(() => show(ASK_MESSAGE));
+          return show(ASK_MESSAGE);
+        })();
+      }
+      if (!(await allowed)) {
+        allowed = null;
+        throw new Error("the person at the page did not allow it");
+      }
+    };
+  }
+
+  /** The page's model context, if it has one with a way to add tools: document.modelContext
+   *  (the current draft), else navigator.modelContext (earlier drafts, MCP-B's polyfill). */
+  function findContext(doc, nav) {
+    for (const ctx of [doc?.modelContext, nav?.modelContext]) {
+      if (ctx && (typeof ctx.registerTool === "function" || typeof ctx.provideContext === "function")) return ctx;
+    }
+    return null;
+  }
+
+  /** Look for a model context every `pollMs` until `waitMs` has gone by: an extension or a
+   *  polyfill can add one after the page has started. Resolves to it, or null. */
+  function waitForContext(doc, nav, { waitMs = 0, pollMs = 250, timers = root } = {}) {
+    const found = findContext(doc, nav);
+    if (found || !(waitMs > 0)) return Promise.resolve(found);
+    let left = Math.ceil(waitMs / pollMs);
+    return new Promise((resolve) => {
+      const look = () => {
+        const ctx = findContext(doc, nav);
+        if (ctx) return resolve(ctx);
+        if (--left <= 0) return resolve(null);
+        timers.setTimeout(look, pollMs);
+      };
+      timers.setTimeout(look, pollMs);
+    });
+  }
+
   /**
    * Register the tools with the page's model context. `options.exposedTo` lists the origins the
-   * tools are shared with beyond this one (none by default). Returns what happened, for
-   * capabilities(): { available, registered, reason }.
+   * tools are shared with beyond this one (none by default). With `waitMs`, a model context that
+   * appears within that long is still used. `ask` is the page's consent (one is made otherwise).
+   * Returns what happened, for capabilities(): { available, registered, reason, api }.
    */
-  async function register(agent, { jobText, exposedTo = [], doc = root.document, nav = root.navigator, confirm } = {}) {
-    const ctx = doc?.modelContext ?? nav?.modelContext;
-    if (!ctx || typeof ctx.registerTool !== "function") {
-      return { available: false, registered: [], reason: "this browser has no WebMCP (document.modelContext); nothing registered" };
+  async function register(agent, { jobText, exposedTo = [], doc = root.document, nav = root.navigator, confirm, ask,
+    waitMs = 0, pollMs = 250, timers = root } = {}) {
+    const ctx = await waitForContext(doc, nav, { waitMs, pollMs, timers });
+    if (!ctx) {
+      const waited = waitMs > 0 ? ` (looked for ${Math.round(waitMs / 1000)} s)` : "";
+      return { available: false, registered: [], reason: `this browser has no WebMCP (document.modelContext)${waited}; nothing registered` };
     }
     const caps = await agent.capabilities();
     if (!caps.supported) return { available: true, registered: [], reason: caps.reason };
 
-    // Asked once per page: the first call that runs something
-    let allowed = null;
-    const ask = async (options) => {
-      if (allowed === null) {
-        allowed = (async () => {
-          const message = "An agent wants to run commands in this tab's Linux machine. They run as root in the machine " +
-            "(not on your computer) and can change or read anything in it.";
-          const client = options?.client ?? options;
-          if (typeof client?.requestUserInteraction === "function") {
-            return client.requestUserInteraction(() => (confirm ?? ((m) => confirmInPage(doc, m)))(message));
-          }
-          return (confirm ?? ((m) => confirmInPage(doc, m)))(message);
-        })();
-      }
-      if (!(await allowed)) {
-        allowed = null; // ask again next time
-        throw new Error("the person at the page did not allow it");
-      }
-    };
-
+    ask ??= consent({ doc, confirm });
+    const list = tools(agent, jobText, ask);
     const controller = new AbortController();
-    const opts = { signal: controller.signal };
-    if (exposedTo.length) opts.exposedTo = exposedTo;
     const registered = [];
+    let api = "registerTool";
+    let shared = exposedTo;
     const result = (reason) => {
-      const r = { available: true, registered, reason, exposedTo };
+      const r = { available: true, registered, reason, exposedTo: shared, api };
       Object.defineProperty(r, "unregister", { value: () => controller.abort() });
       return r;
     };
-    for (const tool of tools(agent, jobText, ask)) {
+
+    if (typeof ctx.registerTool !== "function") {
+      // The first drafts' shape (and older polyfills): every tool at once, replacing the page's
+      // set. No per-origin sharing there
+      api = "provideContext";
+      shared = [];
+      try {
+        await ctx.provideContext({ tools: list });
+      } catch (e) {
+        return result(`provideContext: ${e?.message ?? e}`);
+      }
+      registered.push(...list.map((t) => t.name));
+      controller.signal.addEventListener("abort", () => { try { ctx.clearContext?.(); } catch {} });
+      return result(null);
+    }
+
+    for (const tool of list) {
+      const opts = { signal: controller.signal };
+      if (shared.length) opts.exposedTo = shared;
       try {
         await ctx.registerTool(tool, opts);
-        registered.push(tool.name);
       } catch (e) {
-        return result(`registerTool ${tool.name}: ${e?.message ?? e}`);
+        if (!shared.length) return result(`registerTool ${tool.name}: ${e?.message ?? e}`);
+        // A browser that refuses the sharing still gets the tools, for this origin only
+        try {
+          await ctx.registerTool(tool, { signal: controller.signal });
+          shared = [];
+        } catch (e2) {
+          return result(`registerTool ${tool.name}: ${e2?.message ?? e2}`);
+        }
       }
+      registered.push(tool.name);
     }
-    return result(null);
+    return result(shared === exposedTo ? null : "exposedTo was refused; the tools are this origin's only");
   }
 
-  const SnowglobeWebMCP = { register, tools, confirmInPage };
+  const SnowglobeWebMCP = { register, tools, confirmInPage, consent, findContext, waitForContext };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeWebMCP;
   else root.SnowglobeWebMCP = SnowglobeWebMCP;
 })(typeof window !== "undefined" ? window : globalThis);

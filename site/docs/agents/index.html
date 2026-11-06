@@ -80,10 +80,18 @@ snowglobe stop tpl</pre>
             run commands in the machine in the visitor's own tab. Nothing runs on a server. It is off unless asked
             for, and only for one-CPU sites: on more CPUs nothing is offered and the status says why.</p>
           <pre>snowglobe build examples/curl --agent</pre>
+          <p>Any agent that can click and type in a page can use it: open <strong>Agent commands</strong> above the
+            terminal (a link ending <code>#agent</code> opens it), type into <strong>Shell command</strong>, press
+            <strong>Run</strong>, and read the <strong>Result</strong>: the exit status and the command's output.
+            <strong>Cancel</strong> stops it. That is how ChatGPT's agent uses it today; its WebMCP (site tools) works
+            only in the ChatGPT desktop app's built-in browser.</p>
+          <pre>Open https://filipecabaco.github.io/snowglobe/python/#agent, wait until the status says Ready, then type
+python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the exit status and output.</pre>
           <p>Where the browser has WebMCP (<code>document.modelContext</code>), the page registers three tools, named
             as <code>snowglobe mcp</code> names its own. Any WebMCP client can use them: a browser's built-in agent,
-            an extension, a chat page. A page in a browser without WebMCP can load a polyfill, such as MCP-B's
-            <code>@mcp-b/global</code>, before snowglobe's scripts.</p>
+            an extension, a chat page. One added after the page starts, by an extension or a polyfill such as
+            MCP-B's <code>@mcp-b/global</code>, is still found for 15 seconds, and the first drafts'
+            <code>provideContext</code> works too.</p>
           <div class="table-wrap">
             <table>
               <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th></tr></thead>
@@ -94,8 +102,8 @@ snowglobe stop tpl</pre>
               </tbody>
             </table>
           </div>
-          <p>One job runs at a time; starting another while one runs is refused. The first run asks the person at the
-            page to allow it. The tools are the page's own: <code>--agent-exposed-to https://host</code> (repeatable)
+          <p>One job runs at a time; starting another while one runs is refused. The first run, from the panel or a
+            tool, asks the person at the page to allow it, once per page load. The tools are the page's own: <code>--agent-exposed-to https://host</code> (repeatable)
             shares them with other origins too.</p>
           <p>Scripts and tests can use the same thing directly as <code>window.snowglobeAgent</code>:
             <code>capabilities()</code>, <code>status()</code> (booting, ready, busy, saving or failed),

@@ -306,3 +306,212 @@ test('WebMCP: nothing registered without a model context, or on several CPUs', a
   await W.register({ capabilities: async () => ({ supported: true }) }, { doc: {}, nav: { modelContext: { registerTool: async (t) => seen.push(t.name) } } });
   assert.deepEqual(seen, ['run_command', 'job_status', 'cancel_job']);
 });
+
+// Timers the test steps by hand
+function manualTimers() {
+  let next = 1;
+  const pending = new Map();
+  return {
+    pending,
+    setTimeout: (fn) => { const id = next++; pending.set(id, fn); return id; },
+    clearTimeout: (id) => pending.delete(id),
+    setInterval: () => next++,
+    clearInterval: () => {},
+    // Run what is due now (each timer once), and let the promises it started settle
+    step: async () => {
+      const due = [...pending];
+      pending.clear();
+      for (const [, fn] of due) fn();
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    },
+  };
+}
+const ok = { capabilities: async () => ({ supported: true }) };
+
+test('WebMCP: the first drafts\' provideContext({tools}) gets all three, and unregister clears them', async () => {
+  const given = [];
+  let cleared = 0;
+  const nav = { modelContext: { provideContext: async (ctx) => given.push(...ctx.tools), clearContext: () => { cleared++; } } };
+  const r = await W.register(ok, { jobText: A.jobText, doc: {}, nav, exposedTo: ['https://agent.example'] });
+  assert.equal(r.api, 'provideContext');
+  assert.deepEqual(r.registered, ['run_command', 'job_status', 'cancel_job']);
+  assert.deepEqual(given.map((t) => t.name), r.registered);
+  assert.ok(given.every((t) => typeof t.execute === 'function' && t.inputSchema.type === 'object'));
+  assert.deepEqual(r.exposedTo, [], 'no per-origin sharing in that shape');
+  r.unregister();
+  assert.equal(cleared, 1);
+  // registerTool wins where both are there
+  const both = { modelContext: { registerTool: async () => {}, provideContext: async () => assert.fail('provideContext') } };
+  assert.equal((await W.register(ok, { jobText: A.jobText, doc: both })).api, 'registerTool');
+});
+
+test('WebMCP: a model context added after the page starts is still found', async () => {
+  const timers = manualTimers();
+  const doc = {};
+  let settled = null;
+  W.register(ok, { jobText: A.jobText, doc, nav: {}, waitMs: 15000, pollMs: 500, timers }).then((r) => { settled = r; });
+  for (let i = 0; i < 6; i++) await timers.step(); // 3 s
+  assert.equal(settled, null, 'still looking');
+  const seen = [];
+  doc.modelContext = { registerTool: async (t) => seen.push(t.name) };
+  await timers.step();
+  assert.deepEqual(settled?.registered, ['run_command', 'job_status', 'cancel_job']);
+  assert.deepEqual(seen, settled.registered);
+  assert.equal(timers.pending.size, 0, 'stops looking once found');
+});
+
+test('WebMCP: with none by the deadline it gives up, says so, and leaves no timer', async () => {
+  const timers = manualTimers();
+  let settled = null;
+  W.register(ok, { jobText: A.jobText, doc: {}, nav: {}, waitMs: 2000, pollMs: 500, timers }).then((r) => { settled = r; });
+  for (let i = 0; i < 3; i++) await timers.step();
+  assert.equal(settled, null);
+  await timers.step();
+  assert.equal(settled.available, false);
+  assert.deepEqual(settled.registered, []);
+  assert.match(settled.reason, /no WebMCP .*looked for 2 s/);
+  assert.equal(timers.pending.size, 0);
+  // A context object without a way to add tools doesn't count
+  assert.equal(W.findContext({ modelContext: {} }, {}), null);
+});
+
+test('WebMCP: a browser that refuses exposedTo still gets the tools, for this origin', async () => {
+  const calls = [];
+  const doc = { modelContext: { registerTool: async (t, o) => { calls.push(o); if (o.exposedTo) throw new TypeError('exposedTo'); } } };
+  const r = await W.register(ok, { jobText: A.jobText, doc, exposedTo: ['https://agent.example'] });
+  assert.deepEqual(r.registered, ['run_command', 'job_status', 'cancel_job']);
+  assert.deepEqual(r.exposedTo, []);
+  assert.match(r.reason, /exposedTo was refused/);
+  assert.equal(calls.filter((o) => o.exposedTo).length, 1, 'tried with it once');
+});
+
+// The panel's elements, as plain objects
+function panelEls() {
+  const el = (o = {}) => {
+    const handlers = {};
+    return { value: '', disabled: false, textContent: '', focused: 0, ...o,
+      addEventListener: (n, fn) => { (handlers[n] ??= []).push(fn); },
+      fire: (n, e = {}) => handlers[n]?.forEach((fn) => fn({ preventDefault() {}, ...e })),
+      focus() { this.focused++; } };
+  };
+  return { form: el(), command: el(), run: el(), cancel: el(), status: el(), result: el(), output: el() };
+}
+const P = require('./agent-panel.js');
+const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+// Plays the guest for the controller's current job: it answers, then prints `out` and ends with `status`
+function playJob(c, emulator, typed, out, status) {
+  const job = c.current;
+  for (;;) {
+    const line = typed[typed.length - 1];
+    let m;
+    if ((m = /^echo SGSYNC_(\w+)_/.exec(line))) emulator.print(`SGSYNC_${m[1]}_42\r\n`);
+    else if ((m = /echo SGACK_(\w+)_(\d+)_/.exec(line))) emulator.print(`SGACK_${m[1]}_${m[2]}_0_42\r\n`);
+    else if (line.startsWith('sh /sgjob/')) { emulator.print(`\nSGNONCE_${job.id}\n`); break; }
+  }
+  emulator.print(`SGOUT_${job.id}_${job.nonce}\n${out}`);
+  if (status !== undefined) emulator.print(`\nSGDONE_${job.id}_${job.nonce}_${status}_0\n`);
+  return job;
+}
+
+test('panel: the status line follows the machine, and Run is only offered when it can run', async () => {
+  const m = machine();
+  const agent = { status: async () => m.c.status() };
+  const els = panelEls();
+  m.setState('loading');
+  const p = new P.Panel(agent, els, { ask: async () => {}, jobText: A.jobText, timers: manualTimers() });
+  await settle();
+  assert.equal(els.status.textContent, 'The machine is starting. Run is available once it is running.');
+  assert.ok(els.run.disabled);
+  assert.ok(els.cancel.disabled);
+  m.setState('ready');
+  await p.refresh();
+  assert.equal(els.status.textContent, 'Ready. Type a command and press Run.');
+  assert.equal(els.run.disabled, false);
+});
+
+test('panel: Run asks once, runs on the job runner, and shows the output with its exit status', async () => {
+  const { c, emulator, typed } = machine();
+  // The same controller the tools use
+  const agent = { status: async () => c.status(), runCommand: async (i) => c.runCommand(i),
+    readJob: async (i) => c.readJob(i), cancelJob: async (i) => c.cancelJob(i) };
+  let asked = 0;
+  const ask = W.consent({ confirm: async () => { asked++; return true; } });
+  const timers = manualTimers();
+  const els = panelEls();
+  new P.Panel(agent, els, { ask, jobText: A.jobText, timers });
+  await settle();
+
+  // Nothing typed: nothing runs, and nobody is asked
+  els.form.fire('submit');
+  await settle();
+  assert.equal(els.status.textContent, 'Type a command first, then press Run.');
+  assert.equal(asked, 0);
+  assert.equal(els.command.focused, 1);
+
+  els.command.value = 'echo hi; exit 3';
+  els.form.fire('submit');
+  await settle();
+  assert.equal(asked, 1);
+  assert.match(els.status.textContent, /^Running job [0-9a-f]{16}…$/);
+  assert.ok(els.run.disabled);
+  assert.equal(els.cancel.disabled, false);
+  playJob(c, emulator, typed, 'hi\n', 3);
+  await timers.step();
+  assert.equal(els.output.textContent, 'hi\n[exit 3]');
+  assert.equal(els.result.textContent, 'Exit status: 3');
+  assert.equal(els.status.textContent, 'Finished. Exit status: 3. Ready for the next command.');
+  await timers.step();
+  assert.equal(els.status.textContent, 'Finished. Exit status: 3. Ready for the next command.', 'kept until the next run');
+  assert.equal(els.run.disabled, false);
+  assert.ok(els.cancel.disabled);
+
+  // ctrl+Enter runs too; a second run isn't asked about again, and the WebMCP tools share the answer
+  els.command.value = 'true';
+  els.command.fire('keydown', { key: 'Enter', ctrlKey: true });
+  await settle();
+  assert.equal(asked, 1);
+  playJob(c, emulator, typed, '', 0);
+  await timers.step();
+  assert.equal(els.result.textContent, 'Exit status: 0');
+  const registered = [];
+  await W.register({ ...agent, capabilities: async () => c.capabilities() },
+    { jobText: A.jobText, doc: { modelContext: { registerTool: async (t) => registered.push(t) } }, ask });
+  await registered[0].execute({ command: 'true' });
+  assert.equal(asked, 1, 'one question per page load');
+});
+
+test('panel: Cancel stops the job and says so; a refusal runs nothing', async () => {
+  const { c, emulator, typed } = machine();
+  const agent = { status: async () => c.status(), runCommand: async (i) => c.runCommand(i),
+    readJob: async (i) => c.readJob(i), cancelJob: async (i) => c.cancelJob(i) };
+  const timers = manualTimers();
+  const els = panelEls();
+  new P.Panel(agent, els, { ask: async () => {}, jobText: A.jobText, timers });
+  await settle();
+  els.command.value = 'sleep 100';
+  els.form.fire('submit');
+  await settle();
+  const job = playJob(c, emulator, typed, 'started\n');
+  await timers.step();
+  assert.equal(els.output.textContent, 'started\n', 'output as it arrives');
+  els.cancel.fire('click');
+  await settle();
+  assert.equal(typed[typed.length - 1], '\x03');
+  assert.match(els.status.textContent, /^Cancelling job/);
+  emulator.print(`\nSGDONE_${job.id}_${job.nonce}_130_1\n`);
+  await timers.step();
+  assert.equal(els.result.textContent, 'Cancelled: the command and everything it started were stopped');
+  assert.match(els.output.textContent, /\[stopped; everything it started was killed\]$/);
+
+  const denied = panelEls();
+  const deniedPanel = new P.Panel(agent, denied, { ask: W.consent({ confirm: async () => false }), jobText: A.jobText, timers: manualTimers() });
+  await settle();
+  denied.command.value = 'true';
+  denied.form.fire('submit');
+  await settle();
+  assert.equal(denied.status.textContent, 'Not run: the person at the page did not allow it.');
+  await deniedPanel.refresh();
+  assert.equal(denied.status.textContent, 'Not run: the person at the page did not allow it. Ready for the next command.', 'kept');
+  assert.equal(denied.run.disabled, false);
+  assert.equal(c.status().state, 'ready');
+});

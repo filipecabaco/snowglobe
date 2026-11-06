@@ -32,6 +32,9 @@ var agentJS []byte
 //go:embed agent-webmcp.js
 var agentWebMCPJS []byte
 
+//go:embed agent-panel.js
+var agentPanelJS []byte
+
 var tmpl = template.Must(template.New("index").Parse(page))
 
 // Page holds what varies between sites.
@@ -102,6 +105,7 @@ func Render(out string, p Page) error {
 	if p.Agent {
 		scripts["agent.js"] = agentJS
 		scripts["agent-webmcp.js"] = agentWebMCPJS
+		scripts["agent-panel.js"] = agentPanelJS
 	}
 	for name, source := range scripts {
 		if err := os.WriteFile(filepath.Join(out, name), source, 0o644); err != nil {
