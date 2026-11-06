@@ -195,12 +195,12 @@ func TestTunnelToken(t *testing.T) {
 
 func TestAgentOnlyWhenBuiltWithIt(t *testing.T) {
 	page, dir := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none"})
-	for _, s := range []string{"agent.js", "agent-webmcp.js", "snowglobeAgent", "SnowglobeWebMCP"} {
+	for _, s := range []string{"agent.js", "agent-webmcp.js", "agent-panel", "snowglobeAgent", "SnowglobeWebMCP", "Agent commands"} {
 		if strings.Contains(page, s) {
 			t.Errorf("a page without --agent mentions %s", s)
 		}
 	}
-	for _, f := range []string{"agent.js", "agent-webmcp.js"} {
+	for _, f := range []string{"agent.js", "agent-webmcp.js", "agent-panel.js"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
 			t.Errorf("%s written without --agent", f)
 		}
@@ -212,13 +212,20 @@ func TestAgentOnlyWhenBuiltWithIt(t *testing.T) {
 		`<script src="agent.js"></script>`, `<script src="agent-webmcp.js"></script>`,
 		"window.snowglobeAgent = agent", `version: "v9.9.9"`, `buildId: "test-build"`, `network: "fetch"`,
 		`exposedTo: ["https://agent.example"]`, "state: () => run.state",
+		// The panel a UI-driving agent finds by name, on the same job runner and consent
+		`<script src="agent-panel.js"></script>`, `<details id="agent-panel">`, `<summary><span class="title">Agent commands</span>`,
+		`<label for="agent-command">Shell command</label>`, `<button id="agent-run" type="submit" disabled>Run</button>`,
+		`<button id="agent-cancel" type="button" disabled>Cancel</button>`, `id="agent-status" role="status" aria-live="polite"`,
+		`aria-label="Command output"`, "Agents: type a shell command here and press Run; the result and its exit status appear under Result.",
+		"const ask = SnowglobeWebMCP.consent({ doc: document })",
+		"SnowglobeAgentPanel.attach(agent, { ask, jobText: SnowglobeAgent.jobText })", "ask, waitMs: 15000",
 	} {
 		if !strings.Contains(page, s) {
 			i := strings.Index(page, "SnowglobeAgent.attach")
 			t.Errorf("page lacks %s\ngot: %s", s, page[max(i, 0):min(max(i, 0)+600, len(page))])
 		}
 	}
-	for f, want := range map[string]string{"agent.js": "SGDONE_", "agent-webmcp.js": "registerTool"} {
+	for f, want := range map[string]string{"agent.js": "SGDONE_", "agent-webmcp.js": "provideContext", "agent-panel.js": "SnowglobeAgentPanel"} {
 		data, err := os.ReadFile(filepath.Join(dir, f))
 		if err != nil || !strings.Contains(string(data), want) {
 			t.Errorf("%s: %v", f, err)

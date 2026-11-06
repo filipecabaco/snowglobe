@@ -217,8 +217,15 @@ server. One-CPU sites only: on more CPUs nothing is registered and `status()` sa
   `runCommand({command, timeoutSeconds, requestId})` (returns `{jobId}` at once), `readJob(jobId)`
   (state: running, exited, timed_out, cancelled, failed; `exitStatus`; output so far, the most
   recent 1 MiB, with `truncated`), `cancelJob(jobId)`. All return promises.
+- The agent panel, for agents that click and type: open "Agent commands" above the terminal (an
+  address ending `#agent` opens it), type into "Shell command", press "Run" (the first run asks
+  the person at the page), and read "Result": the exit status and a "Command output" block ending
+  `[exit N]`, `[timed out]` or `[stopped]`. "Cancel" stops the job; the status line says what is
+  happening. ChatGPT's agent uses this: its WebMCP (site tools) runs only in the ChatGPT desktop
+  app's built-in browser.
 - WebMCP tools, where the browser has `document.modelContext` (or a polyfill such as MCP-B's
-  `@mcp-b/global` loaded first): `run_command {command, timeout_seconds, request_id}` starts a job
+  `@mcp-b/global`, even one added up to 15 s after the page starts; the first drafts'
+  `provideContext` works too): `run_command {command, timeout_seconds, request_id}` starts a job
   and returns its id; `job_status {job_id}` returns its output, ending `[running]`, `[exit N]`,
   `[timed out]` or `[stopped]`; `cancel_job {job_id}`. The first run asks the person at the page.
 - One job at a time: a second start while one runs is refused. A repeated `requestId` returns the

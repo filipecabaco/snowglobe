@@ -1,7 +1,7 @@
 # Browser agents: a Snowglobe tab as an agent's workspace (first milestone done)
 
-Status: the first slice is built (below); files, the accessible UI and persistence are still to
-come. Why: normal chat agents could run whatever they need from the client's own browser,
+Status: the first slice is built (below), with the accessible UI (the agent panel); files and
+persistence are still to come. Why: normal chat agents could run whatever they need from the client's own browser,
 delegating compute to the visitor's browser instead of servers.
 
 ## What the first milestone implements
@@ -18,7 +18,19 @@ label `snowglobe.agent="true"`); without it the page carries none of it.
   `document.modelContext.registerTool(tool, {signal, exposedTo})` (`navigator.modelContext` as a
   fallback). Nothing is registered without one. `exposedTo` is empty unless the site is built with
   `--agent-exposed-to`. The first run asks the person at the page: through the client's
-  `requestUserInteraction` when it passes one, else a modal `<dialog>`.
+  `requestUserInteraction` when it passes one, else a modal `<dialog>`. Where only the first
+  drafts' `provideContext({tools})` is there (older polyfills), that is used instead. A model
+  context added after the page starts (an extension, a polyfill loaded late) is looked for every
+  250 ms for 15 s; `capabilities().webmcp` says what happened. A browser that refuses `exposedTo`
+  still gets the tools, for the page's own origin.
+- `internal/site/agent-panel.js`: the agent panel, for agents that drive the page's UI rather than
+  call tools. In November 2026 that is most of them: ChatGPT's site tools (its WebMCP) work only in
+  the ChatGPT desktop app's built-in browser, not in its agent's cloud browser or through its
+  Chrome extension, and Chrome has WebMCP only behind a flag or an origin-trial token. A
+  disclosure above the terminal, "Agent commands" (open at once when the address ends `#agent`):
+  a "Shell command" box, Run and Cancel, a status line (`role=status`), and a "Result" section
+  with the exit status and a "Command output" `<pre>` that ends as `job_status` does. Same job
+  runner, and the same one question per page load: the panel and the tools share it.
 - One-CPU sites only: on more CPUs nothing is registered and `status()` says why.
 
 The control channel is the guest's serial line (ttyS0), not a new device. Every snowglobe guest
@@ -32,7 +44,7 @@ serial line (with echo and newline translation off) between a start line carryin
 the marker, rather than to a file. stdout and stderr are therefore one stream.
 
 Not yet: `readFile` and `writeFile` (typing base64 works for small files; larger ones want a
-transfer channel), `cwd` and `env`, separate stderr, the accessible control UI, saving only between
+transfer channel), `cwd` and `env`, separate stderr, saving only between
 jobs, and session ids that change on restore. A save taken mid-job and restored later leaves the
 serial shell busy: the next job's sync then fails with "the guest's shell is not answering" until
 the old command ends, rather than being typed into it.

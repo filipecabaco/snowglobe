@@ -10,7 +10,8 @@ ENV LANG=C.UTF-8 PATH=/opt/venv/bin:$PATH PYTHONSTARTUP=/root/startup.py
 WORKDIR /root
 CMD ["python3"]
 
-# An agent may run commands in it (WebMCP tools in a browser that has WebMCP, and for chatgpt.com)
+# An agent may run commands in it: the Agent commands panel for agents that click and type, and WebMCP
+# tools in a browser that has WebMCP (shared with chatgpt.com too)
 LABEL snowglobe.title="Python + Rich in the browser" \
       snowglobe.ready=">>> " \
       snowglobe.agent="true" \
