@@ -85,6 +85,40 @@ preview and, beside it, what the agent changes (`internal/site/builder.js`).
   column with an update policy on Supabase and its checkbox, a filter), each step waiting for its
   rebuild.
 
+## The studio: an agent changes all of the app
+
+The page's top is a studio laid out as AI app builders (Lovable, v0, Bolt) are, with the honest
+difference that it has no model: the agent is the person's own, over WebMCP or the page's
+controls. The preview is the stage (desktop, tablet and phone widths, address, reload, new tab, a
+hairline while web builds, a failed build's error over the last good page); Code and Database are
+tabs beside it; the agent's steps run down the left as a conversation (`builder.js`'s feed, titled
+by `stepOf`: "Edited src/App.jsx", "Ran SQL on supabase", "Build 8 failed"); the machines and every
+form are below. `studio.js` holds the pure parts: the tree, a tokenizer of a dozen regular
+expressions for JS/TS/JSX, CSS, HTML, JSON and SQL (no highlighter library), the tables query, the
+prompt to give an agent.
+
+What an agent needed to change anything in the app, and what does it now:
+
+- See the project: `list_files` (one job: `find` and `stat`, `node_modules`/`dist`/`.git` not
+  entered) and `read_file` (one job for up to 20 files, each as base64 between frame lines, as
+  `transfer.js` frames slices). Neither goes through the change wrapper, so a read costs no copy.
+- Change many files: `write_files` (one wrapped job; contents as job files; each written to
+  `<path>.sgnew` then all renamed together, so the watcher builds once), with `move` and `delete`.
+  It reads `/__build` before and after and returns the build's result, so a syntax error reaches
+  the agent in the same call. `build_status` reads it on demand.
+- Back out: the wrapper keeps the copy from before the first command (`<copy>.base`) and the one
+  from before each of the last 20 changing commands (`<copy>.history/<n>`). `revert_changes`
+  restores one of them as an ordinary wrapped command, so its diff shows like any other change.
+- Schema: `run_sql` (psql with `ON_ERROR_STOP` on a job file, then `notify pgrst`); migrations are
+  kept in web's project so they show and undo with the code.
+- Packages: the registry allows plain GETs from any origin but answers no preflight, so npm's own
+  headers fail in the tab. `serve --registry 4874` relays to it with only `Accept`, and
+  `/root/.npmrc` points npm there; `replace-registry-host` (npm's default) sends tarballs the same
+  way. No page change was needed. The libraries an app usually adds (Tailwind v4, React Router,
+  Zustand, clsx, TypeScript and React's types) are installed rather than cached: npm's cache keeps
+  each package's whole metadata and its peers' (measured 6 to 130 MB a package), while installed
+  they cost 44 MB of `node_modules`, read only when imported.
+
 ---
 
 Enable AI agents to open a Snowglobe URL and use the Linux machine running inside that browser tab as a programmable workspace. Agents should be able to execute commands, read and write files, inspect results, cancel work, and save or restore progress through a documented interface accessible to browser automation tools.

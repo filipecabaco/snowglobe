@@ -47,6 +47,8 @@ var (
 	previewJS []byte
 	//go:embed builder.js
 	builderJS []byte
+	//go:embed studio.js
+	studioJS []byte
 	// The page's service worker: cross-origin isolation (machines on several CPUs) and the preview
 	//go:embed agent-sw.js
 	agentSW []byte
@@ -58,7 +60,7 @@ func AgentScripts() map[string][]byte {
 		"agent.js": agentJS, "agent-webmcp.js": agentWebMCPJS, "agent-panel.js": agentPanelJS, "machine.js": machineJS,
 		"machine-worker.js": machineWorkerJS, "transfer.js": transferJS, "scheduler.js": schedulerJS,
 		"orchestrator.js": orchestratorJS, "agent-page.js": agentPageJS, "sessions.js": sessionsJS,
-		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "builder.js": builderJS, "sw.js": agentSW,
+		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "builder.js": builderJS, "studio.js": studioJS, "sw.js": agentSW,
 	}
 }
 

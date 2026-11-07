@@ -9,7 +9,10 @@
 // one dispatch map: list_runtimes says what machines there are and their state; run_command starts
 // a job in one (by runtime) and returns its id; job_status reads its state and output, which ends
 // as `snowglobe mcp`'s run_command does natively ([exit N], [timed out], [stopped]); cancel_job
-// stops it; write_file writes a text file in a machine (and says what it changed there); copy_file
+// stops it; write_file writes a text file in a machine (and says what it changed there); for a
+// project (web's React app), list_files and read_file show it, write_files changes several files at
+// once (and waits for the rebuild), revert_changes undoes changes, build_status says how the last
+// build went, and run_sql changes or queries Supabase's database; copy_file
 // copies a file from one machine to another; set_awake_limit says how many
 // machines may be awake at once; open_preview shows a machine's web server in the page's preview
 // panel, and close_preview closes it. The first run, copy or preview asks the person at the page,
@@ -40,6 +43,55 @@
     const s = root.SnowglobeBuilder?.summary;
     return v?.changes && s ? `\n[changed in ${v.watch ?? "its project"}: ${s(v.changes)}]` : "";
   };
+  const secs = (ms) => ms == null ? "" : ` in ${ms < 10000 ? (ms / 1000).toFixed(1) : Math.round(ms / 1000)} s`;
+
+  /**
+   * After a change in a machine that serves its builds (serve --watch's /__build): the build that
+   * change started, once it is written or failed. `before` is the build read before the change. A
+   * change no build follows (a file outside the app) is said within `settleMs`.
+   */
+  async function afterBuild(agent, runtime, before, { timeoutMs = 120000, settleMs = 4000, pause = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now() } = {}) {
+    if (!before || typeof before.version !== "number") return null;
+    const t0 = now();
+    let building = false;
+    for (;;) {
+      let b;
+      try { b = await agent.buildStatus({ runtime }); } catch { b = null; }
+      if (b && typeof b.version === "number") {
+        if (b.version > before.version && b.state !== "building") return b;
+        if (b.state === "building") building = true;
+        if (!building && b.version === before.version && now() - t0 >= settleMs) return { state: "unchanged", version: b.version };
+      }
+      if (now() - t0 >= timeoutMs) return { state: "waiting", version: b?.version ?? before.version };
+      await pause(500);
+    }
+  }
+
+  /** A build as a line for an agent. */
+  function buildLine(b) {
+    if (!b) return "";
+    switch (b.state) {
+      case "ok": return `\n[build ${b.version} ok${secs(b.ms)}: the preview reloads with it]`;
+      case "error": return `\n[build ${b.version} FAILED: ${String(b.error ?? "").trim()}\nthe preview keeps the last page that built; fix the error and write again]`;
+      case "building": return `\n[build ${b.version + 1} under way]`;
+      case "unchanged": return "\n[no rebuild: the change isn't part of the app's build]";
+      case "waiting": return "\n[the rebuild hasn't finished yet: call build_status]";
+      case "none": return "";
+      default: return `\n[build: ${b.state}]`;
+    }
+  }
+
+  /** A listing as an indented tree, a line a path: "src/", "  App.jsx  3.9 KiB". */
+  function treeText(list) {
+    const size = (n) => n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KiB`;
+    const lines = list.entries.map((e) => {
+      const depth = e.path.split("/").length - 1;
+      const name = e.path.split("/").pop();
+      return "  ".repeat(depth) + (e.type === "dir" ? `${name}/${e.skipped ? "  (not listed)" : ""}` : `${name}  ${size(e.size)}${e.type === "link" ? " (link)" : ""}`);
+    });
+    return `${list.dir ?? ""}\n${lines.join("\n")}${list.truncated ? "\n[more entries: list a subdirectory]" : ""}`;
+  }
+
   const kb = (bytes, seconds) => !(seconds > 0) ? "-" : bytes / seconds < 1024 ? `${Math.round(bytes / seconds)} bytes/s` : `${Math.round(bytes / 1024 / seconds)} KiB/s`;
 
   /**
@@ -55,7 +107,9 @@
           "its state (asleep, waking, awake, busy, suspending, failed) and a sample command. A machine boots or wakes on its first command; " +
           "only a few are awake at once (awake_limit; set_awake_limit changes it), and the least recently used idle one is suspended (its files kept) to wake another. " +
           "A machine an open preview uses is busy, so never suspended. preview_base is where previews are: <preview_base><runtime>/<port>/<path>. " +
-          "A runtime's watch, if it has one, is a project directory: each command's job_status (and write_file) says which files in it changed.",
+          "A runtime's watch, if it has one, is a project directory: each command's job_status (and write_file) says which files in it changed. " +
+          "To build an app: list_files and read_file to see web's project, write_files to change it (it waits for the rebuild), " +
+          "revert_changes to undo, build_status for the last build, run_sql for Supabase's schema, open_preview to show it (web, port 4173).",
         inputSchema: { type: "object", properties: {} },
         annotations: { readOnlyHint: true },
         async run() {
@@ -138,6 +192,7 @@
             runtime: { type: "string", description: "The machine (list_runtimes)" },
             path: { type: "string", description: "The file, e.g. /root/app/src/App.jsx" },
             content: { type: "string", description: "The file's whole text" },
+            wait_for_build: { type: "boolean", description: "Optional: wait for web's rebuild and say how it went (default false; write_files waits by default)" },
           },
           required: ["runtime", "path", "content"],
         },
@@ -147,8 +202,158 @@
           const path = pathOf(input, "path");
           if (typeof input.content !== "string") throw new Error("content: the file's text, a string");
           await ask(options);
+          const before = input.wait_for_build === true ? await agent.buildStatus({ runtime }).catch(() => null) : null;
           const r = await agent.writeFile({ runtime, path, content: input.content }, { source: "webmcp", signal: options?.signal });
-          return text(`wrote ${r.bytes} bytes to ${runtime}:${path}` + changedLine(r));
+          const b = before ? await afterBuild(agent, runtime, before) : null;
+          return text(`wrote ${r.bytes} bytes to ${runtime}:${path}` + changedLine(r) + buildLine(b));
+        },
+      },
+      list_files: {
+        title: "List a project's files",
+        description: "A directory's files in a machine as an indented tree with sizes, a few levels down (depth, default 4). With no path, the " +
+          "machine's watched project (web: /root/app, the React app), else /root. node_modules, dist and .git are listed but not entered. " +
+          "It reads only: nothing is changed, and it doesn't show in the page's activity as a command.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runtime: { type: "string", description: "The machine (list_runtimes), e.g. web" },
+            path: { type: "string", description: "Optional: the directory (default: the project, /root/app on web)" },
+            depth: { type: "integer", minimum: 1, maximum: 12, description: "Optional: levels down (default 4)" },
+          },
+          required: ["runtime"],
+        },
+        annotations: { readOnlyHint: true },
+        async run(input, options) {
+          const runtime = runtimeOf(input);
+          if (input.path !== undefined) pathOf(input, "path");
+          await ask(options);
+          return text(treeText(await agent.listFiles({ runtime, path: input.path, depth: input.depth }, { source: "webmcp", signal: options?.signal })));
+        },
+      },
+      read_file: {
+        title: "Read files in a machine",
+        description: "The text of one file (path) or several (paths, up to 20), in one call. Relative paths start in /root; the React app " +
+          "is in /root/app on web (src/App.jsx, src/supabase.js, src/styles.css, index.html, package.json, vite.config.js, tsconfig.json). " +
+          "At most 256 KiB of each file (fewer when several are read: 640 KiB in all); a longer one is cut and says so. A binary file is said, not shown.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runtime: { type: "string", description: "The machine (list_runtimes)" },
+            path: { type: "string", description: "A file, e.g. /root/app/src/App.jsx" },
+            paths: { type: "array", items: { type: "string" }, maxItems: 20, description: "Or several files at once" },
+          },
+          required: ["runtime"],
+        },
+        annotations: { readOnlyHint: true, untrustedContentHint: true },
+        async run(input, options) {
+          const runtime = runtimeOf(input);
+          const paths = input.paths ?? (input.path !== undefined ? [pathOf(input, "path")] : null);
+          if (!Array.isArray(paths) || !paths.length || paths.some((p) => typeof p !== "string" || !p.trim())) throw new Error("path, or paths: the files to read");
+          await ask(options);
+          const files = await agent.readFiles({ runtime, paths }, { source: "webmcp", signal: options?.signal });
+          const one = (f) => f.error ? `=== ${f.path}: ${f.error} ===` : f.binary ? `=== ${f.path} (${f.size} bytes): a binary file, not shown ===`
+            : `=== ${f.path} (${f.size} bytes${f.truncated ? `; only the first ${new TextEncoder().encode(f.text).length} shown` : ""}) ===\n${f.text}`;
+          return text(files.map(one).join("\n"), files.length === 1 && !!files[0].error);
+        },
+      },
+      write_files: {
+        title: "Change several files at once",
+        description: "Write several text files (files: [{path, content}], each its whole new text, UTF-8, 1 MiB in all), move files " +
+          "(move: [{from, to}]) and delete files or directories (delete: [path], under /root or /tmp), in one machine, in one job: every " +
+          "file is written to a temporary name first and all are moved into place together, so web's watcher rebuilds once. Directories " +
+          "are made. Use it to scaffold or refactor (a component, its styles, the files that import it) in one call. In a watched project " +
+          "(web's /root/app) it says what changed, and, unless wait_for_build is false, waits for the rebuild and says how it went: ok, or the " +
+          "build error to fix (the preview keeps the last page that built). Every change can be undone with revert_changes.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runtime: { type: "string", description: "The machine (list_runtimes), e.g. web" },
+            files: { type: "array", maxItems: 50, items: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
+              description: "Files to write: [{path, content}], e.g. {path: \"/root/app/src/components/Card.tsx\", content: \"...\"}" },
+            move: { type: "array", items: { type: "object", properties: { from: { type: "string" }, to: { type: "string" } }, required: ["from", "to"] }, description: "Optional: files to move or rename" },
+            delete: { type: "array", items: { type: "string" }, description: "Optional: files or directories to delete" },
+            wait_for_build: { type: "boolean", description: "Wait for the rebuild and say how it went (default true where the machine serves its builds)" },
+          },
+          required: ["runtime"],
+        },
+        annotations: { readOnlyHint: false, consequentialHint: true },
+        async run(input, options) {
+          const runtime = runtimeOf(input);
+          await ask(options);
+          const wait = input.wait_for_build !== false;
+          const before = wait ? await agent.buildStatus({ runtime }).catch(() => null) : null;
+          const r = await agent.writeFiles({ runtime, files: input.files ?? [], move: input.move ?? [], delete: input.delete ?? [] }, { source: "webmcp", signal: options?.signal });
+          const b = before ? await afterBuild(agent, runtime, before) : null;
+          const n = input.files?.length ?? 0;
+          return text(`done in ${runtime}: ${n} file${n === 1 ? "" : "s"} written (${r.bytes} bytes), ${input.move?.length ?? 0} moved, ${input.delete?.length ?? 0} deleted` + changedLine(r) + buildLine(b));
+        },
+      },
+      revert_changes: {
+        title: "Undo changes to a project",
+        description: "Take a watched project (web's /root/app) back: to \"previous\", as it was before the last command or write that changed " +
+          "it (call again to go further back: the last 20 changes are kept); to \"start\", as it was before the first change in this " +
+          "machine (the starter app, unless the machine was started fresh later), which is itself a change \"previous\" undoes. " +
+          "node_modules, dist and .git are not touched (an npm install stays installed; package.json goes back). Says what changed, and " +
+          "the app rebuilds.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runtime: { type: "string", description: "The machine with the project (web)" },
+            to: { type: "string", enum: ["previous", "start"], description: "\"previous\": undo the last change; \"start\": back to how it began" },
+          },
+          required: ["runtime", "to"],
+        },
+        annotations: { readOnlyHint: false, consequentialHint: true },
+        async run(input, options) {
+          const runtime = runtimeOf(input);
+          if (input.to !== "previous" && input.to !== "start") throw new Error('to: "previous" or "start"');
+          await ask(options);
+          const before = await agent.buildStatus({ runtime }).catch(() => null);
+          const r = await agent.revert({ runtime, to: input.to }, { source: "webmcp", signal: options?.signal });
+          const b = before ? await afterBuild(agent, runtime, before) : null;
+          return text(r.output + changedLine(r) + buildLine(b));
+        },
+      },
+      build_status: {
+        title: "How the app's last build went",
+        description: "web's app is rebuilt on every change (serve --watch on port 4173): its last build's {version, state: building | ok | error, " +
+          "error, ms, at}. A failed build's error is the compiler's (file, line, message). Reads the machine's server (waking it if asleep); runs no command.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runtime: { type: "string", description: "Optional: the machine (default web)" },
+            port: { type: "integer", minimum: 1, maximum: 65535, description: "Optional: the port serve --watch listens on (default 4173)" },
+          },
+        },
+        annotations: { readOnlyHint: true },
+        async run(input, options) {
+          await ask(options);
+          const b = await agent.buildStatus({ runtime: input.runtime ?? "web", port: input.port }, { signal: options?.signal });
+          return text(JSON.stringify(b, null, 2), b.state === "error");
+        },
+      },
+      run_sql: {
+        title: "Run SQL on Supabase's database",
+        description: "Run SQL (one or more statements) on the supabase machine's Postgres, as its owner, through psql with ON_ERROR_STOP, and " +
+          "return psql's output. After it, Supabase's Data API reloads its schema, so the app (supabase-js) sees a new table or column on its " +
+          "next request. Use it for schema changes (create table, alter table, row level security: enable it and add policies for the " +
+          "authenticated role on every new table the app reads) and to look at data. Keep the migration in web's project too " +
+          "(/root/app/supabase/migrations/<timestamp>_<name>.sql) so it can be read and undone with the rest. runtime postgres works too.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sql: { type: "string", description: "The SQL, e.g. create table public.todos (...); alter table public.todos enable row level security;" },
+            runtime: { type: "string", description: "Optional: supabase (default) or postgres" },
+          },
+          required: ["sql"],
+        },
+        annotations: { readOnlyHint: false, consequentialHint: true },
+        async run(input, options) {
+          if (typeof input.sql !== "string" || !input.sql.trim()) throw new Error("sql: the statements to run");
+          await ask(options);
+          const r = await agent.runSql({ sql: input.sql, runtime: input.runtime }, { source: "webmcp", signal: options?.signal });
+          const end = r.state === "exited" ? `[exit ${r.exitStatus}]` : `[${r.state}${r.error ? `: ${r.error}` : ""}]`;
+          return text(`${r.output}${r.output.endsWith("\n") || !r.output ? "" : "\n"}${end}`, r.state !== "exited" || r.exitStatus !== 0);
         },
       },
       copy_file: {
@@ -427,7 +632,7 @@
     return result(shared === exposedTo ? null : "exposedTo was refused; the tools are this origin's only");
   }
 
-  const SnowglobeWebMCP = { register, tools, definitions, dispatcher, confirmInPage, consent, findContext, waitForContext, ASK_MESSAGE };
+  const SnowglobeWebMCP = { register, tools, definitions, dispatcher, afterBuild, buildLine, treeText, confirmInPage, consent, findContext, waitForContext, ASK_MESSAGE };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeWebMCP;
   else root.SnowglobeWebMCP = SnowglobeWebMCP;
 })(typeof window !== "undefined" ? window : globalThis);

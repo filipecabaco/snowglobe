@@ -222,9 +222,11 @@ Example Dockerfile labels:
 
 One page for agents, with every agent runtime of the site in it: https://filipecabaco.github.io/snowglobe/agent/
 Each runtime is a Linux machine (arm64) that runs in the tab, in a Web Worker of its own; nothing
-runs on a server, and the page is static files. Its headline: an agent builds a React app on
-Supabase in `web`, and the person sees it live in the page's preview, rebuilt after each change,
-beside a feed of what the agent changed. `snowglobe agent-pages <dir>` writes its
+runs on a server, and the page is static files. Its headline is a studio laid out as AI app
+builders are: an agent builds a React app on Supabase in `web`, and the person sees it live in the
+page's preview, rebuilt after each change, with its code and database as tabs and, beside it, the
+agent's steps as a conversation. The page has no AI of its own: the agent is the person's, connected
+over WebMCP or driving the page's controls. `snowglobe agent-pages <dir>` writes its
 list of machines (`agent/runtimes.json`, from each site's `run.json`) and its scripts when a site of
 several runs is assembled; a site's own page links there ("For agents", `../agent/?runtime=<site>`),
 and the old `/agent/<site>/` addresses go there too. `?runtime=<name>` only preselects: nothing
@@ -261,26 +263,40 @@ runs because of the address.
   textbox "Shell command", and the buttons "Run" and "Cancel". The first run asks the person at
   the page once per page load ("Let agents use these machines?": Allow). The region "Result" holds
   the latest run: "Exit status: N" and "Command output" ending `[exit N]`, `[timed out]` or
-  `[stopped]`; "Earlier runs" lists the ones before it, each tagged with its runtime. The status
+  `[stopped]`; "Earlier runs" lists the ones before it, each tagged with its runtime. These, the
+  machines' list and the forms below are in the "Machines" section, under the studio. The status
   line under Run (the one `role=status`) says what is happening. "Earlier runs" also lists what
   agents ran and copied through WebMCP or a script, tagged "by WebMCP" or "by a script". "Copy a file between machines"
   has "From runtime", "From path", "To runtime", "To path", "Copy" and "Cancel copy". The selected
   machine's terminal is under "Show <runtime>'s terminal". "Preview a machine's web server" has
-  "Runtime", "Port", "Path", "Open preview" and "Close preview"; the open preview is a frame with
-  an address field ("Address in the preview"), "Reload" and "New tab". Beside it (below it on
-  narrower screens), "What the agent changed": a list, "Agent activity, newest first", of every
-  run, copy, write and build in every machine (filter: "Show", a machine or "All machines"), each
-  tagged with its runtime and who asked, its exit status, and in a watched project (web's
-  `/root/app`) "Changed N files", each file a disclosure whose diff is a `pre` labelled "Changes to
-  <path>". A build entry says "Build N written in S s; the preview reloaded" or "Build N failed",
-  with the error. "Watch an agent build" plays a short walkthrough through the same calls (rename
-  the app; a `done` column on Supabase and a checkbox for it; an All / Open / Done filter); "Stop
-  the walkthrough" stops it between steps.
+  "Runtime", "Port", "Path", "Open preview" and "Close preview".
+- The studio, at the top: the tabs "Preview", "Code" and "Database". Preview: "Open the app" (web's
+  port 4173) until a preview is open; then the frame, the widths "Desktop width", "Tablet width,
+  820 pixels" and "Phone width, 390 pixels", an address field ("Address in the preview"), "Reload"
+  and "New tab"; a failed build shows its error over the preview (an alert; "Hide"). Code: "Show
+  the files", then the navigation "Files of web's app" (a button a file; "new" or "edited" after
+  the agent's changes) and the open file in a `pre` labelled "Code of <path>", with "Last change"
+  (that file's diff) and "Refresh". Database: "Show the tables": each table of Supabase's public
+  schema with its columns and whether row level security is on. Beside it (below it on narrower
+  screens), "Agent": "Connect an agent" (the prompt to give your agent, "Copy the prompt"), then a
+  list, "Agent activity, newest first" (shown oldest at the top, as a chat), of every step in
+  every machine (filter: "Show", a machine or "All machines"): "Edited src/App.jsx", "Changed 3
+  files", "Ran npm install zustand", "Ran SQL on supabase", "Read 2 files", "Built version 7 in
+  3.0 s", "Build 8 failed" (with the error), each tagged with its runtime and who asked, its exit
+  status, and the changed files, each a disclosure whose diff is a `pre` labelled "Changes to
+  <path>". "Undo last change" and "Revert to starter…" (asks first) take web's app back. "Watch an
+  agent build" plays a short walkthrough through the same calls (rename the app; a `done` column
+  on Supabase and a checkbox for it; an All / Open / Done filter); "Stop the walkthrough" stops it
+  between steps.
 - `window.snowglobeAgent` (promises): `listRuntimes()` (name, purpose, state, sample, saved),
   `capabilities()`, `status(runtime)`, `runCommand({runtime, command, timeoutSeconds, requestId})`
   → `{jobId, runtime}` at once (wakes or boots the machine first), `readJob(jobId)`,
   `cancelJob(jobId)` (job ids are unique across runtimes), `writeFile({runtime, path, content})` →
-  `{bytes, changes}` once written, `copyFile({fromRuntime, fromPath,
+  `{bytes, changes}` once written, `writeFiles({runtime, files: [{path, content}], move, delete})`
+  → `{written, bytes, changes}`, `readFiles({runtime, paths})` → `[{path, size, text, truncated} |
+  {path, binary} | {path, error}]`, `listFiles({runtime, path, depth})` → `{dir, entries, truncated}`,
+  `revert({runtime, to: "previous" | "start"})` → `{changes, output}`, `runSql({sql, runtime})` →
+  `{exitStatus, output}`, `buildStatus({runtime, port})` → `{version, state, error, ms, at}`, `copyFile({fromRuntime, fromPath,
   toRuntime, toPath})` → `{bytes, sha256, readSeconds, writeSeconds}`, `cancelCopy()`,
   `suspend(runtime)`, `wake(runtime)`, `startFresh(runtime)` (asks the person), `setAwakeLimit(count)`
   → `{awakeLimit, awake, overLimit}`, `openPreview({runtime, port, path})` → `{url, base, status |
@@ -292,7 +308,19 @@ runs because of the address.
   `[exit N]`, `[timed out]` or `[stopped]` (in a watched project, then `[changed in <dir>: <files>]`);
   `cancel_job {job_id}`; `write_file {runtime, path, content}` writes a UTF-8 text file (at most
   1 MiB; its directory is made) with no shell quoting, as a job in its turn, and returns once it is
-  written, with what changed; `copy_file {from_runtime,
+  written, with what changed (`wait_for_build: true` also waits for web's rebuild); `list_files
+  {runtime, path, depth}` lists a directory as an indented tree (default: the watched project, web's
+  `/root/app`; `node_modules`, `dist`, `.git` not entered); `read_file {runtime, path | paths}`
+  returns up to 20 files' text in one call (256 KiB of each, 640 KiB in all; cut files say so);
+  `write_files {runtime, files: [{path, content}], move: [{from, to}], delete: [path], wait_for_build}`
+  changes several files in one job (written to temporary names, then moved into place together: one
+  rebuild), says what changed and, by default, waits for web's rebuild and returns `[build N ok in
+  S s]` or `[build N FAILED: <the compiler's error>]`; `revert_changes {runtime, to: "previous" |
+  "start"}` undoes the last change (the last 20 are kept; call again to go further back) or goes
+  back to how the project began (itself undoable), never touching `node_modules`, `dist` or `.git`;
+  `build_status {runtime, port}` returns web's last build (`/__build`); `run_sql {sql, runtime}`
+  runs SQL on `supabase` (default) or `postgres` through psql with `ON_ERROR_STOP` (the SQL is a
+  file of the job's: no quoting), then `notify pgrst, 'reload schema'`; `copy_file {from_runtime,
   from_path, to_runtime, to_path}` returns the bytes copied and their sha256 (a client's cancel
   signal stops it); `open_preview {runtime, port, path}` opens the page's preview on a server in a
   machine and returns its address and what its first request got; `close_preview`;
@@ -358,30 +386,48 @@ does. A port with nothing listening answers 502, "Nothing is listening".
 
 Both machines come ready and connected. `supabase` has a `notes` table (`id`, `user_id` default
 `auth.uid()`, `body`, `created_at`) with row level security: a user reads, adds and deletes only
-their own. `web` has a React app in `/root/app` (Vite 8, React 19, `@supabase/supabase-js`, all
-installed: no network needed) that signs up, logs in, lists, adds and deletes notes; from its boot
-`serve --watch dist 4173` builds it, serves it, and builds it again on every change.
+their own. `web` has a React app in `/root/app` (Vite 8, React 19, `@supabase/supabase-js`,
+Tailwind v4 through `@tailwindcss/vite`, TypeScript with React's types and a `tsconfig.json`, React
+Router, Zustand and clsx, all installed and pinned by its lockfile: no network needed) that signs
+up, logs in, lists, adds and deletes notes; from its boot `serve --watch dist 4173` builds it,
+serves it, and builds it again on every change. `.ts` and `.tsx` files build as they are (Vite
+strips the types); `npm run typecheck` runs `tsc --noEmit`. Tailwind classes work in any component
+(`src/styles.css` imports it; its own rules stay unlayered, so they win where they meet).
+
+`npm install <pkg>` works in `web`, in the browser too: every HTTP request the machine makes is the
+page's own `fetch()`, so CORS applies; registry.npmjs.org answers GETs with
+`access-control-allow-origin: *` but answers no preflight (OPTIONS is a 404), and npm's own headers
+(`npm-command`, `npm-session`, `pacote-*`) would need one. So the machine's `/root/.npmrc` points
+npm at `http://127.0.0.1:4874/`, a relay in `serve` that asks the registry with nothing but
+`Accept` (a simple request), for metadata (npm's abbreviated form) and tarballs alike. It is slow,
+as everything in the emulated machine is: most of a minute for a small package. Publishing and
+logging in don't work through it.
 
 1. `open_preview {runtime: "web", port: 4173}`: the app, live. supabase-js's URL is
    `<preview_base>supabase/54321` (`src/supabase.js` works it out from the page's address), and its
    key is in `/root/app/.env` (`VITE_SUPABASE_ANON_KEY`: the Supabase CLI's fixed local key, which
    is `$ANON_KEY` on `supabase`).
-2. Change the app: `write_file {runtime: "web", path: "/root/app/src/App.jsx", content: ...}` (or
-   `run_command` with sed). Files: `src/App.jsx` (the app), `src/supabase.js` (the client),
-   `src/styles.css`, `index.html`. The page shows the diff, `web` rebuilds (a few seconds natively,
-   longer in the tab, where the build runs in the emulated machine), and the preview reloads; a build error shows in the feed, and `wget -qO- 127.0.0.1:4173/__build` on
-   `web` says it too.
-3. Change the schema on `supabase` with psql, then `notify pgrst, 'reload schema'` so the Data API
-   sees it, for example:
+2. See it: `list_files {runtime: "web"}`, then `read_file {runtime: "web", paths: [...]}`. Files:
+   `src/App.jsx` (the app), `src/main.jsx`, `src/supabase.js` (the client), `src/styles.css`,
+   `index.html`, `package.json`, `vite.config.js`, `tsconfig.json`, and
+   `supabase/migrations/` (the starter's schema, for reference).
+3. Change it: `write_files {runtime: "web", files: [{path, content}, ...]}` with each file's whole
+   new text (or `run_command` with sed). The page shows the diffs, `web` rebuilds (a few seconds in
+   the tab, where the build runs in the emulated machine), the preview reloads, and the tool returns
+   the build's result: a failed build's error is the compiler's, with file and line, and the preview
+   keeps the last page that built. `revert_changes {runtime: "web", to: "previous"}` undoes it.
+4. Change the schema on `supabase` with `run_sql` (it reloads the Data API's schema after), and
+   keep the migration in web's project, `/root/app/supabase/migrations/<timestamp>_<name>.sql`, so
+   it shows, and is undone, with the rest. Every new table the app reads needs row level security
+   and policies for `authenticated`, for example:
 
-       psql "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
        alter table public.notes add column if not exists done boolean not null default false;
        create policy "update own notes" on public.notes for update to authenticated
          using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
-       notify pgrst, 'reload schema';
-       SQL
 
-4. On `supabase`: `psql "$DB_URL" -c "select n.id, n.body, u.email from notes n join auth.users u
+   The app sees it on its next request (supabase-js asks the Data API each time).
+
+5. On `supabase`: `psql "$DB_URL" -c "select n.id, n.body, u.email from notes n join auth.users u
    on u.id = n.user_id"` shows what the person added in the preview, with their user.
 
 Without a second machine: copy the built `dist` (as a tarball, `copy_file`) to `supabase` and serve
@@ -391,7 +437,7 @@ it there with Bun (`BUN_BE_BUN=1 supabase run serve.ts`, `Bun.serve({hostname: "
 ### The runtimes on this site
 
 - runtime `supabase`: Supabase for web app building: Postgres, Auth and the Data API, with a preview (2 CPUs; the API on port 54321; `$DB_URL`, `$API_URL`, `$ANON_KEY` in every shell; try `psql "$DB_URL" -c "select now()"`)
-- runtime `web`: build web apps: a React app on Supabase, rebuilt and served on port 4173 as it changes (Vite, Node) (the app in `/root/app`, watched: each command's changes are reported; try `cd /root/app && sed -i 's/<h1>Notes/<h1>My notes/' src/App.jsx`)
+- runtime `web`: build web apps: a React app on Supabase, rebuilt and served on port 4173 as it changes (Vite, Tailwind, TypeScript, npm) (the app in `/root/app`, watched: each command's changes are reported; try `cd /root/app && sed -i 's/<h1>Notes/<h1>My notes/' src/App.jsx`)
 - runtime `python`: run Python: scripts, numpy and pandas for data work; pip install adds packages from PyPI (try `python3 -c 'import numpy, pandas; print(numpy.__version__, pandas.__version__)'`)
 - runtime `duckdb`: DuckDB for analytics: SQL over CSV, Parquet and JSON files (try `duckdb -c 'select 6 * 7'`)
 - runtime `postgres`: PostgreSQL for database work: load CSV files and query them with psql (try `psql -h /run/postgresql -U postgres -tAc 'select count(*) from planets'`)

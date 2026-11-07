@@ -14,7 +14,7 @@ const report = (body) => `\n${'SGCHANGES'}_${NONCE} BEGIN\n${body}SGCHANGES_${NO
 test('a command is wrapped, never changed: it runs from a job file, and the job exits with its status', () => {
   const w = B.wrapCommand("echo 'hi'; exit 3", '/root/app/', NONCE);
   assert.equal(new TextDecoder().decode(w.files.cmd), "echo 'hi'; exit 3\n");
-  assert.match(w.command, /^sg_w='\/root\/app'; sg_s='\/var\/lib\/snowglobe\/watch\/root\/app'$/m);
+  assert.match(w.command, /^sg_w='\/root\/app'; sg_s='\/var\/lib\/snowglobe\/watch\/root\/app'; /m);
   assert.match(w.command, /^sh "\$EXCLAVE_WORKSPACE\/in\/cmd"$/m);
   assert.match(w.command, /^exit \$sg_rc$/m);
   assert.ok(!w.command.includes("echo 'hi'"), 'the command is not in the wrapper');
@@ -59,6 +59,57 @@ test('the wrapper reports what a command added, changed and deleted, and measure
   // Measured from the last report: nothing changed since
   const b = run('echo again', 1);
   assert.deepEqual([b.status, b.output, b.changes.files.length], [0, 'again\n', 0]);
+});
+
+test('undo and revert: each change is kept, undo goes back one step at a time, and start is how the project began', { skip: !tools && 'no POSIX tools' }, () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sgr-'));
+  const app = path.join(tmp, 'app');
+  fs.mkdirSync(path.join(app, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(app, 'node_modules', 'x'), { recursive: true });
+  fs.writeFileSync(path.join(app, 'src', 'App.jsx'), 'v1\n');
+  const snapshots = path.join(tmp, 'snap');
+  let n = 0;
+  const run = (command) => {
+    const nonce = NONCE + n++;
+    const w = B.wrapCommand(command, app, nonce, { snapshots });
+    const ws = path.join(tmp, `job${n}`);
+    fs.mkdirSync(path.join(ws, 'in'), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'in', 'cmd'), w.files.cmd);
+    let out;
+    let status = 0;
+    try {
+      out = execFileSync('sh', ['-c', w.command], { cwd: tmp, env: { ...process.env, EXCLAVE_WORKSPACE: ws }, encoding: 'utf8' });
+    } catch (e) {
+      out = e.stdout;
+      status = e.status;
+    }
+    return { status, ...B.splitChanges(out, nonce) };
+  };
+  const read = (f) => fs.existsSync(path.join(app, f)) ? fs.readFileSync(path.join(app, f), 'utf8') : null;
+  const revert = (to) => run(B.revertCommand(app, to, { snapshots }));
+  assert.equal(revert('previous').status, 3); // nothing kept yet
+  run(`echo v2 >${app}/src/App.jsx`);
+  run(`echo new >${app}/src/New.jsx && echo dep >${app}/node_modules/x/i.js`);
+  run('echo nothing changes');
+  run(`echo v3 >${app}/src/App.jsx`);
+  let r = revert('previous');
+  assert.equal(r.status, 0);
+  assert.deepEqual(r.changes.files.map((f) => [f.status, f.path]), [['modified', 'src/App.jsx']]);
+  assert.equal(read('src/App.jsx'), 'v2\n');
+  r = revert('previous');
+  assert.deepEqual(r.changes.files.map((f) => [f.status, f.path]), [['deleted', 'src/New.jsx']]);
+  assert.equal(read('src/New.jsx'), null);
+  assert.equal(read('node_modules/x/i.js'), 'dep\n'); // never touched
+  run(`echo v4 >${app}/src/App.jsx && echo b >${app}/src/B.jsx`);
+  r = revert('start');
+  assert.equal(r.status, 0);
+  assert.equal(read('src/App.jsx'), 'v1\n');
+  assert.equal(read('src/B.jsx'), null);
+  // The revert to start is itself a step: undo brings v4 back
+  revert('previous');
+  assert.equal(read('src/App.jsx'), 'v4\n');
+  assert.equal(read('src/B.jsx'), 'b\n');
+  assert.throws(() => B.revertCommand(app, 'sideways'), /previous/);
 });
 
 test('the report is taken out of the output: whole, still arriving, or cut off', () => {
@@ -249,4 +300,23 @@ test('the feed: newest first, a run\'s changed files with their diffs, the filte
   feed.clear();
   assert.equal(list.children.length, 0);
   assert.equal(empty.hidden, false);
+});
+
+test('each feed entry is a step of the agent\'s conversation, titled by what it did', () => {
+  const ch = (files, more = false) => ({ files: files.map(([status, path]) => ({ status, path, added: 1, removed: 0 })), more });
+  const t = (e) => B.stepOf(e);
+  assert.deepEqual(t({ kind: 'run', command: 'write /root/app/src/App.jsx (8 bytes)', changes: ch([['modified', 'src/App.jsx']]) }), { step: 'edit', title: 'Edited src/App.jsx' });
+  assert.equal(t({ kind: 'run', command: 'write 2 files', changes: ch([['added', 'a'], ['added', 'b']]) }).title, 'Changed 2 files');
+  assert.equal(t({ kind: 'run', command: 'write 1 file', changes: ch([['added', 'src/Card.tsx']]) }).title, 'Created src/Card.tsx');
+  assert.equal(t({ kind: 'run', command: 'write 1 file', state: 'running' }).title, 'Writing files…');
+  assert.deepEqual(t({ kind: 'run', command: 'npm install zustand' }), { step: 'run', title: 'Ran npm install zustand', code: false });
+  assert.deepEqual(t({ kind: 'run', runtime: 'web', command: 'cd /root/app && sed -i "s/a/b/" src/App.jsx && grep -n x src/App.jsx' }), { step: 'run', title: 'Ran a command in web', code: true });
+  assert.equal(t({ kind: 'run', runtime: 'supabase', command: 'SQL: alter table notes' }).title, 'Ran SQL on supabase');
+  assert.equal(t({ kind: 'run', command: 'undo the last change' }).step, 'undo');
+  assert.equal(t({ kind: 'build', state: 'ok', version: 7, ms: 3012 }).title, 'Built version 7 in 3.0 s');
+  assert.deepEqual(t({ kind: 'build', state: 'error', version: 8 }), { step: 'build-error', title: 'Build 8 failed' });
+  assert.equal(t({ kind: 'read', paths: ['src/App.jsx'] }).title, 'Read src/App.jsx');
+  assert.equal(t({ kind: 'read', paths: ['a', 'b'] }).title, 'Read 2 files');
+  assert.equal(t({ kind: 'list', path: '/root/app' }).title, 'Looked at the files in /root/app');
+  assert.equal(t({ kind: 'note', text: 'Step 1' }).title, 'Step 1');
 });

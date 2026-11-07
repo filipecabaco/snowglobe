@@ -34,27 +34,46 @@
   /** Where the copy of `dir` the changes are measured against is kept, in the machine. */
   const snapshotDir = (dir, under = SNAPSHOTS) => under + (checkWatch(dir) === "/" ? "/root-dir" : checkWatch(dir));
 
+  // Changes kept to undo, per watched directory: the state before each of the last HISTORY commands
+  // that changed something
+  const HISTORY = 20;
+
+  /** The shell functions the wrapper and a revert share: sg_list (the project's files, without
+   *  node_modules, dist and .git), sg_snap (the copy made again), sg_restore <dir> (the project made
+   *  as <dir> is: files it lacks deleted, its files copied in). */
+  function shellLib(w, s) {
+    return `sg_w=${quote(w)}; sg_s=${quote(s)}; sg_h="$sg_s.history"; sg_b="$sg_s.base"
+sg_list() { find . \\( -name node_modules -o -name dist -o -name .git \\) -prune -o -type f -print; }
+sg_snap() {
+  rm -rf "$sg_s.new" && mkdir -p "$sg_s.new" || return
+  ( cd "$sg_w" && sg_list | while IFS= read -r f; do mkdir -p "$sg_s.new/\${f%/*}" && cp -p "$f" "$sg_s.new/$f"; done )
+}
+sg_restore() {
+  ( cd "$sg_w" && sg_list | while IFS= read -r f; do [ -f "$1/$f" ] || rm -f "$f"; done )
+  ( cd "$1" && find . -type f -print | while IFS= read -r f; do mkdir -p "$sg_w/\${f%/*}" && cp "$f" "$sg_w/$f"; done )
+}
+`;
+  }
+
   /**
    * A command wrapped so its job also reports what it changed in `dir`: { command, files } for
    * runCommand. `nonce` (letters and digits) marks the report. The command runs as it would have,
    * from a file of the job's: its exit status is the job's. `snapshots`: where the copies are kept.
+   * The copy from before the first command is kept (<copy>.base: what revert to "start" restores),
+   * and so is the copy from before each of the last 20 commands that changed something
+   * (<copy>.history/<n>: what revert to "previous" restores).
    */
   function wrapCommand(command, dir, nonce, { snapshots = SNAPSHOTS } = {}) {
     if (!/^[A-Za-z0-9]{8,64}$/.test(nonce)) throw new Error("nonce: 8 to 64 letters or digits");
     const w = checkWatch(dir);
     const s = snapshotDir(w, snapshots);
-    const script = `sg_w=${quote(w)}; sg_s=${quote(s)}
-sg_list() { find . \\( -name node_modules -o -name dist -o -name .git \\) -prune -o -type f -print; }
-sg_snap() {
-  rm -rf "$sg_s.new" && mkdir -p "$sg_s.new" || return
-  ( cd "$sg_w" && sg_list | while IFS= read -r f; do mkdir -p "$sg_s.new/\${f%/*}" && cp -p "$f" "$sg_s.new/$f"; done )
-  rm -rf "$sg_s" && mv "$sg_s.new" "$sg_s"
-}
-[ -d "$sg_s" ] || [ ! -d "$sg_w" ] || sg_snap 2>/dev/null
+    const script = shellLib(w, s) + `if [ ! -d "$sg_s" ] && [ -d "$sg_w" ]; then
+  sg_snap 2>/dev/null && mv "$sg_s.new" "$sg_s"
+  [ -d "$sg_b" ] || cp -pR "$sg_s" "$sg_b" 2>/dev/null
+fi
 sh "$EXCLAVE_WORKSPACE/in/cmd"
 sg_rc=$?
 if [ -d "$sg_w" ] && [ -d "$sg_s" ]; then
-  printf '\\n%s_%s BEGIN\\n' ${MARK} ${nonce}
   ( cd "$sg_w" && { sg_list; ( cd "$sg_s" && find . -type f -print ); } | sort -u | {
     n=0
     while IFS= read -r f; do
@@ -70,13 +89,57 @@ if [ -d "$sg_w" ] && [ -d "$sg_s" ]; then
       if [ "$(cat "$a" "$b" | tr -d '\\000' | wc -c)" -ne "$sz" ]; then echo SGC_BINARY; continue; fi
       diff -U 2 "$a" "$b" 2>&1 | awk -v max=${MAX_LINES} 'NR <= 2 && /^(---|\\+\\+\\+) / { next } { if (++k <= max) print; else c++ } END { if (c) print "SGC_CUT " c }'
     done
-  } )
+  } ) >"$sg_s.report" 2>&1
   sg_snap 2>/dev/null
+  if grep -q '^SGC_FILE ' "$sg_s.report" && [ ! -e "$sg_s.nohist" ]; then
+    # What it was before this command, kept to undo it
+    mkdir -p "$sg_h"
+    sg_n=$(( $(cat "$sg_h/.seq" 2>/dev/null || echo 0) + 1 ))
+    echo "$sg_n" >"$sg_h/.seq"
+    mv "$sg_s" "$sg_h/$sg_n"
+    sg_k=$(ls "$sg_h" | wc -l)
+    [ "$sg_k" -gt ${HISTORY} ] && ls "$sg_h" | sort -n | head -n $((sg_k - ${HISTORY})) | while IFS= read -r d; do rm -rf "$sg_h/$d"; done
+  else
+    rm -rf "$sg_s"
+  fi
+  rm -f "$sg_s.nohist"
+  mv "$sg_s.new" "$sg_s" 2>/dev/null
+  printf '\\n%s_%s BEGIN\\n' ${MARK} ${nonce}
+  cat "$sg_s.report"
+  rm -f "$sg_s.report"
   printf '%s_%s END\\n' ${MARK} ${nonce}
 fi
 exit $sg_rc
 `;
     return { command: script, files: { cmd: new TextEncoder().encode(command.endsWith("\n") ? command : command + "\n") } };
+  }
+
+  /**
+   * The command that takes a watched project back (run it wrapped, as any command, so its job
+   * reports what it changed): to "previous", as it was before the last command that changed it (that
+   * step is then forgotten, so the next revert goes one further back); to "start", as it was before
+   * the first command run in it (the starter, in a machine started fresh), itself a step a
+   * "previous" can undo. node_modules, dist and .git are never touched.
+   */
+  function revertCommand(dir, to, { snapshots = SNAPSHOTS } = {}) {
+    if (to !== "previous" && to !== "start") throw new Error('to: "previous" (undo the last change) or "start" (back to how the project began)');
+    const w = checkWatch(dir);
+    const s = snapshotDir(w, snapshots);
+    const pick = to === "previous"
+      ? `sg_n=$(ls "$sg_h" 2>/dev/null | sort -n | tail -n 1)
+[ -n "$sg_n" ] || { echo "nothing to undo: no change is kept"; exit 3; }
+src="$sg_h/$sg_n"
+`
+      : `src="$sg_b"
+[ -d "$src" ] || { echo "nothing to revert: no command has changed the project yet"; exit 3; }
+`;
+    const after = to === "previous" ? `rm -rf "$src"; touch "$sg_s.nohist"
+echo "undid the last change (step $sg_n); $(ls "$sg_h" | wc -l) more kept"
+`
+      : `echo "the project is as it began; undo takes it back to before this"
+`;
+    return shellLib(w, s) + pick + `sg_restore "$src"
+` + after;
   }
 
   /**
@@ -144,6 +207,138 @@ exit $sg_rc
     const one = (f) => f.status === "added" ? `${f.path} (added)` : f.status === "deleted" ? `${f.path} (deleted)` : `${f.path} (+${f.added} −${f.removed})`;
     const list = changes.files.slice(0, 4).map(one).join(", ") + (changes.files.length > 4 || changes.more ? ", …" : "");
     return changes.files.length === 1 ? list : `${changes.files.length}${changes.more ? "+" : ""} files: ${list}`;
+  }
+
+  // ---------------------------------------------------------------- a project's files
+
+  const MAX_LIST = 2000; // entries list_files gives
+  const MAX_READ_FILE = 256 << 10; // bytes read_file gives of one file
+  const MAX_READ_TOTAL = 640 << 10; // and of all the files of one call (as base64, under a job's 1 MiB of output)
+  const MAX_READ_PATHS = 20;
+  const MAX_WRITE_FILES = 50;
+  const MAX_WRITE_TOTAL = 1 << 20;
+
+  /** A path in a machine, checked: no NUL or line breaks, not a directory's trailing slash. */
+  function checkFilePath(p, what = "path") {
+    if (typeof p !== "string" || !p.trim() || p.length > 4096 || /[\0\n\r]/.test(p)) throw new Error(`${what}: a file path in the machine (relative paths start in /root), with no line breaks`);
+    return p;
+  }
+
+  /** The job that lists a directory, `depth` levels down: one line a path, "<type>|<bytes>|<path>",
+   *  node_modules, dist and .git listed but not entered. */
+  function listCommand(dir, depth = 4) {
+    checkFilePath(dir, "path");
+    if (!Number.isInteger(depth) || depth < 1 || depth > 12) throw new Error("depth: 1 to 12 levels");
+    return `d=${quote(dir)}\n` +
+      `[ -d "$d" ] || { echo "SGLS_ERR no such directory: $d"; exit 0; }\n` +
+      `cd "$d" && echo "SGLS_DIR $(pwd)" && ` +
+      `find . -mindepth 1 -maxdepth ${depth} \\( -name node_modules -o -name dist -o -name .git \\) -prune -print -o -print 2>/dev/null | ` +
+      `head -n ${MAX_LIST + 1} | tr '\\n' '\\0' | xargs -0 -r stat -c 'SGLS %F|%s|%n'\n`;
+  }
+
+  /** What listCommand printed: { dir, entries: [{ path, type: "dir" | "file" | "link", size,
+   *  skipped (node_modules, dist, .git: not entered) }], truncated }, sorted as a tree is. */
+  function parseList(output) {
+    const err = /SGLS_ERR ([^\n]*)/.exec(output);
+    if (err) throw new Error(err[1].trim());
+    const dir = /SGLS_DIR ([^\n]*)/.exec(output)?.[1] ?? null;
+    const SKIP = new Set(["node_modules", "dist", ".git"]);
+    const entries = [];
+    for (const line of output.split("\n")) {
+      const m = /^SGLS ([^|]*)\|(\d+)\|\.\/(.+)$/.exec(line);
+      if (!m) continue;
+      const type = /directory/.test(m[1]) ? "dir" : /link/.test(m[1]) ? "link" : "file";
+      const path = m[3];
+      entries.push({ path, type, size: type === "file" ? Number(m[2]) : 0, ...(type === "dir" && SKIP.has(path.split("/").pop()) ? { skipped: true } : {}) });
+    }
+    const truncated = entries.length > MAX_LIST;
+    if (truncated) entries.length = MAX_LIST;
+    entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    return { dir, entries, truncated };
+  }
+
+  /** The job that reads files: each as SGRF_HEAD <i> <bytes>, its first `max` bytes as base64, and
+   *  SGRF_END <i>, or SGRF_ERR <i> <why>. */
+  function readCommand(paths, max = MAX_READ_FILE) {
+    if (!Array.isArray(paths) || !paths.length || paths.length > MAX_READ_PATHS) throw new Error(`paths: 1 to ${MAX_READ_PATHS} files`);
+    const each = Math.min(max, Math.floor(MAX_READ_TOTAL / paths.length));
+    return paths.map((p, i) => `f=${quote(checkFilePath(p))}\n` +
+      `if [ ! -e "$f" ]; then echo "SGRF_ERR ${i} no such file"\n` +
+      `elif [ ! -f "$f" ]; then echo "SGRF_ERR ${i} not a regular file"\n` +
+      `elif [ ! -r "$f" ]; then echo "SGRF_ERR ${i} not readable"\n` +
+      `else echo "SGRF_HEAD ${i} $(wc -c <"$f")"; head -c ${each} "$f" | base64 | tr -d '\\n'; printf '\\nSGRF_END ${i}\\n'; fi\n`).join("");
+  }
+
+  /** What readCommand printed: [{ path, size, text, truncated, binary, error }], as `paths` were asked. */
+  function parseRead(output, paths) {
+    const dec = new TextDecoder("utf-8", { fatal: true });
+    return paths.map((path, i) => {
+      const err = new RegExp(`SGRF_ERR ${i} ([^\\n]*)`).exec(output);
+      if (err) return { path, error: err[1].trim() };
+      const head = new RegExp(`SGRF_HEAD ${i} +(\\d+)\\n`).exec(output);
+      const end = head ? output.indexOf(`\nSGRF_END ${i}\n`, head.index) : -1;
+      if (!head || end === -1) return { path, error: "the machine did not send it" };
+      const b64 = output.slice(head.index + head[0].length, end).replace(/\s+/g, "");
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+      const size = Number(head[1]);
+      const truncated = bytes.length < size;
+      let text;
+      try {
+        // A cut may end inside a character: decode what is whole
+        text = truncated ? new TextDecoder().decode(bytes).replace(/�$/, "") : dec.decode(bytes);
+        if (truncated && text.includes("�")) throw new Error("binary");
+      } catch {
+        return { path, size, binary: true };
+      }
+      if (text.includes("\0")) return { path, size, binary: true };
+      return { path, size, text, truncated };
+    });
+  }
+
+  /**
+   * The job that changes several files at once: { command, files } for runCommand. `files`
+   * ([{ path, content }]) are written to a temporary name beside each target first, then all moved
+   * into place; then `move` ([{ from, to }]) and `remove` (paths: files, or directories under
+   * /root) are done. One job, so one report of what changed and, in a watched project, one rebuild.
+   */
+  function writeFilesCommand({ files = [], move = [], remove = [] } = {}) {
+    if (!Array.isArray(files) || !Array.isArray(move) || !Array.isArray(remove)) throw new Error("files, move and delete: arrays");
+    if (!files.length && !move.length && !remove.length) throw new Error("nothing to do: give files, move or delete");
+    if (files.length > MAX_WRITE_FILES) throw new Error(`files: at most ${MAX_WRITE_FILES} in one call`);
+    const enc = new TextEncoder();
+    const jobFiles = {};
+    let total = 0;
+    const lines = ["set -e", "sg_in=\"$EXCLAVE_WORKSPACE/in\""];
+    const finals = [];
+    const seen = new Set();
+    files.forEach((f, i) => {
+      if (!f || typeof f !== "object") throw new Error(`files[${i}]: { path, content }`);
+      const p = checkFilePath(f.path, `files[${i}].path`);
+      if (p.endsWith("/")) throw new Error(`files[${i}].path: a file, not a directory`);
+      if (typeof f.content !== "string") throw new Error(`files[${i}].content: the file's text, a string`);
+      if (seen.has(p)) throw new Error(`files: ${p} is given twice`);
+      seen.add(p);
+      const bytes = enc.encode(f.content);
+      total += bytes.length;
+      jobFiles[`f${i}`] = bytes;
+      lines.push(`f=${quote(p)}; mkdir -p -- "$(dirname -- "$f")"; cat "$sg_in/f${i}" >"$f.sgnew"`);
+      finals.push(`f=${quote(p)}; mv -f -- "$f.sgnew" "$f"`);
+    });
+    if (total > MAX_WRITE_TOTAL) throw new Error(`files: ${total} bytes in all; at most ${MAX_WRITE_TOTAL} (1 MiB) in one call`);
+    lines.push(...finals);
+    move.forEach((m, i) => {
+      const from = checkFilePath(m?.from, `move[${i}].from`);
+      const to = checkFilePath(m?.to, `move[${i}].to`);
+      lines.push(`a=${quote(from)}; b=${quote(to)}; [ -e "$a" ] || { echo "no $a to move" >&2; exit 2; }; mkdir -p -- "$(dirname -- "$b")"; mv -f -- "$a" "$b"`);
+    });
+    remove.forEach((r, i) => {
+      const p = checkFilePath(r, `delete[${i}]`);
+      lines.push(`p=${quote(p)}; case "$(cd "$(dirname -- "$p")" 2>/dev/null && pwd)/$(basename -- "$p")" in /root/?*/*|/root/?*|/tmp/?*) ;; *) echo "not deleting $p: only paths under /root or /tmp" >&2; exit 2;; esac; rm -rf -- "$p"`);
+    });
+    lines.push(`echo "${files.length} written, ${move.length} moved, ${remove.length} deleted"`);
+    return { command: lines.join("\n") + "\n", files: jobFiles, bytes: total };
   }
 
   // ---------------------------------------------------------------- rebuilds
@@ -348,7 +543,7 @@ notify pgrst, 'reload schema';`;
 
   function verdict(e) {
     // A note is a line of narration, not a job: it has no outcome to badge
-    if (e.kind === "note") return null;
+    if (e.kind === "note" || e.state == null) return null;
     switch (e.state) {
       case "running": return { text: "running", tone: "live" };
       case "exited": return { text: `exit ${e.exitStatus}`, tone: e.exitStatus === 0 ? "ok" : "bad" };
@@ -359,6 +554,47 @@ notify pgrst, 'reload schema';`;
       case "info": return null;
       default: return { text: "failed", tone: "bad" };
     }
+  }
+
+  const secsText = (ms) => ms == null ? "" : ms < 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
+
+  /** What a set of changes did, as a step's title: "Edited src/App.jsx", "Changed 3 files". */
+  function changesTitle(c) {
+    if (!c?.files.length) return null;
+    if (c.files.length === 1) {
+      const f = c.files[0];
+      return `${f.status === "added" ? "Created" : f.status === "deleted" ? "Deleted" : "Edited"} ${f.path}`;
+    }
+    return `Changed ${c.files.length}${c.more ? "+" : ""} files`;
+  }
+
+  /**
+   * A feed entry as a step of the agent's conversation: { step, title, code } (step: edit, run,
+   * sql, undo, copy, build, build-error, read, list, preview, note; code: whether the command is
+   * worth showing under the title).
+   */
+  function stepOf(e) {
+    const cmd = e.command ?? "";
+    switch (e.kind) {
+      case "note": return { step: "note", title: e.text ?? "" };
+      case "preview": return { step: "preview", title: e.text ?? "The preview" };
+      case "build": return e.state === "error"
+        ? { step: "build-error", title: `Build ${e.version ?? ""} failed`.replace("  ", " ") }
+        : { step: "build", title: `Built version ${e.version ?? "?"}${e.ms != null ? ` in ${secsText(e.ms)}` : ""}` };
+      case "read": {
+        const n = e.paths?.length ?? 0;
+        return { step: "read", title: n === 1 ? `Read ${e.paths[0]}` : `Read ${n} files` };
+      }
+      case "list": return { step: "list", title: `Looked at the files in ${e.path ?? "the project"}` };
+      default: break;
+    }
+    if (cmd === "undo the last change") return { step: "undo", title: "Undid the last change" };
+    if (cmd === "revert the project to how it began") return { step: "undo", title: "Reverted the app to the starter" };
+    if (/^write /.test(cmd)) return { step: "edit", title: changesTitle(e.changes) ?? (e.state === "running" ? "Writing files…" : "Wrote files: nothing changed") };
+    if (/^SQL: /.test(cmd)) return { step: "sql", title: `Ran SQL on ${e.runtime ?? "the database"}`, code: true };
+    if (/^copy /.test(cmd)) return { step: "copy", title: "Copied a file", code: true };
+    const one = cmd.split("\n")[0];
+    return { step: "run", title: one.length <= 48 && !cmd.includes("\n") ? `Ran ${one}` : `Ran a command in ${e.runtime ?? "a machine"}`, code: !(one.length <= 48 && !cmd.includes("\n")) || !!e.changes?.files.length };
   }
 
   /**
@@ -428,8 +664,12 @@ notify pgrst, 'reload schema';`;
       };
       li.className = "ev";
       li.dataset.kind = e.kind;
+      const st = stepOf(e);
+      li.dataset.step = st.step;
+      li.dataset.state = e.state ?? "";
       if (e.runtime) li.dataset.runtime = e.runtime;
       li.hidden = !this.shows(e);
+      const title = el("p", "ev-title", st.title);
       const head = el("div", "ev-head");
       const who = [e.runtime, e.source ? `by ${by(e.source)}` : null].filter(Boolean).join(", ");
       if (who) head.append(el("span", "tag", who));
@@ -442,9 +682,9 @@ notify pgrst, 'reload schema';`;
       const t = el("time", "run-time", clock(e.at));
       t.dateTime = new Date(e.at).toISOString();
       head.append(t);
-      const parts = [head];
-      if (e.command) parts.push(el("code", "ev-cmd", e.command.length > 600 ? e.command.slice(0, 600) + "…" : e.command));
-      if (e.text) parts.push(el("p", "ev-text", e.text));
+      const parts = [title, head];
+      if (e.command && st.code) parts.push(el("code", "ev-cmd", e.command.length > 600 ? e.command.slice(0, 600) + "…" : e.command));
+      if (e.text && e.kind !== "note" && e.kind !== "preview") parts.push(el("p", "ev-text", e.text));
       if (e.error && e.kind === "build") {
         const pre = el("pre", "diff ev-error", e.error);
         pre.tabIndex = 0;
@@ -500,8 +740,8 @@ notify pgrst, 'reload schema';`;
     }
   }
 
-  const SnowglobeBuilder = { wrapCommand, splitChanges, parseChanges, diffLines, summary, snapshotDir, checkWatch, BuildWatch, Feed,
-    DEMO, playDemo, replaceOnce, limits: { MAX_FILES, MAX_LINES, MAX_DIFF_BYTES } };
+  const SnowglobeBuilder = { stepOf, changesTitle, wrapCommand, revertCommand, listCommand, parseList, readCommand, parseRead, writeFilesCommand, checkFilePath, splitChanges, parseChanges, diffLines, summary, snapshotDir, checkWatch, BuildWatch, Feed,
+    DEMO, playDemo, replaceOnce, limits: { MAX_FILES, MAX_LINES, MAX_DIFF_BYTES, HISTORY, MAX_LIST, MAX_READ_FILE, MAX_READ_TOTAL, MAX_READ_PATHS, MAX_WRITE_FILES, MAX_WRITE_TOTAL } };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeBuilder;
   else root.SnowglobeBuilder = SnowglobeBuilder;
 })(typeof window !== "undefined" ? window : globalThis);

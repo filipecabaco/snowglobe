@@ -799,3 +799,102 @@ test('previewGet: a small GET for the page, only while a preview is open and all
   await api.closePreview();
   assert.equal(await api.previewGet({ runtime: 'web', port: 4173, path: '/__build' }), null);
 });
+
+// A job that ends as `fn(command, files)` says: [exitStatus, output]
+const answer = (h, fn) => { h.onRun = (id, job) => setImmediate(() => {
+  const [exitStatus, output] = fn(job.command, job.files ?? {});
+  Object.assign(h.jobs[id], { state: 'exited', exitStatus, output });
+  h.emit('job', { jobId: id });
+}); };
+
+test('the project\'s files: a listing and a read are one unwrapped job each, quiet in the feed when the page asks', async () => {
+  const { api, host, activity } = setup({ man: watchedManifest, options: { isolated: true } });
+  await api.wake('web');
+  answer(host('web'), (cmd) => /SGLS_ERR/.test(cmd)
+    ? [0, 'SGLS_DIR /root/app\nSGLS directory|4096|./src\nSGLS regular file|120|./src/App.jsx\nSGLS directory|4096|./node_modules\nSGLS regular file|9|./package.json\n']
+    : [0, `SGRF_HEAD 0 6\n${Buffer.from('hello\n').toString('base64')}\nSGRF_END 0\nSGRF_ERR 1 no such file\nSGRF_HEAD 2 4\n${Buffer.from([0, 1, 2, 255]).toString('base64')}\nSGRF_END 2\n`]);
+  const l = await api.listFiles({ runtime: 'web' }, { source: 'webmcp' });
+  assert.equal(l.dir, '/root/app');
+  assert.deepEqual(l.entries.map((e) => [e.path, e.type, e.size, !!e.skipped]),
+    [['node_modules', 'dir', 0, true], ['package.json', 'file', 9, false], ['src', 'dir', 0, false], ['src/App.jsx', 'file', 120, false]]);
+  const job = Object.values(host('web').jobs)[0];
+  assert.ok(!/SGCHANGES/.test(job.command), 'a read is not wrapped');
+  assert.match(job.command, /^d='\/root\/app'$/m);
+  const r = await api.readFiles({ runtime: 'web', paths: ['src/a.txt', 'nope', 'bin'] }, { source: 'webmcp' });
+  assert.deepEqual(r, [{ path: 'src/a.txt', size: 6, text: 'hello\n', truncated: false }, { path: 'nope', error: 'no such file' }, { path: 'bin', size: 4, binary: true }]);
+  assert.deepEqual(activity.filter((e) => e.kind === 'list' || e.kind === 'read').map((e) => [e.kind, e.path ?? e.paths]), [['list', '/root/app'], ['read', ['src/a.txt', 'nope', 'bin']]]);
+  assert.ok(!activity.some((e) => e.kind === 'run'), 'reads are not runs in the feed');
+  await api.readFiles({ runtime: 'web', path: 'x' }, { source: 'studio' });
+  assert.equal(activity.filter((e) => e.kind === 'read').length, 1, 'the page\'s own reads are not in the feed');
+  await assert.rejects(api.readFiles({ runtime: 'web', paths: [] }), /paths/);
+});
+
+test('writeFiles: several files, moves and deletes in one wrapped job, contents as job files; revert and its nothing-to-undo', async () => {
+  const { api, host, activity } = setup({ man: watchedManifest, options: { isolated: true } });
+  await api.wake('web');
+  answer(host('web'), (cmd, files) => {
+    const nonce = /SGCHANGES (\w+)/.exec(cmd)?.[1];
+    const inner = new TextDecoder().decode(files.cmd);
+    if (/nothing to undo/.test(inner) && host('web').empty) return [3, 'nothing to undo: no change is kept\n'];
+    return [0, `ok\n\nSGCHANGES_${nonce} BEGIN\nSGC_FILE A src/a.jsx\n+a\nSGC_FILE M src/App.jsx\n-x\n+y\nSGCHANGES_${nonce} END\n`];
+  });
+  const r = await api.writeFiles({ runtime: 'web', files: [{ path: '/root/app/src/a.jsx', content: "a $b 'c'\n" }, { path: '/root/app/src/App.jsx', content: 'y\n' }],
+    move: [{ from: '/root/app/src/old.css', to: '/root/app/src/new.css' }], delete: ['/root/app/src/gone.jsx'] }, { source: 'webmcp' });
+  assert.deepEqual([r.written, r.bytes, r.changes.files.length], [2, 11, 2]);
+  const job = Object.values(host('web').jobs)[0];
+  assert.equal(new TextDecoder().decode(job.files.f0), "a $b 'c'\n");
+  const inner = new TextDecoder().decode(job.files.cmd);
+  assert.ok(!inner.includes("a $b 'c'") && inner.includes('.sgnew') && inner.includes("rm -rf -- \"$p\"") && inner.includes("a='/root/app/src/old.css'"), inner);
+  assert.equal(activity.find((e) => e.kind === 'run').command, 'write 2 files, 1 moved, 1 deleted');
+  await assert.rejects(api.writeFiles({ runtime: 'web', files: [] }), /nothing to do/);
+  await assert.rejects(api.writeFiles({ runtime: 'web', files: [{ path: 'a', content: 1 }] }), /content/);
+  await assert.rejects(api.writeFiles({ runtime: 'web', files: [{ path: 'a', content: '' }, { path: 'a', content: '' }] }), /twice/);
+  const u = await api.revert({ runtime: 'web', to: 'previous' });
+  assert.equal(u.changes.files.length, 2);
+  host('web').empty = true;
+  await assert.rejects(api.revert({ runtime: 'web', to: 'previous' }), /nothing to undo/);
+  await assert.rejects(api.revert({ runtime: 'supabase', to: 'start' }), /no watched project/);
+});
+
+test('runSql: the SQL is a job file run by psql, and the Data API is told to reload its schema', async () => {
+  const { api, host, activity } = setup({ man: watchedManifest, options: { isolated: true } });
+  await api.wake('supabase');
+  answer(host('supabase'), () => [0, 'ALTER TABLE\n']);
+  const r = await api.runSql({ sql: "alter table notes add column done boolean;\nselect 'x';" }, { source: 'webmcp' });
+  assert.deepEqual([r.runtime, r.exitStatus, r.output], ['supabase', 0, 'ALTER TABLE\n']);
+  const job = Object.values(host('supabase').jobs)[0];
+  assert.equal(new TextDecoder().decode(job.files.sql), "alter table notes add column done boolean;\nselect 'x';");
+  assert.match(job.command, /ON_ERROR_STOP=1 .*-f "\$EXCLAVE_WORKSPACE\/in\/sql"/);
+  assert.match(job.command, /notify pgrst, 'reload schema'/);
+  assert.equal(activity.find((e) => e.kind === 'run').command, 'SQL: alter table notes add column done boolean;');
+  await api.runSql({ sql: 'select 1' }, { tsv: true, silent: true });
+  assert.equal(activity.filter((e) => e.kind === 'run').length, 1, 'a silent read is not in the feed');
+  assert.match(Object.values(host('supabase').jobs)[1].command, /-A -t -F/);
+});
+
+test('buildStatus: reads /__build over the machine\'s network, waking it first; nothing there is said', async () => {
+  const { api, host } = setup({ man: watchedManifest, options: { isolated: true } });
+  const b = await api.buildStatus({ runtime: 'web' });
+  assert.equal(b.state, 'none', 'the stand-in answers "ok", not JSON');
+  assert.equal(host('web').config.name, 'web', 'woken for it');
+  assert.equal((await api.buildStatus({ runtime: 'web', port: 9999 })).state, 'none');
+});
+
+test("the guest's fetch drops npm's and the cache's hints, so a registry GET needs no preflight", async () => {
+  const { guestFetch } = require('./machine-core.js');
+  const real = globalThis.fetch;
+  let seen;
+  globalThis.fetch = async (url, init) => { seen = { url, init }; return new Response('{}'); };
+  try {
+    await guestFetch('https://registry.npmjs.org/ms', { method: 'GET', headers: new Headers([
+      ['accept', 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*'],
+      ['npm-command', 'install'], ['npm-session', 'abc'], ['pacote-version', '21'], ['pacote-req-type', 'packument'],
+      ['cache-control', 'max-age=0'], ['pragma', 'no-cache'], ['user-agent', 'npm/11'], ['authorization', 'Bearer t']]) });
+    assert.deepEqual([...seen.init.headers.keys()].sort(), ['accept', 'authorization']);
+    assert.equal(seen.init.method, 'GET');
+    await guestFetch('https://x.example/', undefined);
+    assert.equal(seen.init, undefined);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

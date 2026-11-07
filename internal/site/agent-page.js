@@ -1,6 +1,10 @@
-// The agent page's own elements (site/agent/index.html) over orchestrator.js: the list of machines
-// and their state, the awake limit, the command form (agent-panel.js), the preview, the copy form,
-// the terminal of the selected machine, and the WebMCP tools. Everything here runs only in answer
+// The agent page's own elements (site/agent/index.html) over orchestrator.js. At the top, the
+// studio: the app an agent builds in its preview (with its width, address, reload, and its build's
+// state), its code (studio.js: the project's tree and files, read from the machine) and database
+// (Supabase's tables), and beside it the agent's steps as a conversation (builder.js's feed), how
+// to connect an agent, the walkthrough, undo and revert. Below, the machines: their list and state,
+// the awake limit, the command form (agent-panel.js), the preview, the copy form, the terminal of
+// the selected machine. And the WebMCP tools. Everything here runs only in answer
 // to someone: a click, a key, an agent's call, and every run, copy and preview, whoever asks, needs
 // the person at the page to allow it once. The address only preselects (?runtime=<name>).
 //
@@ -400,6 +404,8 @@
   };
   previewTab.addEventListener("click", () => claim(previewTab.href));
 
+  const previewBar = $("preview-bar");
+  const previewEmpty = $("preview-empty");
   function showPreview(p) {
     const was = current;
     current = p;
@@ -408,10 +414,14 @@
     if (!p) buildWatch.stop();
     else if (!was || was.runtime !== p.runtime || was.port !== p.port || !buildWatch.running) buildWatch.start();
     previewPanel.hidden = !p;
+    previewBar.hidden = !p;
+    previewEmpty.hidden = !!p;
     previewClose.disabled = !p;
+    showBuilding(false);
+    showBuildFail(null);
     if (!p) {
       previewFrame.removeAttribute("src");
-      previewNote.textContent = previewable ? "No preview is open. A server in a machine must listen on 0.0.0.0 to be seen here." : previewNote.textContent;
+      previewNote.textContent = previewable ? "No preview is open." : previewNote.textContent;
       render();
       return;
     }
@@ -419,6 +429,7 @@
     previewPort.value = String(p.port);
     previewPath.value = p.path;
     lastPort.set(p.runtime, p.port);
+    $("preview-host").textContent = `${p.runtime}:${p.port}`;
     previewAddress.value = p.path;
     previewTab.href = p.url;
     navigate(p.url);
@@ -429,6 +440,7 @@
 
   // The address bar follows what the frame shows (it is this site's: same origin)
   previewFrame.addEventListener("load", () => {
+    previewFrame.classList.remove("reloading");
     if (!current) return;
     try {
       const loc = previewFrame.contentWindow.location;
@@ -460,6 +472,8 @@
   /** The preview's page loaded again, where it is (its path kept) */
   function reloadPreview() {
     if (!current) return;
+    previewFrame.classList.add("reloading");
+    setTimeout(() => previewFrame.classList.remove("reloading"), 4000);
     try {
       claim(previewFrame.contentWindow.location.href);
       previewFrame.contentWindow.location.reload();
@@ -577,38 +591,69 @@
     render();
   });
 
-  // ---------------------------------------------------------------- what the agent changed
-  // Every run and copy in every machine, newest first, with the files each changed in a watched
-  // project (web's /root/app) and their diffs; the open preview's builds, and its reloads after them
+  // ---------------------------------------------------------------- the agent's steps
+  // Every run, write, read and copy in every machine, as the agent's conversation (newest last on
+  // screen, newest first in reading order), with the files each changed in a watched project (web's
+  // /root/app) and their diffs; the open preview's builds, and its reloads after them
   const B = SnowglobeBuilder;
-  const feed = new B.Feed($("feed"), { doc, empty: $("feed-empty") });
+  const St = SnowglobeStudio;
+  const stream = $("stream");
+  const feedEmpty = $("feed-empty");
+  const connect = $("connect");
+  // Held at its end while the person is there: a new step scrolls into view, as in a chat
+  let stick = true;
+  stream.addEventListener("scroll", () => { stick = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 48; });
+  const toEnd = () => { if (stick) requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; }); };
+  const feed = new B.Feed($("feed"), { doc, onchange: () => { feedState(); toEnd(); } });
   const feedFilter = $("feed-filter");
   feedFilter.append(...machines.map((m) => new Option(m.title.replace(/ in the browser$/, ""), m.name)));
-  feedFilter.addEventListener("change", () => feed.setFilter(feedFilter.value));
-  $("feed-clear").addEventListener("click", () => feed.clear());
+  function feedState() {
+    const any = feed.entries.length > 0;
+    feedEmpty.hidden = !any || feed.entries.some((e) => feed.shows(e));
+    feedEmpty.textContent = "Nothing from this machine yet.";
+    // How to connect an agent, until one (or the walkthrough) does something
+    connect.hidden = any;
+  }
+  feedFilter.addEventListener("change", () => { feed.setFilter(feedFilter.value); feedState(); });
+  $("feed-clear").addEventListener("click", () => { feed.clear(); feedState(); });
   const builderStatus = $("builder-status");
   const sayBuilder = (text) => { if (builderStatus.textContent !== text) builderStatus.textContent = text; };
   const feedRuns = new Map(); // job or copy id: its entry
   const secs = (ms) => ms == null ? "" : ms < 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
 
+  // The dot by "Agent": live while an agent's step runs, ink once a model context has the tools
+  const agentDot = $("agent-dot");
+  let agentRunning = 0;
+  const drawDot = () => { agentDot.dataset.on = agentRunning > 0 ? "live" : api._webmcp?.registered?.length ? "ok" : ""; };
+  const fromAgent = (source) => source !== "form" && source !== "studio";
+
   async function builderActivity(e) {
     if (e.kind === "run") {
       feedRuns.set(e.jobId, feed.add({ kind: "run", runtime: e.runtime, source: e.source, command: e.command, state: "running", watch: e.watch }));
+      if (fromAgent(e.source)) { agentRunning++; drawDot(); }
     } else if (e.kind === "job") {
       const entry = feedRuns.get(e.jobId);
+      code.jobEnded(e.runtime);
       if (!entry) return;
       feedRuns.delete(e.jobId);
+      if (fromAgent(entry.source)) { agentRunning = Math.max(0, agentRunning - 1); drawDot(); }
       let v;
       try { v = await api.readJob(e.jobId); } catch (err) { v = { state: "failed", error: err?.message ?? String(err) }; }
       feed.update(entry, { state: v.state, exitStatus: v.exitStatus, error: v.error, changes: v.changes ?? null });
       const touched = !!v.changes?.files.length;
-      if (touched) sayBuilder(`${e.runtime}: ${B.summary(v.changes)}.${current?.runtime === e.runtime && buildWatch.supported !== false ? " Waiting for the rebuild…" : ""}`);
+      if (touched) {
+        sayBuilder(`${e.runtime}: ${B.summary(v.changes)}.${current?.runtime === e.runtime && buildWatch.supported !== false ? " Waiting for the rebuild…" : ""}`);
+        code.changed(e.runtime, v.changes);
+      }
+      if (/^SQL: /.test(entry.command ?? "")) db.stale();
       if (current?.runtime === e.runtime) {
         // A change in the previewed machine: its server's build is read often for a while; a server
         // with no /__build (plain `serve`, `vite preview`) has the preview reloaded instead
         if (buildWatch.supported === false) reloadPreview();
         else buildWatch.kick();
       }
+    } else if (e.kind === "read" || e.kind === "list") {
+      feed.add({ kind: e.kind, runtime: e.runtime, source: e.source, paths: e.paths, path: e.path });
     } else if (e.kind === "copy") {
       let entry = feedRuns.get(e.id);
       if (!entry) feedRuns.set(e.id, (entry = feed.add({ kind: "run", runtime: e.to.split(":")[0], source: e.source, command: `copy ${e.from} → ${e.to}`, state: "running" })));
@@ -619,27 +664,44 @@
       if (current && e.result && e.to.startsWith(current.runtime + ":")) buildWatch.kick();
     } else if (e.kind === "preview") {
       if (e.preview) feed.add({ kind: "preview", runtime: e.preview.runtime, source: e.source,
-        text: `The preview opened on ${e.preview.runtime}'s port ${e.preview.port}${e.result?.error ? `; its first request failed: ${e.result.error}` : "."}` });
-      else feed.add({ kind: "preview", text: `The preview closed${e.why && e.why !== "closed" ? ` (${e.why})` : ""}.` });
+        text: `Opened the preview on ${e.preview.runtime}'s port ${e.preview.port}${e.result?.error ? `; its first request failed: ${e.result.error}` : ""}` });
+      else feed.add({ kind: "preview", text: `Closed the preview${e.why && e.why !== "closed" ? ` (${e.why})` : ""}` });
     }
   }
 
+  // ---------------------------------------------------------------- the preview's builds
   // The previewed server's /__build (serve --watch): a new build reloads the preview; a failed one
-  // is shown, and the preview keeps the last page that built
+  // is shown over it, and the preview keeps the last page that built
+  const building = $("building");
+  const buildFail = $("build-fail");
+  const showBuilding = (on) => { building.hidden = !on; };
+  function showBuildFail(b) {
+    buildFail.hidden = !b;
+    if (b) {
+      $("build-fail-title").textContent = `Build ${b.version} failed: the preview keeps the last page that built`;
+      $("build-fail-text").textContent = String(b.error ?? "unknown error").trim();
+    }
+  }
+  $("build-fail-close").addEventListener("click", () => showBuildFail(null));
   const buildWaiters = new Set();
   const buildWatch = new B.BuildWatch({
     get: () => current ? api.previewGet({ runtime: current.runtime, port: current.port, path: "/__build" }) : Promise.resolve(null),
     visible: () => !doc.hidden,
-    onState: (b) => { if (b?.state === "building") sayBuilder(`${current?.runtime ?? "The machine"} is rebuilding its app…`); },
+    onState: (b) => {
+      showBuilding(b?.state === "building");
+      if (b?.state === "building") sayBuilder(`${current?.runtime ?? "The machine"} is rebuilding its app…`);
+    },
     onBuild: (b) => {
       const rt = current?.runtime;
       if (b.state === "ok") {
         reloadPreview();
-        feed.add({ kind: "build", runtime: rt, state: "ok", text: `Build ${b.version} written${b.ms != null ? ` in ${secs(b.ms)}` : ""}; the preview reloaded.` });
+        showBuildFail(null);
+        feed.add({ kind: "build", runtime: rt, state: "ok", version: b.version, ms: b.ms, text: "The preview reloaded." });
         sayBuilder(`${rt} rebuilt its app${b.ms != null ? ` in ${secs(b.ms)}` : ""}; the preview reloaded.`);
       } else if (b.state === "error") {
-        feed.add({ kind: "build", runtime: rt, state: "error", error: b.error ?? "unknown error", text: `Build ${b.version} failed; the preview keeps the last page that built.` });
-        sayBuilder(`${rt}'s build failed: ${String(b.error ?? "").split("\n").find((l) => l.trim()) ?? "see the feed"}`);
+        showBuildFail(b);
+        feed.add({ kind: "build", runtime: rt, state: "error", version: b.version, error: b.error ?? "unknown error", text: "The preview keeps the last page that built." });
+        sayBuilder(`${rt}'s build failed: ${String(b.error ?? "").split("\n").find((l) => l.trim()) ?? "see the steps"}`);
       }
       for (const w of buildWaiters) w(b);
     },
@@ -652,7 +714,317 @@
     buildWaiters.add(done);
   });
 
-  // The walkthrough: a few edits an agent would make, played through the same calls (builder.js)
+  // The preview's width: the app as a desktop, a tablet or a phone sees it
+  const device = $("device");
+  for (const b of doc.querySelectorAll(".devices button")) {
+    b.addEventListener("click", () => {
+      device.dataset.size = b.dataset.size;
+      for (const o of doc.querySelectorAll(".devices button")) o.setAttribute("aria-pressed", String(o === b));
+    });
+  }
+
+  // "Open the app": web's built app on port 4173, the studio's usual preview
+  const hasWeb = machines.some((m) => m.name === "web");
+  const openApp = $("open-app");
+  openApp.disabled = !previewable || !hasWeb;
+  if (!hasWeb) openApp.hidden = true;
+  openApp.addEventListener("click", async () => {
+    openApp.disabled = true;
+    openApp.textContent = "Starting web…";
+    try {
+      const r = await api.openPreview({ runtime: "web", port: 4173, path: "/" }, { source: "form" });
+      if (r.error) previewNote.textContent = `It opened; its first request failed: ${r.error}`;
+    } catch (err) {
+      previewNote.textContent = `${err?.message ?? err}`.replace(/^(.)/, (c) => c.toUpperCase()) + ".";
+    } finally {
+      openApp.textContent = "Open the app";
+      openApp.disabled = !previewable;
+    }
+  });
+
+  // ---------------------------------------------------------------- the stage's tabs
+  const tabs = [...doc.querySelectorAll('[role="tab"]')];
+  function selectTab(tab, focus = false) {
+    for (const t of tabs) {
+      const on = t === tab;
+      t.setAttribute("aria-selected", String(on));
+      t.tabIndex = on ? 0 : -1;
+      $(t.getAttribute("aria-controls")).hidden = !on;
+    }
+    if (focus) tab.focus();
+    previewBar.classList.toggle("vh", tab.id !== "tab-preview");
+    if (tab.id === "tab-code") code.shown();
+    if (tab.id === "tab-db") db.shown();
+  }
+  for (const t of tabs) {
+    t.addEventListener("click", () => selectTab(t));
+    t.addEventListener("keydown", (e) => {
+      const i = tabs.indexOf(t);
+      const to = e.key === "ArrowRight" ? tabs[(i + 1) % tabs.length] : e.key === "ArrowLeft" ? tabs[(i - 1 + tabs.length) % tabs.length]
+        : e.key === "Home" ? tabs[0] : e.key === "End" ? tabs.at(-1) : null;
+      if (to) { e.preventDefault(); selectTab(to, true); }
+    });
+  }
+
+  // ---------------------------------------------------------------- the code
+  // web's project as files: its tree (list_files), the open file (read_file), highlighted, with the
+  // lines its last change added marked, or that change's diff. Read when the Code tab is shown, again
+  // as the agent changes files; a read waits for a job in web to end (one job at a time)
+  const code = (() => {
+    const WATCH = machines.find((m) => m.name === "web")?.watch ?? "/root/app";
+    const treeEl = $("code-tree");
+    const note = $("code-tree-note");
+    const view = $("code-view");
+    const empty = $("code-empty");
+    const pathEl = $("code-path");
+    const meta = $("code-meta");
+    const diffBtn = $("code-diff");
+    const st = { loaded: false, open: null, text: "", diffShown: false, changed: new Map(), stale: false, retry: null, busy: false };
+    const visible = () => !$("panel-code").hidden;
+
+    async function guarded(fn) {
+      try {
+        st.busy = true;
+        return await fn();
+      } catch (e) {
+        const msg = String(e?.message ?? e);
+        // web runs a job: try again once it ends
+        if (/busy/.test(msg)) { st.retry = fn; note.textContent = "web is busy with a job; this reads again once it is done."; }
+        else note.textContent = msg.replace(/^(.)/, (c) => c.toUpperCase()) + ".";
+        return null;
+      } finally {
+        st.busy = false;
+      }
+    }
+
+    function drawTree(nodes, ul) {
+      ul.replaceChildren(...nodes.map((n) => {
+        const li = doc.createElement("li");
+        if (n.type === "dir") {
+          const d = doc.createElement("div");
+          d.className = "dir";
+          d.textContent = n.name + "/" + (n.skipped ? " …" : "");
+          li.append(d);
+          if (!n.skipped) {
+            const sub = doc.createElement("ul");
+            drawTree(n.children, sub);
+            li.append(sub);
+          }
+        } else {
+          const b = doc.createElement("button");
+          b.type = "button";
+          b.dataset.path = n.path;
+          b.textContent = n.name;
+          const c = st.changed.get(n.path);
+          if (c) {
+            const tag = doc.createElement("span");
+            tag.className = "chg";
+            tag.textContent = c.status === "added" ? "new" : "edited";
+            if (Date.now() - c.at < 120000) tag.dataset.fresh = "";
+            b.append(tag);
+            b.setAttribute("aria-label", `${n.path}, ${tag.textContent}`);
+          }
+          if (n.path === st.open) b.setAttribute("aria-current", "true");
+          b.addEventListener("click", () => openFile(n.path));
+          li.append(b);
+        }
+        return li;
+      }));
+    }
+
+    async function loadTree() {
+      note.textContent = "Reading web's files…";
+      const r = await guarded(() => api.listFiles({ runtime: "web" }, { source: "studio" }));
+      if (!r) return;
+      st.loaded = true;
+      st.entries = r.entries;
+      empty.hidden = true;
+      drawTree(St.buildTree(r.entries), treeEl);
+      note.textContent = `${r.entries.filter((e) => e.type === "file").length} files in ${r.dir ?? WATCH}${r.truncated ? " (the first 2000)" : ""}; node_modules and dist aren't listed.`;
+      if (!st.open) {
+        const first = ["src/App.jsx", "src/App.tsx"].find((p) => r.entries.some((e) => e.path === p));
+        if (first) openFile(first);
+      }
+    }
+
+    function drawFile() {
+      const c = st.changed.get(st.open);
+      diffBtn.disabled = !c?.diff;
+      diffBtn.setAttribute("aria-pressed", String(st.diffShown && !!c?.diff));
+      view.hidden = false;
+      if (st.diffShown && c?.diff) {
+        view.className = "code diff-view";
+        view.setAttribute("aria-label", `Last change to ${st.open}`);
+        view.replaceChildren(...B.diffLines(c.diff).map((l) => {
+          const span = doc.createElement("span");
+          span.className = "ln";
+          span.dataset.kind = l.kind;
+          span.textContent = l.text + "\n";
+          return span;
+        }));
+        return;
+      }
+      view.className = "code";
+      view.setAttribute("aria-label", `Code of ${st.open}`);
+      St.renderCode(doc, view, st.text, St.langOf(st.open), { hot: c?.diff ? St.addedLines(c.diff) : undefined });
+    }
+
+    async function openFile(path) {
+      st.open = path;
+      st.diffShown = false;
+      pathEl.textContent = path;
+      meta.textContent = "reading…";
+      for (const b of treeEl.querySelectorAll("button")) b.toggleAttribute("aria-current", b.dataset.path === path);
+      for (const b of treeEl.querySelectorAll("button[aria-current]")) b.setAttribute("aria-current", "true");
+      const r = await guarded(() => api.readFiles({ runtime: "web", paths: [`${WATCH}/${path}`] }, { source: "studio" }));
+      if (!r || st.open !== path) return;
+      const f = r[0];
+      if (f.error) { meta.textContent = f.error; st.text = ""; view.hidden = true; return; }
+      if (f.binary) { meta.textContent = `${f.size} bytes, binary`; st.text = ""; view.hidden = true; return; }
+      st.text = f.text;
+      meta.textContent = `${f.text.split("\n").length - (f.text.endsWith("\n") ? 1 : 0)} lines${f.truncated ? `, the first ${Math.round(f.text.length / 1024)} KiB of ${Math.round(f.size / 1024)}` : ""}`;
+      drawFile();
+    }
+
+    diffBtn.addEventListener("click", () => { st.diffShown = !st.diffShown; drawFile(); });
+    $("code-refresh").addEventListener("click", () => { loadTree().then(() => st.open && openFile(st.open)); });
+    $("code-load").addEventListener("click", () => loadTree());
+
+    return {
+      /** The Code tab is shown: read what is new (only once the person has allowed the page). */
+      shown() {
+        if (!hasWeb) { note.textContent = "There is no web machine on this page."; return; }
+        if (!ask.granted()) return; // "Show the files" asks
+        if (!st.loaded || st.stale) {
+          st.stale = false;
+          loadTree().then(() => st.open && st.loaded && openFile(st.open));
+        }
+      },
+      /** A job in `runtime` changed these files. */
+      changed(runtime, changes) {
+        if (runtime !== "web") return;
+        let shape = false;
+        for (const f of changes.files) {
+          if (f.status === "deleted") st.changed.delete(f.path);
+          else st.changed.set(f.path, { status: f.status, diff: f.diff, at: Date.now() });
+          if (f.status !== "modified") shape = true;
+          if (f.path === st.open && f.status === "deleted") { st.open = null; view.hidden = true; pathEl.textContent = `${f.path} was deleted`; meta.textContent = ""; }
+        }
+        if (!st.loaded) return;
+        if (!visible()) { st.stale = true; return; }
+        const reopen = st.open && changes.files.some((f) => f.path === st.open);
+        if (shape) loadTree().then(() => reopen && openFile(st.open));
+        else {
+          drawTree(St.buildTree(st.entries ?? []), treeEl);
+          if (reopen) openFile(st.open);
+        }
+      },
+      /** A job ended in `runtime`: a read that found web busy goes again. */
+      jobEnded(runtime) {
+        if (runtime !== "web" || !st.retry || st.busy) return;
+        const fn = st.retry;
+        st.retry = null;
+        setTimeout(() => guarded(fn).then((r) => { if (r && Array.isArray(r.entries)) { st.loaded = true; st.entries = r.entries; drawTree(St.buildTree(r.entries), treeEl); note.textContent = ""; } else if (r && st.open) openFile(st.open); }), 300);
+      },
+    };
+  })();
+
+  // ---------------------------------------------------------------- the database
+  // Supabase's public tables, their columns and row level security: one psql read, on request, and
+  // again after an agent's SQL while the tab is shown
+  const db = (() => {
+    const list = $("db-tables");
+    const note = $("db-note");
+    const btn = $("db-load");
+    const hasDb = machines.some((m) => m.name === "supabase");
+    let loaded = false;
+    let stale = false;
+    if (!hasDb) { btn.hidden = true; note.textContent = "There is no supabase machine on this page."; }
+    async function load() {
+      btn.disabled = true;
+      btn.textContent = "Reading…";
+      try {
+        const r = await api.runSql({ runtime: "supabase", sql: St.TABLES_SQL }, { source: "studio", tsv: true, silent: true });
+        if (r.state !== "exited" || r.exitStatus !== 0) throw new Error(r.output.trim() || r.error || r.state);
+        const tables = St.parseTables(r.output);
+        loaded = true;
+        list.replaceChildren(...tables.map((t) => {
+          const li = doc.createElement("li");
+          const h = doc.createElement("h3");
+          h.textContent = t.name;
+          const rls = doc.createElement("p");
+          rls.className = "rls";
+          rls.textContent = t.rls === true ? "Row level security on" : t.rls === false ? "Row level security off: anyone with the anon key reads and writes it" : "";
+          const table = doc.createElement("table");
+          const body = doc.createElement("tbody");
+          for (const c of t.columns) {
+            const tr = doc.createElement("tr");
+            for (const v of [c.name, c.type]) { const td = doc.createElement("td"); td.textContent = v; tr.append(td); }
+            body.append(tr);
+          }
+          table.append(body);
+          table.setAttribute("aria-label", `Columns of ${t.name}`);
+          li.append(h, rls, table);
+          return li;
+        }));
+        note.textContent = tables.length ? `${tables.length} table${tables.length === 1 ? "" : "s"} in Supabase's public schema, read just now.` : "No tables in Supabase's public schema yet.";
+      } catch (e) {
+        note.textContent = `The tables could not be read: ${String(e?.message ?? e)}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = loaded ? "Read again" : "Show the tables";
+      }
+    }
+    btn.addEventListener("click", load);
+    return {
+      shown() { if (stale && loaded) { stale = false; load(); } },
+      stale() { if ($("panel-db").hidden) stale = true; else if (loaded) load(); },
+    };
+  })();
+
+  // ---------------------------------------------------------------- connecting an agent
+  const promptText = St.agentPrompt(location.origin + location.pathname);
+  $("agent-prompt").textContent = promptText;
+  const copyPrompt = $("copy-prompt");
+  copyPrompt.addEventListener("click", async () => {
+    const label = copyPrompt.lastChild;
+    try {
+      await navigator.clipboard.writeText(promptText);
+      label.textContent = "Copied";
+    } catch {
+      // No clipboard (an insecure context, a refusal): the text is selected for a manual copy
+      const range = doc.createRange();
+      range.selectNodeContents($("agent-prompt"));
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      label.textContent = "Selected: copy it";
+    }
+    setTimeout(() => { label.textContent = "Copy the prompt"; }, 2500);
+  });
+
+  // ---------------------------------------------------------------- undo and revert
+  const undoBtn = $("undo-change");
+  const revertBtn = $("revert-start");
+  if (!hasWeb) { undoBtn.hidden = true; revertBtn.hidden = true; }
+  async function revert(to) {
+    undoBtn.disabled = revertBtn.disabled = true;
+    try {
+      if (to === "start" && !(await SnowglobeWebMCP.confirmInPage(doc,
+        "web's app goes back to how it was before the first change in this machine. Undo last change brings this back.",
+        { title: "Revert the app to the starter?", yes: "Revert", no: "Keep it", danger: true }))) return;
+      const r = await api.revert({ runtime: "web", to }, { source: "form" });
+      sayBuilder(`${r.output}${r.changes ? ` ${B.summary(r.changes)}.` : ""}`);
+    } catch (e) {
+      sayBuilder(`${String(e?.message ?? e)}`.replace(/^(.)/, (c) => c.toUpperCase()) + ".");
+    } finally {
+      undoBtn.disabled = revertBtn.disabled = false;
+    }
+  }
+  undoBtn.addEventListener("click", () => revert("previous"));
+  revertBtn.addEventListener("click", () => revert("start"));
+
+  // ---------------------------------------------------------------- the walkthrough
+  // A few edits an agent would make, played through the same calls (builder.js)
   const demoPlay = $("demo-play");
   const demoStop = $("demo-stop");
   let demo = null;
@@ -661,12 +1033,12 @@
   demoPlay.addEventListener("click", async () => {
     if (demo) return;
     demo = new AbortController();
-    demoPlay.hidden = true;
     demoStop.hidden = false;
     demoStop.focus();
     const say = (text) => { sayBuilder(text); feed.add({ kind: "note", text }); };
     try {
       await ask();
+      selectTab($("tab-preview"));
       await B.playDemo(api, { say, signal: demo.signal, waitBuild: async () => {
         const b = await nextBuild(180000);
         if (!b) say("No new build came within 3 minutes (is serve --watch running on web? Its log is /tmp/serve.log).");
@@ -677,16 +1049,22 @@
     } finally {
       demo = null;
       demoStop.hidden = true;
-      demoPlay.hidden = false;
-      demoPlay.focus();
+      undoBtn.focus();
     }
   });
   demoStop.addEventListener("click", () => demo?.abort());
 
   // ---------------------------------------------------------------- WebMCP
   api._webmcp = { available: false, registered: [], reason: "looking for WebMCP (document.modelContext)" };
+  const webmcpState = $("webmcp-state");
   SnowglobeWebMCP.register(api, { jobText: SnowglobeAgent.jobText, exposedTo: manifest.exposed_to ?? [], ask, waitMs: 15000 })
-    .then((r) => { api._webmcp = r; }, (e) => { api._webmcp = { available: false, registered: [], reason: String(e?.message ?? e) }; });
+    .then((r) => { api._webmcp = r; }, (e) => { api._webmcp = { available: false, registered: [], reason: String(e?.message ?? e) }; })
+    .then(() => {
+      const w = api._webmcp;
+      webmcpState.textContent = w.registered?.length ? `WebMCP: ${w.registered.length} tools offered` : w.available ? "WebMCP: no tools offered" : "No WebMCP here: agents drive the page";
+      webmcpState.title = w.reason ?? "";
+      drawDot();
+    });
 
   // The slots: what each machine has saved, before anything boots
   await Promise.all(machines.map((m) => m.slot.open()));

@@ -132,6 +132,12 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
                 <tr><td><code>job_status</code></td><td>the job's output so far, ending <code>[running]</code>, or as <code>snowglobe mcp</code>'s ends: <code>[exit N]</code>, <code>[timed out]</code>, <code>[stopped]</code></td></tr>
                 <tr><td><code>cancel_job</code></td><td>stops the job: its command and everything it started are killed</td></tr>
                 <tr><td><code>write_file</code></td><td>writes <code>content</code> (UTF-8 text, at most 1 MiB) at <code>path</code> in <code>runtime</code>, its directory made, with no shell quoting; returns once it is written, with the files it changed in a watched project</td></tr>
+                <tr><td><code>list_files</code></td><td>a directory's files as an indented tree with sizes (default: the machine's watched project, web's <code>/root/app</code>); <code>node_modules</code>, <code>dist</code> and <code>.git</code> are listed, not entered</td></tr>
+                <tr><td><code>read_file</code></td><td>the text of <code>path</code>, or of up to 20 <code>paths</code> in one call: 256 KiB of each at most (640 KiB in all), saying when it cut one; binary files are said, not shown</td></tr>
+                <tr><td><code>write_files</code></td><td>several files at once (<code>files: [{path, content}]</code>, 1 MiB in all), with <code>move</code> and <code>delete</code>, in one job: written to temporary names, then moved into place together, so web rebuilds once; it waits for that build and returns it: ok, or the compiler's error</td></tr>
+                <tr><td><code>revert_changes</code></td><td>takes a watched project back: <code>to: "previous"</code> undoes the last change (the last 20 are kept), <code>to: "start"</code> goes back to how it began (itself undoable)</td></tr>
+                <tr><td><code>build_status</code></td><td>how web's last build went: <code>{version, state, error, ms, at}</code> from its <code>/__build</code></td></tr>
+                <tr><td><code>run_sql</code></td><td>SQL on Supabase's Postgres (or <code>runtime: "postgres"</code>) through psql with <code>ON_ERROR_STOP</code>, as a file of the job's (no quoting); then the Data API reloads its schema</td></tr>
                 <tr><td><code>copy_file</code></td><td>copies <code>from_path</code> in <code>from_runtime</code> to <code>to_path</code> in <code>to_runtime</code>: any file up to 8 MiB, checked by sha256 on both ends; a client's cancel signal stops it</td></tr>
                 <tr><td><code>open_preview</code></td><td>opens the page's preview on a web server in a machine: <code>runtime</code>, <code>port</code> and an optional <code>path</code>; returns the preview's address and what its first request got</td></tr>
                 <tr><td><code>close_preview</code></td><td>closes it: the machines it kept awake can be suspended again</td></tr>
@@ -148,7 +154,9 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
           <p>Scripts on the page can use the same thing as <code>window.snowglobeAgent</code>:
             <code>listRuntimes()</code>, <code>status(runtime)</code>, <code>runCommand({runtime, command,
             timeoutSeconds, requestId})</code>, <code>readJob(jobId)</code>, <code>cancelJob(jobId)</code>,
-            <code>writeFile({runtime, path, content})</code>, <code>copyFile({fromRuntime, fromPath, toRuntime, toPath})</code>, <code>suspend(runtime)</code>,
+            <code>writeFile({runtime, path, content})</code>, <code>writeFiles({runtime, files, move, delete})</code>,
+            <code>readFiles({runtime, paths})</code>, <code>listFiles({runtime, path, depth})</code>, <code>revert({runtime, to})</code>,
+            <code>runSql({sql, runtime})</code>, <code>buildStatus({runtime, port})</code>, <code>copyFile({fromRuntime, fromPath, toRuntime, toPath})</code>, <code>suspend(runtime)</code>,
             <code>wake(runtime)</code>, <code>startFresh(runtime)</code>, <code>setAwakeLimit(count)</code>,
             <code>openPreview({runtime, port, path})</code>, <code>closePreview()</code> and <code>unsaved()</code>. Runs and copies ask the person first, as the form does. A job's output
             keeps its most recent 1 MiB and says when it dropped some. Jobs run with <code>NO_COLOR=1</code> and
@@ -172,12 +180,26 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
             web a React app on it (sign-up, login, notes) in <code>/root/app</code>, which <code>serve --watch</code>
             builds, serves on port 4173 and builds again on every change. Vite's hot reload needs a WebSocket, so
             instead the page reads the server's <code>/__build</code> while the preview is open and reloads the preview
-            after each new build. Beside the preview, <strong>What the agent changed</strong> lists every command in
-            every machine with the files it changed in web's app and their diffs, and each build; <strong>Watch an
-            agent build</strong> plays a short walkthrough through the same calls an agent makes.</p>
+            after each new build. The top of the page is a studio, laid out as AI app builders are: the app's live
+            preview fills it (at desktop, tablet or phone width, with its address, Reload and New tab), with the
+            app's <strong>Code</strong> (its files, read from the machine as they change, and each one's last change)
+            and <strong>Database</strong> (Supabase's tables) beside it as tabs. Down its left side, the agent's steps
+            read as a conversation: every file it edited (with the diff), command it ran, file it read, SQL it ran and
+            build, a failed build's error over the preview, <strong>Undo last change</strong> and <strong>Revert to
+            starter…</strong>. The page has no AI of its own: <strong>Connect an agent</strong> gives a prompt to paste
+            into yours, and <strong>Watch an agent build</strong> plays a short walkthrough through the same calls an
+            agent makes. The machines, with every control above, are below the studio.</p>
+          <p>The app is React 19 with Vite, Tailwind v4 and TypeScript (a <code>tsconfig.json</code>; <code>.ts</code>
+            and <code>.tsx</code> build as they are, <code>npm run typecheck</code> runs <code>tsc</code>), with
+            React Router, Zustand and clsx installed. <code>npm install</code> works too: in the tab, every request the
+            machine makes is the page's own <code>fetch()</code>, and the npm registry allows that for plain GETs but
+            answers no CORS preflight, which npm's own headers would need, so the machine's npm goes through a relay in
+            <code>serve</code> (<code>127.0.0.1:4874</code>) that asks the registry with nothing but <code>Accept</code>.
+            It is slow, as everything in the emulated machine is: most of a minute for one small package.</p>
           <pre>open_preview {runtime: "web", port: 4173}: the app, signed up and used in the page
-write_file {runtime: "web", path: "/root/app/src/App.jsx", content: ...}: the diff shows, web rebuilds, the preview reloads
-run_command {runtime: "supabase", command: "psql \"$DB_URL\" ..."}: a column, a policy, notify pgrst
+list_files {runtime: "web"}, read_file {runtime: "web", paths: ["src/App.jsx", "src/styles.css"]}
+write_files {runtime: "web", files: [{path: "/root/app/src/components/Todo.tsx", content: ...}, ...]}: the diffs show, web rebuilds, the preview reloads, the build's result comes back
+run_sql {sql: "create table public.todos (...); alter table public.todos enable row level security; ..."}: the Data API sees it at once
 On supabase: psql "$DB_URL" -c "select * from notes" shows what you added, with your user's id</pre>
           <p>The whole recipe is in <a href="../../llms.txt">llms.txt</a>.</p>
           <p id="suspend">An idle machine doesn't stay in memory: with no job for 5 minutes, or with its tab hidden

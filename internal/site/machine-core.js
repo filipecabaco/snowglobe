@@ -26,17 +26,19 @@
     return r;
   }
 
-  // Request headers that only hint at caching (pip sends `Cache-Control: max-age=0` with every index
-  // request). They are not CORS-safelisted, so the browser would preflight the request and most
-  // servers (PyPI's index and files among them) refuse the preflight; with them gone the request is
-  // simple and goes through. Dropping a cache hint changes no answer.
-  const CACHE_HINTS = /^(cache-control|pragma)$/i;
+  // Request headers a package manager adds that only hint (caching, npm's and pacote's bookkeeping,
+  // its user agent). None is CORS-safelisted, so with any of them the browser preflights the request,
+  // and package registries (registry.npmjs.org answers OPTIONS with 404) refuse the preflight; with
+  // them gone a GET is simple and goes through. Dropping them changes no answer. (web's npm also goes
+  // through a relay that sends only Accept, examples/web/serve.mjs; this covers npm pointed at the
+  // registry itself, and pnpm or yarn.)
+  const DROPPED = /^(cache-control|pragma|user-agent|npm-[\w-]+|pacote-[\w-]+)$/i;
 
-  /** The page's fetch() as the guest's network uses it: without the headers in CACHE_HINTS. */
+  /** The page's fetch() as the guest's network uses it: without the headers in DROPPED. */
   function guestFetch(url, init) {
     if (init?.headers) {
       const headers = new Headers(init.headers);
-      for (const name of [...headers.keys()]) if (CACHE_HINTS.test(name)) headers.delete(name);
+      for (const name of [...headers.keys()]) if (DROPPED.test(name)) headers.delete(name);
       init = { ...init, headers };
     }
     return fetch(url, init);

@@ -262,7 +262,7 @@ test('commands are refused until the machine is ready, and on several CPUs where
 });
 
 // The page's API over one machine, as the agent page has it over several: by runtime
-const ALL = ['list_runtimes', 'run_command', 'job_status', 'cancel_job', 'write_file', 'copy_file', 'open_preview', 'close_preview', 'set_awake_limit'];
+const ALL = ['list_runtimes', 'run_command', 'job_status', 'cancel_job', 'write_file', 'list_files', 'read_file', 'write_files', 'revert_changes', 'build_status', 'run_sql', 'copy_file', 'open_preview', 'close_preview', 'set_awake_limit'];
 function pageApi(c, copies = [], calls = []) {
   const rt = (i) => { if (i.runtime !== 'py') throw new Error(`no runtime ${i.runtime}`); };
   let limit = 2;
@@ -692,4 +692,58 @@ test('WebMCP: write_file asks first and writes the text as it is; job_status and
   assert.ok((await dispatch('write_file', { runtime: 'web', content: 'x' })).isError, 'a path is required');
   assert.equal(calls.length, 1);
   assert.equal((await dispatch('job_status', { job_id: '0123456789abcdef' })).content[0].text, 'ok\n[exit 0]\n[changed in /root/app: src/App.jsx (+2 −1)]');
+});
+
+test('WebMCP: the project tools: list_files, read_file, write_files (waiting for the rebuild), revert_changes, build_status, run_sql', async () => {
+  globalThis.SnowglobeBuilder = require('./builder.js');
+  const calls = [];
+  let asked = 0;
+  let version = 4;
+  let next = { state: 'ok', ms: 2300 };
+  const changes = { files: [{ status: 'added', path: 'src/Card.tsx', added: 3, removed: 0 }], more: false };
+  const agent = {
+    listFiles: async (i, o) => { calls.push(['list', i, o.source]); return { dir: '/root/app', truncated: false,
+      entries: [{ path: 'node_modules', type: 'dir', size: 0, skipped: true }, { path: 'src', type: 'dir', size: 0 }, { path: 'src/App.jsx', type: 'file', size: 3994 }] }; },
+    readFiles: async (i) => { calls.push(['read', i]); return i.paths.map((p) => p === 'gone' ? { path: p, error: 'no such file' } : { path: p, size: 3, text: 'abc', truncated: false }); },
+    writeFiles: async (i, o) => { calls.push(['write', i, o.source]); version++; return { bytes: 10, changes, watch: '/root/app' }; },
+    revert: async (i) => { calls.push(['revert', i]); version++; return { output: 'undid the last change (step 2); 1 more kept', changes, watch: '/root/app' }; },
+    buildStatus: async () => ({ version, ...next, ...(next.state === 'error' ? { error: 'src/Card.tsx:1:2 Unexpected token' } : {}) }),
+    runSql: async (i, o) => { calls.push(['sql', i, o.source]); return { state: 'exited', exitStatus: i.sql.includes('bad') ? 3 : 0, output: i.sql.includes('bad') ? 'ERROR:  syntax error\n' : 'ALTER TABLE\n' }; },
+  };
+  const dispatch = W.dispatcher(W.definitions(agent, { jobText: A.jobText, ask: async () => { asked++; } }));
+  const l = await dispatch('list_files', { runtime: 'web' });
+  assert.equal(l.content[0].text, '/root/app\nnode_modules/  (not listed)\nsrc/\n  App.jsx  3.9 KiB');
+  const r = await dispatch('read_file', { runtime: 'web', paths: ['src/App.jsx', 'gone'] });
+  assert.equal(r.content[0].text, '=== src/App.jsx (3 bytes) ===\nabc\n=== gone: no such file ===');
+  assert.ok((await dispatch('read_file', { runtime: 'web', path: 'gone' })).isError);
+  assert.ok((await dispatch('read_file', { runtime: 'web' })).isError, 'a path is needed');
+  // The write waits for the build its change started: a version past the one before, not building
+  const w = await dispatch('write_files', { runtime: 'web', files: [{ path: '/root/app/src/Card.tsx', content: 'x' }], delete: ['/root/app/src/Old.jsx'] });
+  assert.equal(w.content[0].text, 'done in web: 1 file written (10 bytes), 0 moved, 1 deleted\n[changed in /root/app: src/Card.tsx (added)]\n[build 5 ok in 2.3 s: the preview reloads with it]');
+  assert.deepEqual(calls.find((c) => c[0] === 'write').slice(1), [{ runtime: 'web', files: [{ path: '/root/app/src/Card.tsx', content: 'x' }], move: [], delete: ['/root/app/src/Old.jsx'] }, 'webmcp']);
+  next = { state: 'error', ms: 10 };
+  const bad = await dispatch('write_files', { runtime: 'web', files: [{ path: 'a', content: 'x' }] });
+  assert.match(bad.content[0].text, /\[build 6 FAILED: src\/Card\.tsx:1:2 Unexpected token\nthe preview keeps the last page that built/);
+  next = { state: 'ok', ms: 900 };
+  const u = await dispatch('revert_changes', { runtime: 'web', to: 'previous' });
+  assert.match(u.content[0].text, /^undid the last change \(step 2\); 1 more kept\n\[changed in \/root\/app: src\/Card\.tsx \(added\)\]\n\[build 7 ok in 0\.9 s/);
+  assert.ok((await dispatch('revert_changes', { runtime: 'web', to: 'yesterday' })).isError);
+  assert.match((await dispatch('build_status', {})).content[0].text, /"version": 7/);
+  const sql = await dispatch('run_sql', { sql: 'alter table notes add column done boolean' });
+  assert.equal(sql.content[0].text, 'ALTER TABLE\n[exit 0]');
+  assert.ok((await dispatch('run_sql', { sql: 'bad' })).isError);
+  assert.ok((await dispatch('run_sql', {})).isError);
+  assert.ok(asked >= 8);
+});
+
+test('afterBuild: a change no build follows is said once it settles; one that keeps building is left to build_status', async () => {
+  let t = 0;
+  const clock = { now: () => t, pause: async (ms) => { t += ms; } };
+  const same = { buildStatus: async () => ({ version: 3, state: 'ok' }) };
+  assert.deepEqual(await W.afterBuild(same, 'web', { version: 3, state: 'ok' }, clock), { state: 'unchanged', version: 3 });
+  t = 0;
+  const slow = { buildStatus: async () => ({ version: 3, state: 'building' }) };
+  assert.equal((await W.afterBuild(slow, 'web', { version: 3, state: 'ok' }, { ...clock, timeoutMs: 5000 })).state, 'waiting');
+  assert.equal(await W.afterBuild(same, 'web', { state: 'none' }, clock), null);
+  assert.equal(W.buildLine({ state: 'unchanged' }), "\n[no rebuild: the change isn't part of the app's build]");
 });
