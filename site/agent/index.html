@@ -6,11 +6,11 @@
   <title>Machines for agents · snowglobe</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/agent/">
   <link rel="alternate" type="text/plain" href="../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="Linux machines for agents that need compute, all in one browser tab: Python with numpy and pandas, DuckDB and PostgreSQL. Run shell commands in any of them and copy files between them. No server.">
+  <meta name="description" content="Linux machines for agents, all in one browser tab: Supabase, Node with Vite, Python with numpy and pandas, DuckDB and PostgreSQL. Run shell commands in any of them, copy files between them, and see the web app they build in the page. No server.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="Machines for agents · snowglobe">
-  <meta property="og:description" content="Python with numpy and pandas, DuckDB and PostgreSQL in one page: run a shell command in any machine, copy files between them. The machines run in your browser tab.">
+  <meta property="og:description" content="Supabase, Node with Vite, Python, DuckDB and PostgreSQL in one page: an agent builds a web app on Supabase and you see it live, beside the machines. They run in your browser tab.">
   <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/agent/">
   <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
@@ -125,6 +125,19 @@
     .sg-ask .sg-ask-yes { background: var(--ink); color: var(--bg); }
     .sg-ask button:hover { background: var(--ink); color: var(--bg); }
 
+    /* The preview: a machine's web server, in a frame of this page */
+    #preview-form { padding-top: 14px; padding-bottom: 18px; }
+    #preview-form .trio { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr); gap: 10px 16px; }
+    #preview-form input[type="number"] { font: 15px/1.5 var(--mono); color: var(--ink); background: var(--bg); width: 100%; border: 1px solid var(--ink-2); border-radius: 6px; padding: 9px 12px; }
+    #preview-panel { margin: 0 0 12px; border: 1px solid var(--ink); border-radius: 6px; overflow: hidden; }
+    .pbar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
+    .pbar input { flex: 1 1 auto; min-width: 0; height: 36px; padding: 0 10px; font: 14px var(--mono); }
+    .pbar button { font: 550 14px/1 var(--sans); height: 36px; padding: 0 14px; border-radius: 999px; cursor: pointer; border: 1px solid var(--ink); background: transparent; color: var(--ink); }
+    .pbar button:hover { background: var(--ink); color: var(--bg); }
+    .pbar a { font-size: 14px; color: var(--ink); white-space: nowrap; }
+    #preview-frame { display: block; width: 100%; height: min(70vh, 640px); min-height: 360px; border: 0; background: #fff; }
+    #preview-note { margin: 0 0 24px; overflow-wrap: anywhere; }
+
     .note { margin-top: 64px; padding-top: 16px; border-top: 1px solid var(--ink); display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 16px 48px; }
     .note p { margin: 0; color: var(--ink-2); font-size: 16px; max-width: 40em; }
 
@@ -142,7 +155,10 @@
       .awake { justify-items: start; }
       .machines { grid-template-columns: minmax(0, 1fr); }
       .machine:nth-last-child(2) { border-bottom: 0; }
-      .row, #copy-form .pair { grid-template-columns: minmax(0, 1fr); }
+      .row, #copy-form .pair, #preview-form .trio { grid-template-columns: minmax(0, 1fr); }
+      .pbar { flex-wrap: wrap; }
+      .pbar input { flex-basis: 100%; }
+      #preview-frame { height: 70vh; }
       body { font-size: 16px; }
     }
     @media (pointer: coarse) { .link { padding-block: 12px; margin-block: -12px; } }
@@ -169,10 +185,11 @@
       <section class="intro" aria-labelledby="title">
         <div>
           <h1 id="title">Machines for agents</h1>
-          <p class="lede">Linux machines for work that needs compute, in this browser tab: Python with numpy and pandas,
-            DuckDB for analytics, PostgreSQL for databases. Run a shell command in any of them, and copy files from one to
-            another. A machine starts on its first command; only a few stay awake at once, and the rest sleep with their
-            files saved.</p>
+          <p class="lede">Linux machines for agents, in this browser tab: Supabase and a Node machine with Vite to build
+            web apps, which you see live in the preview below, and Python, DuckDB and PostgreSQL for work that needs
+            compute. Run a shell command in any of them, copy files from one to another, and open a machine's web server
+            here. A machine starts on its first command; only a few stay awake at once, and the rest sleep with their files
+            saved.</p>
         </div>
         <div class="awake">
           <p class="budget" id="budget"><b>0 of 2 awake</b><span>on this page</span></p>
@@ -186,6 +203,8 @@
           <h2 class="zone-h" id="machines-title">Machines</h2>
           <ul class="machines" id="machines" aria-label="Machines">
             <!-- Until the page has read runtimes.json (or without JavaScript): what it runs -->
+            <li class="machine"><span class="pick">Supabase</span><p class="purpose">Supabase for web app building: Postgres, Auth and the Data API, with a preview</p></li>
+            <li class="machine"><span class="pick">Node + Vite</span><p class="purpose">Build and serve web pages: Node with Vite and esbuild</p></li>
             <li class="machine"><span class="pick">Python + Rich</span><p class="purpose">Run Python: scripts, numpy and pandas for data work.</p></li>
             <li class="machine"><span class="pick">DuckDB</span><p class="purpose">DuckDB for analytics: SQL over CSV, Parquet and JSON files.</p></li>
             <li class="machine"><span class="pick">PostgreSQL</span><p class="purpose">PostgreSQL for database work: load CSV files and query them with psql.</p></li>
@@ -218,6 +237,30 @@
               </div>
               <pre id="agent-output" class="run-out" data-part="output" tabindex="0" aria-label="Command output" hidden></pre>
             </section>
+          </section>
+
+          <section id="preview" aria-labelledby="preview-title">
+            <form id="preview-form" data-part="preview-form" aria-labelledby="preview-title">
+              <h2 class="zone-h" id="preview-title">Preview a machine's web server</h2>
+              <div class="trio">
+                <label>Runtime<select id="preview-runtime" name="previewRuntime"></select></label>
+                <label>Port<input id="preview-port" name="previewPort" type="number" min="1" max="65535" step="1" value="4173" inputmode="numeric"></label>
+                <label>Path<input id="preview-path" name="previewPath" type="text" value="/" autocomplete="off" spellcheck="false"></label>
+              </div>
+              <div class="actions">
+                <button id="preview-open" data-part="open-preview" type="submit">Open preview</button>
+                <button id="preview-close" data-part="close-preview" type="button" disabled>Close preview</button>
+              </div>
+            </form>
+            <div id="preview-panel" hidden>
+              <div class="pbar">
+                <input id="preview-address" type="text" aria-label="Address in the preview" autocomplete="off" spellcheck="false">
+                <button id="preview-reload" type="button">Reload</button>
+                <a id="preview-tab" href="./" target="_blank" rel="noopener">New tab</a>
+              </div>
+              <iframe id="preview-frame" title="Preview of a machine's web server"></iframe>
+            </div>
+            <p class="hint" id="preview-note">No preview is open. A server in a machine must listen on 0.0.0.0 to be seen here.</p>
           </section>
 
           <section id="copy" aria-labelledby="copy-title">
@@ -253,15 +296,17 @@
       </div>
 
       <section class="note" aria-label="About this page">
-        <p>Each machine runs in a Web Worker of its own, in this tab; nothing runs on a server. A machine left idle for
+        <p>Each machine runs in a Web Worker of its own, in this tab; nothing runs on a server. Supabase runs on two
+          CPUs, which needs the page cross-origin isolated: its service worker does that, so the first visit reloads once. A machine left idle for
           5 minutes, or hidden for a minute, is suspended: its state saved in this browser and its memory freed. The
           next command wakes it with its files as they were. Only a suspended machine's state is kept: reloading the
           page loses what an awake one did since its last suspend, and the browser asks first. Start fresh goes back to
           the machine as built. The page needs the network: it doesn't work offline.</p>
         <p>Browsers with WebMCP get the tools <code>list_runtimes</code>, <code>run_command</code>, <code>job_status</code>,
-          <code>cancel_job</code>, <code>copy_file</code> and <code>set_awake_limit</code>; scripts in the page get
-          <code>window.snowglobeAgent</code>. Every run and copy asks the person at this page first, once per page load,
-          and the page refuses to run inside another page's frame.
+          <code>cancel_job</code>, <code>copy_file</code>, <code>open_preview</code>, <code>close_preview</code> and
+          <code>set_awake_limit</code>; scripts in the page get <code>window.snowglobeAgent</code>. Every run, copy and
+          preview asks the person at this page first, once per page load, and the page refuses to run inside another
+          page's frame. A preview is this site's page: what the machine serves runs here as one.
           More in <a href="../docs/agents/#in-the-page">For agents and programs</a> and <a href="../llms.txt">llms.txt</a>.</p>
       </section>
     </main>
@@ -281,6 +326,7 @@
   <script src="transfer.js"></script>
   <script src="machine-core.js"></script>
   <script src="machine-host.js"></script>
+  <script src="preview.js"></script>
   <script src="scheduler.js"></script>
   <script src="orchestrator.js"></script>
   <script src="agent-page.js"></script>

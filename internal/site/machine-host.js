@@ -63,7 +63,7 @@
   }
 
   /** In a worker of its own, started at boot and ended when the machine is put away. */
-  function worker(config, emit, uploadWindow, scripts, timeouts, Worker = root.Worker) {
+  function worker(config, emit, uploadWindow, scripts, timeouts, Worker = root.Worker, onEnd = () => {}) {
     let w = null;
     let started = null;
     let next = 1;
@@ -106,7 +106,10 @@
       w.terminate();
       w = null;
       started = null;
-      rejectAll(why ?? errorFrom({ name: "AbortError", message: "the machine was put away" }));
+      const err = why ?? errorFrom({ name: "AbortError", message: "the machine was put away" });
+      rejectAll(err);
+      // Its connections went with it: whoever reads them hears so
+      try { onEnd(err); } catch {}
     };
     return {
       call: async (op, args = []) => {
@@ -159,7 +162,22 @@
         try { fn(payload); } catch (e) { setTimeout(() => { throw e; }); }
       }
     };
-    const t = transport === "worker" ? worker(cfg, emit, uploadWindow, scripts, limits, Worker ?? root.Worker) : inline(cfg, emit, uploadWindow, limits);
+    // Connections into the machine, by id: what the machine says about each goes to its stream.
+    // Ids are given in the order asked (the machine's side numbers them as the opens arrive), so an
+    // event for an id at or below the highest known one that has no stream is for a connection
+    // already over (aborted here, say): dropped. Only an id not known yet waits, in `early`
+    const streams = new Map();
+    const early = new Map();
+    let known = 0;
+    /** Every open connection ends with `why`: the machine (its worker) is gone. */
+    const dropStreams = (why) => {
+      for (const s of [...streams.values()]) s.fail(why);
+      streams.clear();
+      early.clear();
+    };
+    const t = transport === "worker"
+      ? worker(cfg, emit, uploadWindow, scripts, limits, Worker ?? root.Worker, dropStreams)
+      : inline(cfg, emit, uploadWindow, limits);
     let xid = 0;
     const xfer = (op, args, { signal, onProgress } = {}) => {
       const id = `x${++xid}`;
@@ -177,6 +195,70 @@
       listeners.get(event).add(fn);
       return () => listeners.get(event).delete(fn);
     }
+    on("tcp", (e) => {
+      const s = streams.get(e.sid);
+      if (s) s.hear(e);
+      else if (e.sid > known) {
+        if (!early.has(e.sid)) early.set(e.sid, []);
+        early.get(e.sid).push(e);
+      }
+    });
+    /**
+     * A TCP connection to `port` on the machine's network address: { onconnect, ondata(bytes),
+     * onend, onclose, onerror(e), write(bytes), end(), abort() }, the callbacks set by whoever uses
+     * it. A close with no connect before it: nothing listens there.
+     */
+    function tcpOpen(port) {
+      let sid = null;
+      let closed = false;
+      let chain;
+      const s = {
+        onconnect: null, ondata: null, onend: null, onclose: null, onerror: null,
+        hear(e) {
+          if (closed) return;
+          if (e.kind === "connect") s.onconnect?.();
+          else if (e.kind === "data") s.ondata?.(e.bytes);
+          else if (e.kind === "end") s.onend?.();
+          else if (e.kind === "close") {
+            closed = true;
+            streams.delete(sid);
+            s.onclose?.();
+          }
+        },
+        /** The machine went away under it: an error, once. */
+        fail(why) {
+          if (closed) return;
+          closed = true;
+          if (sid !== null) streams.delete(sid);
+          s.onerror?.(why ?? new Error("the machine was put away"));
+        },
+        write(bytes) { chain = chain.then((id) => { if (!closed) t.call("tcpWrite", [id, bytes]).catch(() => {}); return id; }); },
+        end() { chain = chain.then((id) => { if (!closed) t.call("tcpEnd", [id]).catch(() => {}); return id; }); },
+        abort() {
+          if (closed) return;
+          closed = true;
+          if (sid !== null) streams.delete(sid);
+          chain.then((id) => { streams.delete(id); early.delete(id); t.call("tcpAbort", [id]).catch(() => {}); }, () => {});
+        },
+      };
+      chain = t.call("tcpOpen", [port]).then((id) => {
+        sid = id;
+        if (id > known) known = id;
+        const heard = early.get(id) ?? [];
+        early.delete(id);
+        // Aborted before its id came back: nothing to hear, and nothing kept for it
+        if (closed) return id;
+        streams.set(id, s);
+        for (const e of heard) s.hear(e);
+        return id;
+      });
+      chain.catch((e) => {
+        if (closed) return;
+        closed = true;
+        s.onerror?.(e);
+      });
+      return s;
+    }
     return {
       transport,
       config: cfg,
@@ -189,7 +271,7 @@
       /** { encoding, state: Blob }: its state, captured (stopped, unless keepRunning). */
       capture: (opts) => t.call("capture", [opts ?? {}]),
       /** End it and let its memory go. */
-      destroy: () => t.call("destroy"),
+      destroy: () => t.call("destroy").finally(() => dropStreams(errorFrom({ name: "AbortError", message: "the machine was put away" }))),
       memory: () => t.call("memory"),
       runCommand: (input) => t.call("runCommand", [input]),
       readJob: (id) => t.call("readJob", [id]),
@@ -199,8 +281,11 @@
       readFile: (path, opts) => xfer("readFile", [path], opts),
       /** { size, sha256 }: `blob` written to `path` in the machine. */
       writeFile: (path, blob, opts = {}) => xfer("writeFile", [path, blob, opts.sha256], opts),
+      tcpOpen,
       /** The armless machine itself, in this thread only (inline). */
       get emulator() { return t.emulator; },
+      /** Connections it is tracking (live, and events waiting for an id): for tests. */
+      get _tcpTracked() { return streams.size + early.size; },
     };
   }
 

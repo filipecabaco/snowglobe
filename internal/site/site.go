@@ -54,7 +54,7 @@ type Page struct {
 	// The console size the snapshot was taken at: its screen is replayed at this size
 	ConsoleCols, ConsoleRows int
 	// Agent: the site is one of the agent page's machines (snowglobe agent-pages puts every
-	// one-CPU --agent site of a directory on DIR/agent/). Its page links there ("For agents",
+	// --agent site of a directory on DIR/agent/). Its page links there ("For agents",
 	// ../agent/?runtime=<name>), and an address ending #agent goes there as it loads
 	Agent bool
 	// AgentExposedTo is the origins, other than the page's own, its WebMCP tools are shared with

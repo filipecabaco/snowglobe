@@ -1,11 +1,16 @@
-// The page's machines share one budget of memory: each awake one-CPU machine is about 650 to 720 MB
-// of WebAssembly memory, and suspending one briefly needs another copy of its RAM (and its gzip).
+// The page's machines share one budget of memory: each awake machine is about 540 to 740 MB of
+// WebAssembly memory (supabase, on 2 CPUs, about 730, its vCPU workers sharing it), and suspending
+// one briefly needs another copy of its RAM (and its gzip). The limit counts machines, whatever
+// their size: an open preview's machines are busy, so they count and are never suspended.
 // The scheduler keeps at most `budget` machines awake (the awake limit: 2 unless the person or an
 // agent changes it, for this page load), and puts machines to sleep and wakes them one at a time,
 // so no two captures or boots ever overlap:
 //  - waking one when the limit is reached first suspends the least recently used idle one;
 //  - a busy machine (a job or a copy running in it) is never suspended: when every awake machine
-//    is busy, the wake waits, and says so, until one is idle;
+//    is busy, the wake waits, and says so, until one is idle (out of the queue: other machines'
+//    wakes and suspends go on meanwhile; a caller may bound the wait). A wake for the preview,
+//    when the machines in its way include the preview's own, goes beyond the limit instead: the
+//    machines a preview uses count as one;
 //  - a lower limit suspends idle machines, least recently used first, one at a time; busy ones
 //    that keep it over the limit are said so (`over`), and suspended as they finish;
 //  - a wake that runs out of memory (a RangeError, or an error that says so) suspends one more
@@ -169,58 +174,99 @@
     /**
      * `m` awake, waking it if it isn't: at once when it is running, otherwise in turn, after
      * making room for it. Rejects if the wake fails, or `signal` aborts while it waits.
+     *
+     * When every awake machine is busy, the wake waits for one to be idle: outside the queue, so
+     * the other machines' wakes and suspends go on meanwhile. `waitMs` bounds that wait (a
+     * TimeoutError after it; no bound when not given). `preview`: the wake is for the page's
+     * preview, whose machines count as one: when what fills the limit includes a machine the
+     * preview holds (x.previewHeld()), it is woken beyond the limit rather than waiting for its own
+     * preview to close (`over` says so, and the machines over it are suspended once idle).
      */
-    ensureAwake(m, { signal } = {}) {
+    async ensureAwake(m, { signal, waitMs, preview = false } = {}) {
       m.lastUsed = this.now();
       if (m.lifecycle.state === "running") {
         m.lifecycle.touch();
-        return Promise.resolve();
+        return;
       }
-      if (m.lifecycle.state === "failed") return Promise.reject(m.lifecycle.error ?? new Error(`${m.name} failed`));
-      return this._enqueue(async () => {
-        let retried = false;
+      if (m.lifecycle.state === "failed") throw m.lifecycle.error ?? new Error(`${m.name} failed`);
+      let expired = false;
+      let deadline = null;
+      if (waitMs > 0) {
+        deadline = this.timers.setTimeout(() => {
+          expired = true;
+          this.notify();
+        }, waitMs);
+      }
+      try {
         for (;;) {
           if (signal?.aborted) throw abortError();
-          if (m.lifecycle.state === "running") return;
-          // Room for it: suspend the least recently used idle machine until there is
-          const skip = new Set();
-          while (this.awake().filter((x) => x !== m).length >= this._budget) {
-            if (signal?.aborted) throw abortError();
-            if (await this._evict(m, skip)) continue;
-            skip.clear();
-            const busy = this.awake().filter((x) => x !== m).map((x) => x.name);
-            this.waiting = `${m.name} waits to wake: every awake machine is busy (${busy.join(", ")}), and ${this._budget} may be awake at once`;
-            this._changed();
-            await this._sleep(signal);
+          const woke = await this._enqueue(() => this._wakeIn(m, signal, preview));
+          if (woke) return;
+          // No room: wait for a machine to be idle, out of the queue
+          const busy = this.awake().filter((x) => x !== m).map((x) => x.name);
+          if (expired) {
+            const e = new Error(`no machine slot free: ${m.name} waited ${Math.round(waitMs / 100) / 10} s to wake, and every awake machine is busy ` +
+              `(${busy.join(", ")}) with ${this._budget} allowed at once; raise the awake limit, or close the preview`);
+            e.name = "TimeoutError";
+            throw e;
           }
-          if (this.waiting) {
-            this.waiting = null;
-            this._changed();
-          }
-          try {
-            m.lastUsed = this.now();
-            await m.lifecycle.wake();
-            this._changed();
-            return;
-          } catch (e) {
-            this._changed();
-            // Out of memory: one more machine to sleep, then once more
-            if (!outOfMemory(e) || retried) {
-              if (outOfMemory(e)) throw new Error(`${m.name} could not wake: the browser has no memory for another machine (${e.message ?? e})`);
-              throw e;
-            }
-            retried = true;
-            if (!(await this._evict(m))) {
-              throw new Error(`${m.name} could not wake: the browser has no memory for another machine, and no idle machine to suspend (${e.message ?? e})`);
-            }
-          }
+          this.waiting = `${m.name} waits to wake: every awake machine is busy (${busy.join(", ")}), and ${this._budget} may be awake at once`;
+          this._changed();
+          await this._sleep(signal);
         }
-      }).finally(() => {
+      } finally {
+        if (deadline !== null) this.timers.clearTimeout(deadline);
         if (this.waiting?.startsWith(`${m.name} `)) {
           this.waiting = null;
           this._changed();
         }
-      });
+      }
+    }
+
+    /** In the queue: room made for `m` and `m` woken (true), or false when every other awake
+     *  machine is busy (the caller waits, out of the queue, and asks again). */
+    async _wakeIn(m, signal, preview) {
+      let retried = false;
+      for (;;) {
+        if (signal?.aborted) throw abortError();
+        if (m.lifecycle.state === "running") return true;
+        if (m.lifecycle.state === "failed") throw m.lifecycle.error ?? new Error(`${m.name} failed`);
+        // Room for it: suspend the least recently used idle machine until there is
+        const skip = new Set();
+        while (this.awake().filter((x) => x !== m).length >= this._budget) {
+          if (signal?.aborted) throw abortError();
+          if (await this._evict(m, skip)) continue;
+          const others = this.awake().filter((x) => x !== m);
+          if (preview && others.some((x) => x.previewHeld?.())) {
+            this.over = `${others.length + 1} machines are awake, over the limit of ${this._budget}: ${m.name} was woken for the preview, ` +
+              "beside the machines it holds; the ones over the limit are suspended once idle (close the preview to let them go)";
+            this._changed();
+            break;
+          }
+          return false;
+        }
+        if (this.waiting?.startsWith(`${m.name} `)) {
+          this.waiting = null;
+          this._changed();
+        }
+        try {
+          m.lastUsed = this.now();
+          await m.lifecycle.wake();
+          this._changed();
+          return true;
+        } catch (e) {
+          this._changed();
+          // Out of memory: one more machine to sleep, then once more
+          if (!outOfMemory(e) || retried) {
+            if (outOfMemory(e)) throw new Error(`${m.name} could not wake: the browser has no memory for another machine (${e.message ?? e})`);
+            throw e;
+          }
+          retried = true;
+          if (!(await this._evict(m))) {
+            throw new Error(`${m.name} could not wake: the browser has no memory for another machine, and no idle machine to suspend (${e.message ?? e})`);
+          }
+        }
+      }
     }
 
     /** Suspend `m` in turn (never a busy one: that resolves false). For the idle and hidden

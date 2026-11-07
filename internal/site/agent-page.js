@@ -1,8 +1,11 @@
 // The agent page's own elements (site/agent/index.html) over orchestrator.js: the list of machines
-// and their state, the awake limit, the command form (agent-panel.js), the copy form, the terminal
-// of the selected machine, and the WebMCP tools. Everything here runs only in answer to someone: a
-// click, a key, an agent's call, and every run and copy, whoever asks, needs the person at the page
-// to allow it once. The address only preselects (?runtime=<name>).
+// and their state, the awake limit, the command form (agent-panel.js), the preview, the copy form,
+// the terminal of the selected machine, and the WebMCP tools. Everything here runs only in answer
+// to someone: a click, a key, an agent's call, and every run, copy and preview, whoever asks, needs
+// the person at the page to allow it once. The address only preselects (?runtime=<name>).
+//
+// Its service worker (sw.js) makes the page cross-origin isolated, which machines on several CPUs
+// need, and carries the preview's requests to it: the first visit installs it and reloads once.
 (async function () {
   "use strict";
   const doc = document;
@@ -19,6 +22,36 @@
     $("terminal-box")?.remove();
     doc.body.classList.add("framed");
     return;
+  }
+
+  // The service worker: isolation (machines on several CPUs) and the preview. Installed on the
+  // first visit, after which the page reloads, once, to be loaded through it
+  const isolation = { isolated: window.crossOriginIsolated === true, controlled: false, reason: null };
+  const swKey = "snowglobe-agent-sw:" + location.pathname;
+  if ("serviceWorker" in navigator) {
+    try {
+      await navigator.serviceWorker.register("sw.js", { scope: "./" });
+      isolation.controlled = !!navigator.serviceWorker.controller;
+      if (isolation.isolated && isolation.controlled) {
+        try { sessionStorage.removeItem(swKey); } catch {}
+      } else {
+        let tried = false;
+        try { tried = sessionStorage.getItem(swKey) === "1"; } catch {}
+        if (!tried) {
+          try { sessionStorage.setItem(swKey, "1"); } catch {}
+          statusLine.textContent = "Setting the page up: it reloads once…";
+          await navigator.serviceWorker.ready;
+          location.reload();
+          return;
+        }
+        isolation.reason = isolation.controlled ? "the page isn't cross-origin isolated (its service worker couldn't make it so)"
+          : "its service worker isn't in control of this load (a hard reload skips it): reload the page";
+      }
+    } catch (e) {
+      isolation.reason = `its service worker could not start (${e?.message ?? e})`;
+    }
+  } else {
+    isolation.reason = "this browser has no service workers";
   }
 
   // Main-thread responsiveness, for anyone measuring: long tasks since the page loaded
@@ -50,7 +83,7 @@
     { title: `Start ${m.name} fresh?`, yes: "Start fresh", no: "Keep it", danger: true });
   const api = SnowglobeOrchestrator.createAgents(manifest, {
     pageUrl: location.href, scheduler, Machine: SnowglobeMachine.Machine, createMachine: SnowglobeHost.createMachine,
-    ask, confirmFresh, onchange: () => render(), hidden: doc.hidden, onactivity: (e) => activity(e),
+    ask, confirmFresh, onchange: () => render(), hidden: doc.hidden, onactivity: (e) => activity(e), isolated: isolation.isolated,
   });
   const machines = api._machines;
   addEventListener("visibilitychange", () => { for (const m of machines) m.lifecycle.setHidden(doc.hidden); });
@@ -109,6 +142,16 @@
   const BY = { webmcp: "WebMCP", script: "a script" };
   const others = new Map(); // job id or copy id: the run in the history
   async function activity(e) {
+    if (e.kind === "preview") {
+      showPreview(e.preview);
+      if (e.preview && e.source !== "form") {
+        const r = e.result ?? {};
+        panel.record({ command: `open preview ${e.preview.runtime}:${e.preview.port} ${e.preview.path}`, runtime: `by ${BY[e.source] ?? e.source}`,
+          state: r.error ? "failed" : "exited", exitStatus: r.error ? null : 0, error: r.error, endedAt: Date.now(),
+          output: r.error ? `${e.preview.url}\n${r.error}` : `${e.preview.url}\nanswered ${r.status} ${r.statusText ?? ""}`.trim() });
+      }
+      return;
+    }
     if (e.source === "form") return;
     if (e.kind === "run") {
       const run = { jobId: e.jobId, command: e.command, runtime: `${e.runtime}, by ${BY[e.source] ?? e.source}`, state: "running", output: "" };
@@ -139,6 +182,11 @@
   }
   runtimeSelect.addEventListener("change", () => {
     history.replaceState(null, "", `?runtime=${encodeURIComponent(runtimeSelect.value)}`);
+    // The preview form follows the selected machine, while no preview is open
+    if (!current) {
+      previewRuntime.value = runtimeSelect.value;
+      previewPort.value = String(portFor(runtimeSelect.value));
+    }
     render();
     panel.refresh();
     if (terminalBox.open) mountTerminal();
@@ -230,7 +278,7 @@
     li.setAttribute("aria-current", String(m.name === runtimeSelect.value));
     let state = STATE_TEXT[d.state];
     if (d.state === "waking" && m.loading != null) state = `waking ${m.loading}%`;
-    if (d.state === "busy") state = m.job ? "busy: a job" : "busy: a copy";
+    if (d.state === "busy") state = m.job ? "busy: a job" : m.xfers ? "busy: a copy" : m.previews.size ? "busy: a preview" : "busy";
     li.querySelector(".state").textContent = state;
     const facts = [];
     if (d.state === "asleep") facts.push(d.saved ? `saved ${new Date(d.savedAt ?? Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "not started");
@@ -239,6 +287,9 @@
     if (d.state === "failed") facts.push(d.error);
     if (d.unsaved) facts.push("not saved yet");
     if (d.filesUnreachable) facts.push(d.filesUnreachable);
+    if (d.cpus > 1) facts.push(`${d.cpus} CPUs`);
+    if (d.previewPorts.length) facts.push(`preview: port ${d.previewPorts.join(", ")}`);
+    if (d.unavailable) facts.push(`not in this page load: ${isolation.reason ?? "it isn't cross-origin isolated"}`);
     const box = li.querySelector(".facts");
     const parts = facts.map((f) => Object.assign(doc.createElement("span"), { textContent: f }));
     const acts = doc.createElement("span");
@@ -306,6 +357,135 @@
     copying?.abort();
     panel.say("Cancelling the copy…");
   });
+
+  // ---------------------------------------------------------------- the preview
+  // A machine's web server, in a frame of this page: its address is the preview's, under preview/,
+  // which the service worker carries to the machine (preview.js). One at a time
+  const previewForm = $("preview-form");
+  const previewRuntime = $("preview-runtime");
+  const previewPort = $("preview-port");
+  const previewPath = $("preview-path");
+  const previewOpen = $("preview-open");
+  const previewClose = $("preview-close");
+  const previewPanel = $("preview-panel");
+  const previewFrame = $("preview-frame");
+  const previewAddress = $("preview-address");
+  const previewTab = $("preview-tab");
+  const previewNote = $("preview-note");
+  // Where each machine's servers usually are: web's built pages on 4173, an app on 3000 elsewhere
+  const PORTS = { web: 4173 };
+  const lastPort = new Map();
+  const portFor = (rt) => lastPort.get(rt) ?? PORTS[rt] ?? 3000;
+  previewRuntime.replaceChildren(...machines.filter((m) => m.network).map((m) => new Option(m.title.replace(/ in the browser$/, ""), m.name)));
+  if ([...previewRuntime.options].some((o) => o.value === runtimeSelect.value)) previewRuntime.value = runtimeSelect.value;
+  previewPort.value = String(portFor(previewRuntime.value));
+  previewRuntime.addEventListener("change", () => { previewPort.value = String(portFor(previewRuntime.value)); });
+  let current = null; // the open preview: { runtime, port, path, url, base }
+  const previewable = !!navigator.serviceWorker?.controller;
+  if (!previewable) {
+    previewOpen.disabled = true;
+    previewNote.textContent = `The preview needs this page's service worker, and ${isolation.reason ?? "it isn't in control"}.`;
+  }
+
+  // The service worker answers a preview request from the tab it belongs to: this tab says which
+  // navigations of its frame (and its open-in-a-tab link) are its own, just before they happen
+  const claim = (url) => {
+    try { navigator.serviceWorker?.controller?.postMessage({ type: "snowglobe-preview-nav", url: new URL(url, location.href).href }); } catch {}
+  };
+  const navigate = (url) => {
+    claim(url);
+    previewFrame.src = url;
+  };
+  previewTab.addEventListener("click", () => claim(previewTab.href));
+
+  function showPreview(p) {
+    current = p;
+    previewPanel.hidden = !p;
+    previewClose.disabled = !p;
+    if (!p) {
+      previewFrame.removeAttribute("src");
+      previewNote.textContent = previewable ? "No preview is open. A server in a machine must listen on 0.0.0.0 to be seen here." : previewNote.textContent;
+      render();
+      return;
+    }
+    previewRuntime.value = p.runtime;
+    previewPort.value = String(p.port);
+    previewPath.value = p.path;
+    lastPort.set(p.runtime, p.port);
+    previewAddress.value = p.path;
+    previewTab.href = p.url;
+    navigate(p.url);
+    previewNote.textContent = `${p.runtime}'s port ${p.port}, at ${p.base}. The machine stays awake while the preview is open; ` +
+      `the page in it reaches other machines at ${p.base.replace(/[^/]+\/\d+\/$/, "")}<runtime>/<port>/.`;
+    render();
+  }
+
+  // The address bar follows what the frame shows (it is this site's: same origin)
+  previewFrame.addEventListener("load", () => {
+    if (!current) return;
+    try {
+      const loc = previewFrame.contentWindow.location;
+      const base = new URL(current.base);
+      if (loc.pathname.startsWith(base.pathname)) {
+        previewAddress.value = "/" + loc.pathname.slice(base.pathname.length) + loc.search + loc.hash;
+        previewTab.href = loc.href;
+      }
+    } catch {}
+  });
+  const go = (path) => {
+    if (!current) return;
+    let p = path.trim() || "/";
+    if (!p.startsWith("/")) p = "/" + p;
+    try {
+      const url = SnowglobePreview.previewUrl(location.href, current.runtime, current.port, p);
+      navigate(url);
+      previewTab.href = url;
+    } catch (e) {
+      panel.say(`${e.message}.`);
+    }
+  };
+  previewAddress.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      go(previewAddress.value);
+    }
+  });
+  $("preview-reload").addEventListener("click", () => {
+    try {
+      claim(previewFrame.contentWindow.location.href);
+      previewFrame.contentWindow.location.reload();
+    } catch { go(previewAddress.value); }
+  });
+  previewForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!previewable) return;
+    const req = { runtime: previewRuntime.value, port: Number(previewPort.value), path: previewPath.value.trim() || "/" };
+    previewOpen.disabled = true;
+    panel.say(`Opening ${req.runtime}'s port ${req.port}…`);
+    try {
+      const r = await api.openPreview(req, { source: "form" });
+      panel.say(r.error ? `The preview is open; its first request failed: ${r.error}` : `The preview shows ${req.runtime}'s port ${req.port}: it answered ${r.status}.`);
+    } catch (err) {
+      panel.say(`${err?.message ?? err}`.replace(/^(.)/, (c) => c.toUpperCase()) + ".");
+    } finally {
+      previewOpen.disabled = !previewable;
+      render();
+    }
+  });
+  previewClose.addEventListener("click", () => act(() => api.closePreview({ source: "form" })));
+
+  // The service worker hands each preview request over a channel of its own: answered here, by
+  // the machine (api.previewRequest), as it comes; the worker gives up on a page that doesn't take it
+  navigator.serviceWorker?.addEventListener("message", (e) => {
+    if (e.data?.type !== "snowglobe-preview" || !e.ports?.[0]) return;
+    const port = e.ports[0];
+    const cancel = new AbortController();
+    port.onmessage = ({ data }) => { if (data?.type === "cancel") cancel.abort(); };
+    port.postMessage({ type: "taken" });
+    api.previewRequest(e.data.request, (msg, transfer) => port.postMessage(msg, transfer ?? []), { signal: cancel.signal })
+      .catch((err) => port.postMessage({ type: "error", ...SnowglobePreview.errorPage(502, "The preview failed", String(err?.message ?? err)) }));
+  });
+  navigator.serviceWorker?.startMessages?.();
 
   // ---------------------------------------------------------------- the terminal
   const terminalBox = $("terminal-box");

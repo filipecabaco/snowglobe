@@ -237,23 +237,32 @@ test('the controller types the protocol into the serial line and reads the resul
   assert.equal(c.status().state, 'ready');
 });
 
-test('commands are refused until the machine is ready, and on several CPUs', () => {
+test('commands are refused until the machine is ready, and on several CPUs where the page is not isolated', () => {
   const m = machine();
   m.setState('loading');
   assert.equal(m.c.status().state, 'booting');
   assert.throws(() => m.c.runCommand({ command: 'true' }), /not ready: the machine is booting/);
-  const smp = machine({ cpus: 2 });
+  const smp = machine({ cpus: 2, isolated: false });
   assert.equal(smp.c.status().state, 'failed');
-  assert.match(smp.c.status().reason, /one-CPU/);
+  assert.match(smp.c.status().reason, /2 CPUs need a cross-origin isolated page/);
   assert.equal(smp.c.capabilities().supported, false);
-  assert.throws(() => smp.c.runCommand({ command: 'true' }), /one-CPU/);
+  assert.throws(() => smp.c.runCommand({ command: 'true' }), /cross-origin isolated/);
+  // Isolated (the agent page, a several-CPU site's own page): jobs run there as on one CPU
+  const iso = machine({ cpus: 2, isolated: true });
+  assert.equal(iso.c.status().state, 'ready');
+  assert.equal(iso.c.capabilities().supported, true);
+  assert.equal(iso.c.capabilities().cpus, 2);
+  iso.c.runCommand({ command: 'nproc' });
+  assert.match(iso.typed[0], /^echo SGSYNC_/);
+  // Not said: crossOriginIsolated decides (false in node)
+  assert.equal(machine({ cpus: 2 }).c.supported(), globalThis.crossOriginIsolated === true);
   for (const bad of [undefined, {}, { command: '' }, { command: 'x', timeoutSeconds: -1 }, { command: 'x', requestId: 'a b' }]) {
     assert.throws(() => m.c.runCommand(bad));
   }
 });
 
 // The page's API over one machine, as the agent page has it over several: by runtime
-const ALL = ['list_runtimes', 'run_command', 'job_status', 'cancel_job', 'copy_file', 'set_awake_limit'];
+const ALL = ['list_runtimes', 'run_command', 'job_status', 'cancel_job', 'copy_file', 'open_preview', 'close_preview', 'set_awake_limit'];
 function pageApi(c, copies = [], calls = []) {
   const rt = (i) => { if (i.runtime !== 'py') throw new Error(`no runtime ${i.runtime}`); };
   let limit = 2;
@@ -328,11 +337,11 @@ test('WebMCP: nothing registered without a model context, or on several CPUs', a
   const none = await W.register({ capabilities: async () => ({ supported: true }) }, { doc: {}, nav: {} });
   assert.equal(none.available, false);
   assert.deepEqual(none.registered, []);
-  const smp = machine({ cpus: 2 });
+  const smp = machine({ cpus: 2, isolated: false });
   const doc = { modelContext: { registerTool: async () => assert.fail('registered') } };
   const r = await W.register({ capabilities: async () => smp.c.capabilities() }, { doc });
   assert.deepEqual(r.registered, []);
-  assert.match(r.reason, /one-CPU/);
+  assert.match(r.reason, /cross-origin isolated/);
   // navigator.modelContext, as earlier drafts had it
   const seen = [];
   await W.register({ capabilities: async () => ({ supported: true }) }, { doc: {}, nav: { modelContext: { registerTool: async (t) => seen.push(t.name) } } });
@@ -625,4 +634,42 @@ test('upload lines typed ahead: a window of them in flight, acknowledgements tak
   bad.feed(`SGSYNC_${bad.syncTok}_42\n`, 1);
   bad.feed('SGACK_k_0_1_42\n', 2);
   assert.equal(bad.state, 'failed');
+});
+
+test('WebMCP: open_preview asks first, opens the page\'s preview and says what its first request got; close_preview closes it', async () => {
+  const calls = [];
+  let asked = 0;
+  const agent = {
+    openPreview: async (input, o) => { calls.push(['open', input, o]); return { url: 'https://x/snowglobe/agent/preview/web/4173/', base: 'https://x/snowglobe/agent/preview/web/4173/', status: 200, statusText: 'OK' }; },
+    closePreview: async (o) => { calls.push(['close', o]); return true; },
+  };
+  const dispatch = W.dispatcher(W.definitions(agent, { jobText: A.jobText, ask: async () => { asked++; } }));
+  const r = await dispatch('open_preview', { runtime: 'web', port: 4173 });
+  assert.equal(asked, 1);
+  assert.deepEqual(calls[0].slice(0, 2), ['open', { runtime: 'web', port: 4173, path: undefined }]);
+  assert.equal(calls[0][2].source, 'webmcp');
+  assert.match(r.content[0].text, /shows https:\/\/x\/snowglobe\/agent\/preview\/web\/4173\/ \(web's port 4173\); it answered 200 OK/);
+  assert.match(r.content[0].text, /preview\/<runtime>\/<port>\//);
+  assert.ok(!r.isError);
+  assert.ok((await dispatch('open_preview', { runtime: 'web', port: 'x' })).isError);
+  assert.ok((await dispatch('open_preview', { runtime: 'web', port: 80, path: 'x' })).isError);
+  assert.equal(calls.length, 1, 'bad input opens nothing');
+  agent.openPreview = async () => ({ url: 'u', base: 'https://x/a/preview/web/1/', error: 'Nothing is listening: start a server' });
+  const failed = await dispatch('open_preview', { runtime: 'web', port: 1 });
+  assert.ok(failed.isError);
+  assert.match(failed.content[0].text, /its first request failed: Nothing is listening/);
+  assert.match((await dispatch('close_preview', {})).content[0].text, /closed/);
+  // The one question mentions previews
+  assert.match(W.ASK_MESSAGE, /preview/);
+});
+
+test('consent: granted() says whether the person allowed it, without asking', async () => {
+  let shown = 0;
+  const ask = W.consent({ confirm: async () => { shown++; return true; } });
+  assert.equal(ask.granted(), false);
+  assert.equal(shown, 0);
+  await ask();
+  assert.equal(ask.granted(), true);
+  await ask();
+  assert.equal(shown, 1);
 });
