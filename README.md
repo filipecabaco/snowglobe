@@ -7,7 +7,7 @@ static files. Visitors get your program running in their tab in about a second, 
 behind it. The same site also runs headlessly, as one executable, as a sandbox an agent drives,
 and as machines a daemon forks, scales to zero and applies from a fleet file.
 
-**[▶ Try the demos](https://filipecabaco.github.io/snowglobe/)**: Supabase (its native stack and a small app on it), Elixir IEx, PostgreSQL, Elixir + Postgres, Python + Rich, TypeScript + Zod,
+**[▶ Try the demos](https://filipecabaco.github.io/snowglobe/)**: [Conduit + Supabase](examples/conduit/) (a blogging app and its backend in one VM), Supabase (its native stack and a small app on it), Elixir IEx, PostgreSQL, Elixir + Postgres, Python + Rich, TypeScript + Zod,
 Go + Bubble Tea, Rust + clap, Java + Gson, and curl + jq (plain Alpine tools, online through your browser), each a small
 project in [`examples/`](examples) running in the browser.
 
