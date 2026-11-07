@@ -83,7 +83,9 @@ snowglobe stop tpl</pre>
             static files. It is off unless asked for. A site on several CPUs is a machine there too: the page's
             service worker makes it cross-origin isolated, as such a site's own page is. The labels
             <code>snowglobe.agent-purpose</code> (what the machine is good for, in a line) and
-            <code>snowglobe.agent-sample</code> (a command to try) describe it on the page.</p>
+            <code>snowglobe.agent-sample</code> (a command to try) describe it on the page, and
+            <code>snowglobe.agent-watch</code> (a project directory, such as <code>/root/app</code>) has the page show
+            which files in it each command changed, with their diffs.</p>
           <pre>snowglobe build examples/duckdb --agent --out dist/duckdb
 snowglobe pool dist; snowglobe pwa dist/duckdb
 snowglobe agent-pages dist      # dist/agent/runtimes.json, the page's scripts and service worker</pre>
@@ -97,8 +99,8 @@ snowglobe agent-pages dist      # dist/agent/runtimes.json, the page's scripts a
           <pre>Open https://filipecabaco.github.io/snowglobe/agent/, choose python under Runtime, type
 python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the exit status and output.</pre>
           <p>Each machine runs in a Web Worker of its own, so several run on several cores and the page stays
-            responsive. The page is for agents that build and compute: Supabase (on two CPUs) and a Node machine with
-            Vite to build web apps, and Python with numpy and pandas, DuckDB for analytics and PostgreSQL for databases;
+            responsive. The page is for agents that build and compute: Supabase (on two CPUs) and a React app on it,
+            built with Vite and rebuilt as it changes, and Python with numpy and pandas, DuckDB for analytics and PostgreSQL for databases;
             the other runs are on the landing page, for people. A machine starts lazily, on its first command. Each one
             awake holds 540 to 740 MB, so only a few are awake at once: two unless the
             field <strong>Machines awake at once</strong>, the tool <code>set_awake_limit</code> or
@@ -126,6 +128,7 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
                 <tr><td><code>run_command</code></td><td>starts <code>command</code> in <code>runtime</code> and returns its job id at once; <code>timeout_seconds</code> (default 300, at most 3600) and <code>request_id</code> (a retry returns the same job) are optional</td></tr>
                 <tr><td><code>job_status</code></td><td>the job's output so far, ending <code>[running]</code>, or as <code>snowglobe mcp</code>'s ends: <code>[exit N]</code>, <code>[timed out]</code>, <code>[stopped]</code></td></tr>
                 <tr><td><code>cancel_job</code></td><td>stops the job: its command and everything it started are killed</td></tr>
+                <tr><td><code>write_file</code></td><td>writes <code>content</code> (UTF-8 text, at most 1 MiB) at <code>path</code> in <code>runtime</code>, its directory made, with no shell quoting; returns once it is written, with the files it changed in a watched project</td></tr>
                 <tr><td><code>copy_file</code></td><td>copies <code>from_path</code> in <code>from_runtime</code> to <code>to_path</code> in <code>to_runtime</code>: any file up to 8 MiB, checked by sha256 on both ends; a client's cancel signal stops it</td></tr>
                 <tr><td><code>open_preview</code></td><td>opens the page's preview on a web server in a machine: <code>runtime</code>, <code>port</code> and an optional <code>path</code>; returns the preview's address and what its first request got</td></tr>
                 <tr><td><code>close_preview</code></td><td>closes it: the machines it kept awake can be suspended again</td></tr>
@@ -142,7 +145,7 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
           <p>Scripts on the page can use the same thing as <code>window.snowglobeAgent</code>:
             <code>listRuntimes()</code>, <code>status(runtime)</code>, <code>runCommand({runtime, command,
             timeoutSeconds, requestId})</code>, <code>readJob(jobId)</code>, <code>cancelJob(jobId)</code>,
-            <code>copyFile({fromRuntime, fromPath, toRuntime, toPath})</code>, <code>suspend(runtime)</code>,
+            <code>writeFile({runtime, path, content})</code>, <code>copyFile({fromRuntime, fromPath, toRuntime, toPath})</code>, <code>suspend(runtime)</code>,
             <code>wake(runtime)</code>, <code>startFresh(runtime)</code>, <code>setAwakeLimit(count)</code>,
             <code>openPreview({runtime, port, path})</code>, <code>closePreview()</code> and <code>unsaved()</code>. Runs and copies ask the person first, as the form does. A job's output
             keeps its most recent 1 MiB and says when it dropped some. Jobs run with <code>NO_COLOR=1</code> and
@@ -162,10 +165,17 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
             URL to give supabase-js. While a preview is open, its machine and every machine its page reaches stay awake.
             Nothing is answered unless a preview is open and the person has allowed the page, and a preview address
             opened from anywhere but the page is refused.</p>
-          <pre>On supabase: psql "$DB_URL" creates a notes table with row level security
-On web:      a Vite page with sign-up, login and notes on supabase-js; npm run build; serve dist 4173
-open_preview {runtime: "web", port: 4173}: you sign up and add notes in the page
-On supabase: psql "$DB_URL" -c "select * from notes" shows them, with your user's id</pre>
+          <p>The two come ready and connected: Supabase has a <code>notes</code> table with row level security, and
+            web a React app on it (sign-up, login, notes) in <code>/root/app</code>, which <code>serve --watch</code>
+            builds, serves on port 4173 and builds again on every change. Vite's hot reload needs a WebSocket, so
+            instead the page reads the server's <code>/__build</code> while the preview is open and reloads the preview
+            after each new build. Beside the preview, <strong>What the agent changed</strong> lists every command in
+            every machine with the files it changed in web's app and their diffs, and each build; <strong>Watch an
+            agent build</strong> plays a short walkthrough through the same calls an agent makes.</p>
+          <pre>open_preview {runtime: "web", port: 4173}: the app, signed up and used in the page
+write_file {runtime: "web", path: "/root/app/src/App.jsx", content: ...}: the diff shows, web rebuilds, the preview reloads
+run_command {runtime: "supabase", command: "psql \"$DB_URL\" ..."}: a column, a policy, notify pgrst
+On supabase: psql "$DB_URL" -c "select * from notes" shows what you added, with your user's id</pre>
           <p>The whole recipe is in <a href="../../llms.txt">llms.txt</a>.</p>
           <p id="suspend">An idle machine doesn't stay in memory: with no job for 5 minutes, or with its tab hidden
             for a minute, it is suspended, its state saved and its worker ended, so the browser takes back its memory.

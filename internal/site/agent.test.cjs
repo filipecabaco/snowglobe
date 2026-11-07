@@ -262,7 +262,7 @@ test('commands are refused until the machine is ready, and on several CPUs where
 });
 
 // The page's API over one machine, as the agent page has it over several: by runtime
-const ALL = ['list_runtimes', 'run_command', 'job_status', 'cancel_job', 'copy_file', 'open_preview', 'close_preview', 'set_awake_limit'];
+const ALL = ['list_runtimes', 'run_command', 'job_status', 'cancel_job', 'write_file', 'copy_file', 'open_preview', 'close_preview', 'set_awake_limit'];
 function pageApi(c, copies = [], calls = []) {
   const rt = (i) => { if (i.runtime !== 'py') throw new Error(`no runtime ${i.runtime}`); };
   let limit = 2;
@@ -672,4 +672,24 @@ test('consent: granted() says whether the person allowed it, without asking', as
   assert.equal(ask.granted(), true);
   await ask();
   assert.equal(shown, 1);
+});
+
+test('WebMCP: write_file asks first and writes the text as it is; job_status and write_file say what a command changed in a watched project', async () => {
+  globalThis.SnowglobeBuilder = require('./builder.js');
+  const calls = [];
+  let asked = 0;
+  const changes = { files: [{ status: 'modified', path: 'src/App.jsx', added: 2, removed: 1 }], more: false };
+  const agent = {
+    writeFile: async (input, o) => { calls.push([input, o.source]); return { bytes: 5, changes, watch: '/root/app' }; },
+    readJob: async () => ({ state: 'exited', exitStatus: 0, output: 'ok\n', changes, watch: '/root/app' }),
+  };
+  const dispatch = W.dispatcher(W.definitions(agent, { jobText: A.jobText, ask: async () => { asked++; } }));
+  const r = await dispatch('write_file', { runtime: 'web', path: '/root/app/src/App.jsx', content: "it's\n" });
+  assert.equal(asked, 1);
+  assert.deepEqual(calls, [[{ runtime: 'web', path: '/root/app/src/App.jsx', content: "it's\n" }, 'webmcp']]);
+  assert.equal(r.content[0].text, 'wrote 5 bytes to web:/root/app/src/App.jsx\n[changed in /root/app: src/App.jsx (+2 −1)]');
+  assert.ok((await dispatch('write_file', { runtime: 'web', path: '/x' })).isError, 'content is required');
+  assert.ok((await dispatch('write_file', { runtime: 'web', content: 'x' })).isError, 'a path is required');
+  assert.equal(calls.length, 1);
+  assert.equal((await dispatch('job_status', { job_id: '0123456789abcdef' })).content[0].text, 'ok\n[exit 0]\n[changed in /root/app: src/App.jsx (+2 −1)]');
 });

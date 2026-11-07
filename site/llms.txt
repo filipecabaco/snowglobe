@@ -221,8 +221,9 @@ Example Dockerfile labels:
 
 One page for agents, with every agent runtime of the site in it: https://filipecabaco.github.io/snowglobe/agent/
 Each runtime is a Linux machine (arm64) that runs in the tab, in a Web Worker of its own; nothing
-runs on a server, and the page is static files. Its headline: an agent builds a web app on
-Supabase, builds its page on `web`, and the person sees it live in the page's preview. `snowglobe agent-pages <dir>` writes its
+runs on a server, and the page is static files. Its headline: an agent builds a React app on
+Supabase in `web`, and the person sees it live in the page's preview, rebuilt after each change,
+beside a feed of what the agent changed. `snowglobe agent-pages <dir>` writes its
 list of machines (`agent/runtimes.json`, from each site's `run.json`) and its scripts when a site of
 several runs is assembled; a site's own page links there ("For agents", `../agent/?runtime=<site>`),
 and the old `/agent/<site>/` addresses go there too. `?runtime=<name>` only preselects: nothing
@@ -265,11 +266,20 @@ runs because of the address.
   has "From runtime", "From path", "To runtime", "To path", "Copy" and "Cancel copy". The selected
   machine's terminal is under "Show <runtime>'s terminal". "Preview a machine's web server" has
   "Runtime", "Port", "Path", "Open preview" and "Close preview"; the open preview is a frame with
-  an address field ("Address in the preview"), "Reload" and "New tab".
+  an address field ("Address in the preview"), "Reload" and "New tab". Beside it (below it on
+  narrower screens), "What the agent changed": a list, "Agent activity, newest first", of every
+  run, copy, write and build in every machine (filter: "Show", a machine or "All machines"), each
+  tagged with its runtime and who asked, its exit status, and in a watched project (web's
+  `/root/app`) "Changed N files", each file a disclosure whose diff is a `pre` labelled "Changes to
+  <path>". A build entry says "Build N written in S s; the preview reloaded" or "Build N failed",
+  with the error. "Watch an agent build" plays a short walkthrough through the same calls (rename
+  the app; a `done` column on Supabase and a checkbox for it; an All / Open / Done filter); "Stop
+  the walkthrough" stops it between steps.
 - `window.snowglobeAgent` (promises): `listRuntimes()` (name, purpose, state, sample, saved),
   `capabilities()`, `status(runtime)`, `runCommand({runtime, command, timeoutSeconds, requestId})`
   → `{jobId, runtime}` at once (wakes or boots the machine first), `readJob(jobId)`,
-  `cancelJob(jobId)` (job ids are unique across runtimes), `copyFile({fromRuntime, fromPath,
+  `cancelJob(jobId)` (job ids are unique across runtimes), `writeFile({runtime, path, content})` →
+  `{bytes, changes}` once written, `copyFile({fromRuntime, fromPath,
   toRuntime, toPath})` → `{bytes, sha256, readSeconds, writeSeconds}`, `cancelCopy()`,
   `suspend(runtime)`, `wake(runtime)`, `startFresh(runtime)` (asks the person), `setAwakeLimit(count)`
   → `{awakeLimit, awake, overLimit}`, `openPreview({runtime, port, path})` → `{url, base, status |
@@ -278,7 +288,10 @@ runs because of the address.
   as MCP-B's `@mcp-b/global`, even one added up to 15 s after the page starts; the first drafts'
   `provideContext` works too): `list_runtimes`; `run_command {runtime, command, timeout_seconds,
   request_id}` returns a job id; `job_status {job_id}` returns its output, ending `[running]`,
-  `[exit N]`, `[timed out]` or `[stopped]`; `cancel_job {job_id}`; `copy_file {from_runtime,
+  `[exit N]`, `[timed out]` or `[stopped]` (in a watched project, then `[changed in <dir>: <files>]`);
+  `cancel_job {job_id}`; `write_file {runtime, path, content}` writes a UTF-8 text file (at most
+  1 MiB; its directory is made) with no shell quoting, as a job in its turn, and returns once it is
+  written, with what changed; `copy_file {from_runtime,
   from_path, to_runtime, to_path}` returns the bytes copied and their sha256 (a client's cancel
   signal stops it); `open_preview {runtime, port, path}` opens the page's preview on a server in a
   machine and returns its address and what its first request got; `close_preview`;
@@ -292,6 +305,13 @@ runs because of the address.
 - Copies: one file, binary-safe, at most 8 MiB, checked by sha256 on both ends; the target is
   replaced only once its copy checks out (its directory is made). It goes over the machines'
   serial lines as base64, so it is slow: tens of KiB a second. Cancellable.
+- Watched projects: a machine whose image has the label `snowglobe.agent-watch=<dir>` (web:
+  `/root/app`) reports, after each command, the files under `<dir>` it added, changed or deleted
+  (`node_modules`, `dist` and `.git` aside), with a unified diff of each (at most 40 files, 300
+  lines a file; none for binary files or files over 256 KiB). The diff is measured against a copy
+  the machine keeps (`/var/lib/snowglobe/watch/<dir>`), taken before the first command and brought
+  up to date after each; the report is taken out of the job's output, so the output is the
+  command's own. `readJob` gives it as `changes: {files: [{status, path, diff, added, removed}], more}`.
 
 ### The preview
 
@@ -307,8 +327,15 @@ Cookies a server sets are not kept (a service worker can't set them): use tokens
 does. A port with nothing listening answers 502, "Nothing is listening".
 
 - A server must listen on `0.0.0.0`, not `127.0.0.1` or `localhost` (the page connects from outside
-  the machine): `serve dist 4173` on `web`, `vite preview --host 0.0.0.0`, Bun with `hostname:
-  "0.0.0.0"`.
+  the machine): `serve --watch dist 4173` on `web` (running from its boot), `vite preview --host
+  0.0.0.0`, Bun with `hostname: "0.0.0.0"`.
+- Live reload without WebSockets: `serve --watch` runs Vite's build in watch mode and answers
+  `GET /__build` with `{version, state: "building" | "ok" | "error", error, ms, at}`. While a
+  preview is open the page reads it (every 0.5 s for 45 s after a command in that machine, every
+  5 s otherwise) and reloads the preview when a new build is written; a failed build is shown in
+  the feed and the preview keeps the last page that built. A server with no `/__build` (plain
+  `serve dist`, `vite preview`) has the preview reloaded after each command in its machine. Vite's
+  dev server and hot module reload don't work in the preview (they need a WebSocket).
 - Build pages with relative asset paths: they are served under a prefix. The `web` project's Vite
   config has `base: "./"`.
 - The page in the preview is this site's own (same origin): it reaches any machine's server at
@@ -328,31 +355,33 @@ does. A port with nothing listening answers 502, "Nothing is listening".
 
 ### Building a web app on Supabase, seen live
 
-1. On `supabase`, a table with row level security (a user sees their own rows), by psql:
+Both machines come ready and connected. `supabase` has a `notes` table (`id`, `user_id` default
+`auth.uid()`, `body`, `created_at`) with row level security: a user reads, adds and deletes only
+their own. `web` has a React app in `/root/app` (Vite 8, React 19, `@supabase/supabase-js`, all
+installed: no network needed) that signs up, logs in, lists, adds and deletes notes; from its boot
+`serve --watch dist 4173` builds it, serves it, and builds it again on every change.
+
+1. `open_preview {runtime: "web", port: 4173}`: the app, live. supabase-js's URL is
+   `<preview_base>supabase/54321` (`src/supabase.js` works it out from the page's address), and its
+   key is in `/root/app/.env` (`VITE_SUPABASE_ANON_KEY`: the Supabase CLI's fixed local key, which
+   is `$ANON_KEY` on `supabase`).
+2. Change the app: `write_file {runtime: "web", path: "/root/app/src/App.jsx", content: ...}` (or
+   `run_command` with sed). Files: `src/App.jsx` (the app), `src/supabase.js` (the client),
+   `src/styles.css`, `index.html`. The page shows the diff, `web` rebuilds (a few seconds natively,
+   longer in the tab, where the build runs in the emulated machine), and the preview reloads; a build error shows in the feed, and `wget -qO- 127.0.0.1:4173/__build` on
+   `web` says it too.
+3. Change the schema on `supabase` with psql, then `notify pgrst, 'reload schema'` so the Data API
+   sees it, for example:
 
        psql "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
-       drop table if exists public.notes cascade;
-       create table public.notes (
-         id bigint generated always as identity primary key,
-         user_id uuid not null default auth.uid() references auth.users on delete cascade,
-         body text not null check (length(body) between 1 and 500),
-         created_at timestamptz not null default now());
-       alter table public.notes enable row level security;
-       create policy "read own notes" on public.notes for select to authenticated using ((select auth.uid()) = user_id);
-       create policy "add own notes" on public.notes for insert to authenticated with check ((select auth.uid()) = user_id);
+       alter table public.notes add column if not exists done boolean not null default false;
+       create policy "update own notes" on public.notes for update to authenticated
+         using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
        notify pgrst, 'reload schema';
        SQL
-       echo "$ANON_KEY"
 
-2. On `web`, in `/root/app` (a Vite project, vanilla JS, with `@supabase/supabase-js` installed:
-   no network needed): write `.env` (`VITE_SUPABASE_ANON_KEY=<the key>`), `index.html` and
-   `src/main.js` with sign-up, login, add and list, using
-   `createClient(location.href.split("/preview/")[0] + "/preview/supabase/54321", import.meta.env.VITE_SUPABASE_ANON_KEY)`.
-   Then `npm run build && (serve dist 4173 >/tmp/serve.log 2>&1 &)`.
-3. `open_preview {runtime: "web", port: 4173}`: the person signs up, logs in and adds notes in the
-   page's preview.
-4. On `supabase`: `psql "$DB_URL" -c "select n.id, n.body, n.user_id, u.email from notes n join
-   auth.users u on u.id = n.user_id"` shows their rows, with their user's id.
+4. On `supabase`: `psql "$DB_URL" -c "select n.id, n.body, u.email from notes n join auth.users u
+   on u.id = n.user_id"` shows what the person added in the preview, with their user.
 
 Without a second machine: copy the built `dist` (as a tarball, `copy_file`) to `supabase` and serve
 it there with Bun (`BUN_BE_BUN=1 supabase run serve.ts`, `Bun.serve({hostname: "0.0.0.0", port:
@@ -361,7 +390,7 @@ it there with Bun (`BUN_BE_BUN=1 supabase run serve.ts`, `Bun.serve({hostname: "
 ### The runtimes on this site
 
 - runtime `supabase`: Supabase for web app building: Postgres, Auth and the Data API, with a preview (2 CPUs; the API on port 54321; `$DB_URL`, `$API_URL`, `$ANON_KEY` in every shell; try `psql "$DB_URL" -c "select now()"`)
-- runtime `web`: build and serve web pages: Node with Vite and esbuild (a Vite project with supabase-js in `/root/app`; try `cd /root/app && npm run build && (serve dist 4173 >/tmp/serve.log 2>&1 &)`)
+- runtime `web`: build web apps: a React app on Supabase, rebuilt and served on port 4173 as it changes (Vite, Node) (the app in `/root/app`, watched: each command's changes are reported; try `cd /root/app && sed -i 's/<h1>Notes/<h1>My notes/' src/App.jsx`)
 - runtime `python`: run Python: scripts, numpy and pandas for data work (try `python3 -c 'import numpy, pandas; print(numpy.__version__, pandas.__version__)'`)
 - runtime `duckdb`: DuckDB for analytics: SQL over CSV, Parquet and JSON files (try `duckdb -c 'select 6 * 7'`)
 - runtime `postgres`: PostgreSQL for database work: load CSV files and query them with psql (try `psql -h /run/postgresql -U postgres -tAc 'select count(*) from planets'`)

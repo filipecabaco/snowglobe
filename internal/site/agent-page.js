@@ -139,9 +139,10 @@
 
   // Runs and copies that didn't come from this page's forms (WebMCP tools, a script): in the
   // history too, tagged with who asked, so the person sees what an agent did
-  const BY = { webmcp: "WebMCP", script: "a script" };
+  const BY = { webmcp: "WebMCP", script: "a script", walkthrough: "the walkthrough" };
   const others = new Map(); // job id or copy id: the run in the history
   async function activity(e) {
+    builderActivity(e).catch(() => {});
     if (e.kind === "preview") {
       showPreview(e.preview);
       if (e.preview && e.source !== "form") {
@@ -372,6 +373,7 @@
   const previewAddress = $("preview-address");
   const previewTab = $("preview-tab");
   const previewNote = $("preview-note");
+  const studio = $("studio");
   // Where each machine's servers usually are: web's built pages on 4173, an app on 3000 elsewhere
   const PORTS = { web: 4173 };
   const lastPort = new Map();
@@ -399,7 +401,12 @@
   previewTab.addEventListener("click", () => claim(previewTab.href));
 
   function showPreview(p) {
+    const was = current;
     current = p;
+    studio.classList.toggle("open", !!p);
+    // Its server's builds: read while it is open, a new one reloads it (builder.js)
+    if (!p) buildWatch.stop();
+    else if (!was || was.runtime !== p.runtime || was.port !== p.port || !buildWatch.running) buildWatch.start();
     previewPanel.hidden = !p;
     previewClose.disabled = !p;
     if (!p) {
@@ -450,12 +457,15 @@
       go(previewAddress.value);
     }
   });
-  $("preview-reload").addEventListener("click", () => {
+  /** The preview's page loaded again, where it is (its path kept) */
+  function reloadPreview() {
+    if (!current) return;
     try {
       claim(previewFrame.contentWindow.location.href);
       previewFrame.contentWindow.location.reload();
     } catch { go(previewAddress.value); }
-  });
+  }
+  $("preview-reload").addEventListener("click", reloadPreview);
   previewForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!previewable) return;
@@ -566,6 +576,112 @@
     if (terminalBox.open) mountTerminal().catch((e) => panel.say(`The terminal could not load: ${e.message}.`));
     render();
   });
+
+  // ---------------------------------------------------------------- what the agent changed
+  // Every run and copy in every machine, newest first, with the files each changed in a watched
+  // project (web's /root/app) and their diffs; the open preview's builds, and its reloads after them
+  const B = SnowglobeBuilder;
+  const feed = new B.Feed($("feed"), { doc, empty: $("feed-empty") });
+  const feedFilter = $("feed-filter");
+  feedFilter.append(...machines.map((m) => new Option(m.title.replace(/ in the browser$/, ""), m.name)));
+  feedFilter.addEventListener("change", () => feed.setFilter(feedFilter.value));
+  $("feed-clear").addEventListener("click", () => feed.clear());
+  const builderStatus = $("builder-status");
+  const sayBuilder = (text) => { if (builderStatus.textContent !== text) builderStatus.textContent = text; };
+  const feedRuns = new Map(); // job or copy id: its entry
+  const secs = (ms) => ms == null ? "" : ms < 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
+
+  async function builderActivity(e) {
+    if (e.kind === "run") {
+      feedRuns.set(e.jobId, feed.add({ kind: "run", runtime: e.runtime, source: e.source, command: e.command, state: "running", watch: e.watch }));
+    } else if (e.kind === "job") {
+      const entry = feedRuns.get(e.jobId);
+      if (!entry) return;
+      feedRuns.delete(e.jobId);
+      let v;
+      try { v = await api.readJob(e.jobId); } catch (err) { v = { state: "failed", error: err?.message ?? String(err) }; }
+      feed.update(entry, { state: v.state, exitStatus: v.exitStatus, error: v.error, changes: v.changes ?? null });
+      const touched = !!v.changes?.files.length;
+      if (touched) sayBuilder(`${e.runtime}: ${B.summary(v.changes)}.${current?.runtime === e.runtime && buildWatch.supported !== false ? " Waiting for the rebuild…" : ""}`);
+      if (current?.runtime === e.runtime) {
+        // A change in the previewed machine: its server's build is read often for a while; a server
+        // with no /__build (plain `serve`, `vite preview`) has the preview reloaded instead
+        if (buildWatch.supported === false) reloadPreview();
+        else buildWatch.kick();
+      }
+    } else if (e.kind === "copy") {
+      let entry = feedRuns.get(e.id);
+      if (!entry) feedRuns.set(e.id, (entry = feed.add({ kind: "run", runtime: e.to.split(":")[0], source: e.source, command: `copy ${e.from} → ${e.to}`, state: "running" })));
+      if (e.state === "running") return;
+      feedRuns.delete(e.id);
+      feed.update(entry, e.result ? { state: "exited", exitStatus: 0, text: `Copied ${e.result.bytes} bytes.` }
+        : { state: e.state === "cancelled" ? "cancelled" : "failed", error: e.error });
+      if (current && e.result && e.to.startsWith(current.runtime + ":")) buildWatch.kick();
+    } else if (e.kind === "preview") {
+      if (e.preview) feed.add({ kind: "preview", runtime: e.preview.runtime, source: e.source,
+        text: `The preview opened on ${e.preview.runtime}'s port ${e.preview.port}${e.result?.error ? `; its first request failed: ${e.result.error}` : "."}` });
+      else feed.add({ kind: "preview", text: `The preview closed${e.why && e.why !== "closed" ? ` (${e.why})` : ""}.` });
+    }
+  }
+
+  // The previewed server's /__build (serve --watch): a new build reloads the preview; a failed one
+  // is shown, and the preview keeps the last page that built
+  const buildWaiters = new Set();
+  const buildWatch = new B.BuildWatch({
+    get: () => current ? api.previewGet({ runtime: current.runtime, port: current.port, path: "/__build" }) : Promise.resolve(null),
+    visible: () => !doc.hidden,
+    onState: (b) => { if (b?.state === "building") sayBuilder(`${current?.runtime ?? "The machine"} is rebuilding its app…`); },
+    onBuild: (b) => {
+      const rt = current?.runtime;
+      if (b.state === "ok") {
+        reloadPreview();
+        feed.add({ kind: "build", runtime: rt, state: "ok", text: `Build ${b.version} written${b.ms != null ? ` in ${secs(b.ms)}` : ""}; the preview reloaded.` });
+        sayBuilder(`${rt} rebuilt its app${b.ms != null ? ` in ${secs(b.ms)}` : ""}; the preview reloaded.`);
+      } else if (b.state === "error") {
+        feed.add({ kind: "build", runtime: rt, state: "error", error: b.error ?? "unknown error", text: `Build ${b.version} failed; the preview keeps the last page that built.` });
+        sayBuilder(`${rt}'s build failed: ${String(b.error ?? "").split("\n").find((l) => l.trim()) ?? "see the feed"}`);
+      }
+      for (const w of buildWaiters) w(b);
+    },
+  });
+  addEventListener("visibilitychange", () => { if (!doc.hidden && current) buildWatch.kick(); });
+  /** The next build of the preview's server, or null after `ms`. */
+  const nextBuild = (ms = 60000) => new Promise((resolve) => {
+    const done = (b) => { buildWaiters.delete(done); clearTimeout(timer); resolve(b); };
+    const timer = setTimeout(() => done(null), ms);
+    buildWaiters.add(done);
+  });
+
+  // The walkthrough: a few edits an agent would make, played through the same calls (builder.js)
+  const demoPlay = $("demo-play");
+  const demoStop = $("demo-stop");
+  let demo = null;
+  demoPlay.disabled = !previewable;
+  if (!machines.some((m) => m.name === "web") || !machines.some((m) => m.name === "supabase")) demoPlay.hidden = true;
+  demoPlay.addEventListener("click", async () => {
+    if (demo) return;
+    demo = new AbortController();
+    demoPlay.hidden = true;
+    demoStop.hidden = false;
+    demoStop.focus();
+    const say = (text) => { sayBuilder(text); feed.add({ kind: "note", text }); };
+    try {
+      await ask();
+      await B.playDemo(api, { say, signal: demo.signal, waitBuild: async () => {
+        const b = await nextBuild(180000);
+        if (!b) say("No new build came within 3 minutes (is serve --watch running on web? Its log is /tmp/serve.log).");
+        else if (b.state === "error") throw new Error(`the build failed: ${String(b.error).split("\n")[0]}`);
+      } });
+    } catch (err) {
+      say(`The walkthrough stopped: ${err?.message ?? err}.`);
+    } finally {
+      demo = null;
+      demoStop.hidden = true;
+      demoPlay.hidden = false;
+      demoPlay.focus();
+    }
+  });
+  demoStop.addEventListener("click", () => demo?.abort());
 
   // ---------------------------------------------------------------- WebMCP
   api._webmcp = { available: false, registered: [], reason: "looking for WebMCP (document.modelContext)" };

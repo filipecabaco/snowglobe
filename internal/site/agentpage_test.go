@@ -44,7 +44,9 @@ func agentRun(purpose string, cpus int, exposed ...string) map[string]any {
 
 func TestWriteAgentPage(t *testing.T) {
 	root := t.TempDir()
-	fakeSite(t, root, "python", agentRun("Python", 1, "https://chatgpt.com"), "armless")
+	pyRun := agentRun("Python", 1, "https://chatgpt.com")
+	pyRun["agent"].(map[string]any)["watch"] = "/root/app"
+	fakeSite(t, root, "python", pyRun, "armless")
 	fakeSite(t, root, "duckdb", agentRun("DuckDB", 1, "https://chatgpt.com", "https://b.example"), "armless")
 	fakeSite(t, root, "java", agentRun("Java", 2, "https://chatgpt.com"), "armless")                                          // several CPUs: a machine too
 	fakeSite(t, root, "elixir", map[string]any{"title": "Elixir", "memory_mb": 512, "network": "none", "cpus": 1}, "armless") // no --agent
@@ -76,6 +78,10 @@ func TestWriteAgentPage(t *testing.T) {
 		t.Errorf("java's build id %s, want %s (its several-CPU armless)", man.Runtimes[1].BuildID, want)
 	}
 	py := man.Runtimes[2]
+	// Its watched project, for the page's changes; none for the others
+	if py.Watch != "/root/app" || man.Runtimes[0].Watch != "" || strings.Count(string(data), `"watch"`) != 1 {
+		t.Errorf("watch: python %q, duckdb %q", py.Watch, man.Runtimes[0].Watch)
+	}
 	if py.Base != "../python/" || py.BaseURL != "../blobs/" || py.Purpose != "Python" || py.Sample != "echo Python" || py.MemoryMB != 512 || py.Network != "none" {
 		t.Errorf("python: %+v", py)
 	}

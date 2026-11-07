@@ -139,6 +139,15 @@ func TestResolveAgentIsOptIn(t *testing.T) {
 	if !p.Agent || p.Version != "v1.2.3" || len(p.AgentExposedTo) != 1 {
 		t.Errorf("page: %+v", p)
 	}
+	// agent-watch: a project directory the agent page shows changes in; absolute, on one line
+	if s, err := Resolve(Options{}, image(map[string]string{"snowglobe.agent": "true", "snowglobe.agent-watch": "/root/app"}, "sh")); err != nil || s.AgentWatch != "/root/app" {
+		t.Errorf("agent-watch: %q, %v", s.AgentWatch, err)
+	}
+	for _, bad := range []string{"app", "/root/a\npp"} {
+		if _, err := Resolve(Options{}, image(map[string]string{"snowglobe.agent": "true", "snowglobe.agent-watch": bad}, "sh")); err == nil {
+			t.Errorf("agent-watch %q accepted", bad)
+		}
+	}
 	s, _ = Resolve(Options{Agent: true, AgentExposedTo: []string{"https://a.example:8443"}}, image(map[string]string{"snowglobe.agent": "false"}, "sh"))
 	if !s.Agent || s.AgentExposedTo[0] != "https://a.example:8443" {
 		t.Errorf("the flag wins: %+v", s)

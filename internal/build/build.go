@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/filipecabaco/snowglobe/internal/boot"
@@ -94,6 +95,9 @@ type Settings struct {
 	// AgentPurpose and AgentSample (labels snowglobe.agent-purpose and snowglobe.agent-sample): what the
 	// machine is good for, in a line, and a command to try in it, as the agent page lists them
 	AgentPurpose, AgentSample string
+	// AgentWatch (label snowglobe.agent-watch): a project directory in the machine; the agent page
+	// shows which files in it each command changed, with their diffs
+	AgentWatch string
 }
 
 // The guest is 64-bit ARM: the armless machine
@@ -352,6 +356,7 @@ type RunInfo struct {
 type AgentInfo struct {
 	Purpose   string   `json:"purpose,omitempty"`
 	Sample    string   `json:"sample,omitempty"`
+	Watch     string   `json:"watch,omitempty"`
 	ExposedTo []string `json:"exposed_to,omitempty"`
 }
 
@@ -378,7 +383,7 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 		BuiltAt: time.Now().UTC().Truncate(time.Second), Snowglobe: version,
 	}
 	if s.Agent {
-		info.Agent = &AgentInfo{Purpose: s.AgentPurpose, Sample: s.AgentSample, ExposedTo: s.AgentExposedTo}
+		info.Agent = &AgentInfo{Purpose: s.AgentPurpose, Sample: s.AgentSample, Watch: s.AgentWatch, ExposedTo: s.AgentExposedTo}
 	}
 	for _, path := range fs.Blobs {
 		if st, err := os.Stat(path); err == nil {
@@ -572,6 +577,9 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		return nil, errors.New("agent-exposed-to needs --agent")
 	}
 	s.AgentPurpose, s.AgentSample = label("agent-purpose"), label("agent-sample")
+	if s.AgentWatch = label("agent-watch"); s.AgentWatch != "" && (!strings.HasPrefix(s.AgentWatch, "/") || strings.ContainsAny(s.AgentWatch, "\x00\n\r")) {
+		return nil, fmt.Errorf("label %sagent-watch must be an absolute directory in the machine, on one line", labelPrefix)
+	}
 
 	s.Console = boot.Console{Env: img.Config.Env, Workdir: img.Config.WorkingDir, Command: s.Command}
 	return s, nil
