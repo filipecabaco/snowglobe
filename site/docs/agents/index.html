@@ -80,12 +80,13 @@ snowglobe stop tpl</pre>
           <p>A site built with <code>--agent</code> (or the label <code>snowglobe.agent="true"</code>) is one of the
             machines of an agent page: one page with every such runtime in it, where an agent runs commands in any of
             them and copies files between them, in the visitor's own tab. Nothing runs on a server, and the page is
-            static files. It is off unless asked for, and only for one-CPU sites. The labels
+            static files. It is off unless asked for. A site on several CPUs is a machine there too: the page's
+            service worker makes it cross-origin isolated, as such a site's own page is. The labels
             <code>snowglobe.agent-purpose</code> (what the machine is good for, in a line) and
             <code>snowglobe.agent-sample</code> (a command to try) describe it on the page.</p>
           <pre>snowglobe build examples/duckdb --agent --out dist/duckdb
 snowglobe pool dist; snowglobe pwa dist/duckdb
-snowglobe agent-pages dist      # dist/agent/runtimes.json and the page's scripts</pre>
+snowglobe agent-pages dist      # dist/agent/runtimes.json, the page's scripts and service worker</pre>
           <p><code>snowglobe agent-pages</code> lists the agent sites under a directory in
             <code>agent/runtimes.json</code> (from each site's <code>run.json</code>, read when the site is
             assembled) and writes the page's scripts beside it; this site's page is
@@ -96,20 +97,23 @@ snowglobe agent-pages dist      # dist/agent/runtimes.json and the page's script
           <pre>Open https://filipecabaco.github.io/snowglobe/agent/, choose python under Runtime, type
 python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the exit status and output.</pre>
           <p>Each machine runs in a Web Worker of its own, so several run on several cores and the page stays
-            responsive. The page is for agent work that needs compute: Python with numpy and pandas, DuckDB for analytics
-            and PostgreSQL for databases; the other runs are on the landing page, for people. A machine starts lazily,
-            on its first command. Each one awake holds 650 to 720 MB, so only a few are awake at once: two unless the
+            responsive. The page is for agents that build and compute: Supabase (on two CPUs) and a Node machine with
+            Vite to build web apps, and Python with numpy and pandas, DuckDB for analytics and PostgreSQL for databases;
+            the other runs are on the landing page, for people. A machine starts lazily, on its first command. Each one
+            awake holds 540 to 740 MB, so only a few are awake at once: two unless the
             field <strong>Machines awake at once</strong>, the tool <code>set_awake_limit</code> or
             <code>setAwakeLimit(count)</code> changes it (1 to 8, for the page load; it runs nothing, so it asks no
             one). Waking another suspends the least recently used idle one first, one capture or boot at a time; a
-            busy machine, with a job or a copy in it, is never suspended, and a wake waits for one to finish and says
-            so. A lower limit suspends idle machines, least recently used first, and busy ones as they finish.
+            busy machine, with a job, a copy or an open preview in it, is never suspended, and a wake waits for one to
+            finish and says so. A lower limit suspends idle machines, least recently used first, and busy ones as they finish.
             Suspended, a machine's state is saved in this browser (IndexedDB, a scope per runtime). Only a suspended
             machine's state is kept: a reload loses what an awake one did since its last suspend, and the browser
             asks before leaving. <strong>Start fresh…</strong> goes back to the machine as built, always after asking.
             A machine that fails (it powered off, its worker crashed, a capture hung) is ended at once, and its job
             fails; <strong>Retry</strong> starts it again. When its files can't be fetched, the page says so. The page
-            needs the network: it has no service worker, so it doesn't work offline.</p>
+            needs the network: it doesn't work offline. Its service worker makes it cross-origin isolated (Supabase's two
+            CPUs share memory between workers, which needs that) and carries the preview; the first visit reloads once to
+            be loaded through it.</p>
           <p>Where the browser has WebMCP (<code>document.modelContext</code>), the page registers one set of tools.
             Any WebMCP client can use them: a browser's built-in agent, an extension, a chat page. One added after the
             page starts, by an extension or a polyfill such as MCP-B's <code>@mcp-b/global</code>, is still found for
@@ -123,6 +127,8 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
                 <tr><td><code>job_status</code></td><td>the job's output so far, ending <code>[running]</code>, or as <code>snowglobe mcp</code>'s ends: <code>[exit N]</code>, <code>[timed out]</code>, <code>[stopped]</code></td></tr>
                 <tr><td><code>cancel_job</code></td><td>stops the job: its command and everything it started are killed</td></tr>
                 <tr><td><code>copy_file</code></td><td>copies <code>from_path</code> in <code>from_runtime</code> to <code>to_path</code> in <code>to_runtime</code>: any file up to 8 MiB, checked by sha256 on both ends; a client's cancel signal stops it</td></tr>
+                <tr><td><code>open_preview</code></td><td>opens the page's preview on a web server in a machine: <code>runtime</code>, <code>port</code> and an optional <code>path</code>; returns the preview's address and what its first request got</td></tr>
+                <tr><td><code>close_preview</code></td><td>closes it: the machines it kept awake can be suspended again</td></tr>
                 <tr><td><code>set_awake_limit</code></td><td>how many machines may be awake at once, <code>count</code> 1 to 8 (2 by default), for the page load; <code>list_runtimes</code> reports it as <code>awake_limit</code></td></tr>
               </tbody>
             </table>
@@ -137,14 +143,30 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
             <code>listRuntimes()</code>, <code>status(runtime)</code>, <code>runCommand({runtime, command,
             timeoutSeconds, requestId})</code>, <code>readJob(jobId)</code>, <code>cancelJob(jobId)</code>,
             <code>copyFile({fromRuntime, fromPath, toRuntime, toPath})</code>, <code>suspend(runtime)</code>,
-            <code>wake(runtime)</code>, <code>startFresh(runtime)</code>, <code>setAwakeLimit(count)</code> and
-            <code>unsaved()</code>. Runs and copies ask the person first, as the form does. A job's output
+            <code>wake(runtime)</code>, <code>startFresh(runtime)</code>, <code>setAwakeLimit(count)</code>,
+            <code>openPreview({runtime, port, path})</code>, <code>closePreview()</code> and <code>unsaved()</code>. Runs and copies ask the person first, as the form does. A job's output
             keeps its most recent 1 MiB and says when it dropped some. Jobs run with <code>NO_COLOR=1</code> and
             <code>TERM=dumb</code>, and their output reads as plain text.</p>
           <p>Jobs run as root on the guest's serial shell, beside the app, as <code>snowglobe sh</code>'s do: the
             terminal never shows them. Each starts in <code>/root</code>, so relative paths work and files persist
             between jobs. Copies travel over the same serial line, as base64 in slices of a job each, so they are slow
             (tens of KiB a second); the target is replaced only once its sha256 checks out.</p>
+          <h2 class="h3" id="preview">The preview: a machine's web server, in the page</h2>
+          <p>A web server in a machine shows in a frame of the page: <strong>Open preview</strong> (runtime, port, path)
+            or <code>open_preview</code>. Its address is <code>/snowglobe/agent/preview/&lt;runtime&gt;/&lt;port&gt;/&lt;path&gt;</code>:
+            the page's service worker hands each request there to the agent page, which opens a TCP connection to the port
+            on the machine's network address, writes the request as HTTP/1.1 and streams the answer back. HTTP only, no
+            WebSockets; a server must listen on <code>0.0.0.0</code>, not <code>localhost</code>, and pages need relative
+            asset paths (Vite's <code>base: "./"</code>). The page in the frame is this site's own, so it reaches every
+            machine's server the same way: Supabase's API is <code>/snowglobe/agent/preview/supabase/54321</code>, the
+            URL to give supabase-js. While a preview is open, its machine and every machine its page reaches stay awake.
+            Nothing is answered unless a preview is open and the person has allowed the page, and a preview address
+            opened from anywhere but the page is refused.</p>
+          <pre>On supabase: psql "$DB_URL" creates a notes table with row level security
+On web:      a Vite page with sign-up, login and notes on supabase-js; npm run build; serve dist 4173
+open_preview {runtime: "web", port: 4173}: you sign up and add notes in the page
+On supabase: psql "$DB_URL" -c "select * from notes" shows them, with your user's id</pre>
+          <p>The whole recipe is in <a href="../../llms.txt">llms.txt</a>.</p>
           <p id="suspend">An idle machine doesn't stay in memory: with no job for 5 minutes, or with its tab hidden
             for a minute, it is suspended, its state saved and its worker ended, so the browser takes back its memory.
             The next command, or a key typed into its terminal, wakes it, files and all, and then runs. The terminal

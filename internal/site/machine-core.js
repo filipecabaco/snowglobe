@@ -1,5 +1,5 @@
 // One machine's own side: the armless machine itself, the warm pack that fills its file cache, its
-// captured state, and (on a one-CPU site with agent.js loaded) the serial job runner and the file
+// captured state, and (with agent.js loaded) the serial job runner and the file
 // transfer over it. It runs wherever the machine runs: in the page (the terminal pages), or in a
 // dedicated Web Worker of its own (the agent page, machine-worker.js), so that machines run on
 // cores of their own and the page stays responsive. It never touches the DOM.
@@ -7,7 +7,8 @@
 // What it says goes out through `emit(event, payload)`: progress ({file, loaded, total}), console
 // (bytes), stop ({reason}), error ({name, message}), job ({jobId, state}: a job ended), xfer
 // ({xid, phase, done, total}: a file transfer's progress), blobs ({ok, url, message}: the blob store the
-// guest's files come from stopped or started answering).
+// guest's files come from stopped or started answering), tcp ({sid, kind, bytes}: a connection
+// into the machine, tcpOpen()).
 (function (root) {
   "use strict";
 
@@ -152,8 +153,14 @@
     /** End the machine (its timers and any workers) and drop it, so its memory can go. */
     destroy() {
       const vm = this.vm;
+      // Its connections end first, each said closed (armless's abort() says so at once), so the
+      // page hears of every one before the machine goes
+      for (const c of [...(this.tcp?.values() ?? [])]) {
+        try { c.abort(); } catch {}
+      }
       this.vm = null;
       this.state = "idle";
+      this.tcp?.clear();
       try { vm?.destroy(); } catch {}
       return vm ? { wasmBytes: vm.memory?.buffer?.byteLength ?? null } : null;
     }
@@ -190,7 +197,7 @@
     // ------------------------------------------------------------------ jobs and files
 
     _agent() {
-      if (!this.controller) throw new Error("agent jobs need a one-CPU machine with the agent scripts");
+      if (!this.controller) throw new Error("agent jobs need the agent scripts");
       return this.controller;
     }
 
@@ -251,6 +258,58 @@
 
     abort(xid) {
       this.xfers.get(xid)?.abort();
+      return true;
+    }
+
+    // ------------------------------------------------------------------ TCP into the machine
+
+    /**
+     * A TCP connection from the page to `port` on the machine's network address (armless's
+     * connect(): a machine with a network device). Its id comes back at once; what happens on it
+     * is said as `tcp` events { sid, kind: "connect" | "data" | "end" | "close", bytes? }. A close
+     * with no connect before it: nothing listens there.
+     */
+    tcpOpen(port) {
+      const vm = this.vm;
+      if (!vm || this.state !== "ready") throw new Error("the machine is not running");
+      if (!this.config.network) throw new Error("the machine has no network device, so nothing in it can be connected to");
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("port: 1 to 65535");
+      this.tcp ??= new Map();
+      const sid = (this.tcpNext = (this.tcpNext ?? 0) + 1);
+      const conn = vm.connect(port);
+      this.tcp.set(sid, conn);
+      const say = (kind, bytes) => {
+        if (vm !== this.vm) return;
+        this.emit("tcp", bytes ? { sid, kind, bytes } : { sid, kind });
+      };
+      conn.on("connect", () => say("connect"));
+      // A copy: armless's bytes may be a view into its memory
+      conn.on("data", (bytes) => say("data", new Uint8Array(bytes)));
+      conn.on("end", () => say("end"));
+      conn.on("close", () => {
+        this.tcp?.delete(sid);
+        say("close");
+      });
+      return sid;
+    }
+
+    tcpWrite(sid, bytes) {
+      const c = this.tcp?.get(sid);
+      if (!c) throw new Error(`no connection ${sid}`);
+      c.write(bytes);
+      return true;
+    }
+
+    /** Close the page's side, after what was written. */
+    tcpEnd(sid) {
+      this.tcp?.get(sid)?.close();
+      return true;
+    }
+
+    tcpAbort(sid) {
+      const c = this.tcp?.get(sid);
+      this.tcp?.delete(sid);
+      try { c?.abort(); } catch {}
       return true;
     }
   }

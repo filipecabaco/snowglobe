@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 require('./sessions.js');
 globalThis.SnowglobeMachine = require('./machine.js');
+globalThis.SnowglobePreview = require('./preview.js');
 const { createAgents } = require('./orchestrator.js');
 const { Scheduler } = require('./scheduler.js');
 const P = require('./agent-panel.js');
@@ -14,7 +15,7 @@ const manifest = {
 };
 
 // Hosts that pretend: each boot, capture and job is logged; a job ends when the test says so
-function setup({ budget = 2, confirm = true } = {}) {
+function setup({ budget = 2, confirm = true, man = manifest, options = {} } = {}) {
   const log = [];
   const activity = [];
   let asked = 0;
@@ -51,13 +52,24 @@ function setup({ budget = 2, confirm = true } = {}) {
         return { blob: new Blob(['abc']), size: 3, sha256: 'a'.repeat(64) };
       },
       writeFile: async (path, blob, o) => { log.push(`write ${config.name}:${path} ${await blob.text()}`); return { size: 3, sha256: o.sha256 }; },
+      // A server on port 4173 (and 54321) answers; nothing else listens
+      tcpOpen: (port) => {
+        log.push(`connect ${config.name}:${port}`);
+        const c = { write: (b) => {
+          if (!new TextDecoder().decode(b).endsWith('\r\n\r\n')) return;
+          setImmediate(() => { c.ondata(new TextEncoder().encode(`HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok`)); c.onclose(); });
+        }, end() {}, abort() {} };
+        setImmediate(() => ([4173, 54321].includes(port) ? c.onconnect() : c.onclose()));
+        return c;
+      },
     };
     hosts.push(h);
     return h;
   };
   const scheduler = new Scheduler({ budget });
-  const api = createAgents(manifest, { pageUrl: 'https://x.example/snowglobe/agent/?runtime=duckdb', scheduler, Machine: globalThis.SnowglobeMachine.Machine,
-    createMachine, ask: async () => { asked++; }, confirmFresh: async () => confirm, machineOptions: { idleMs: 0, hiddenMs: 0 }, onactivity: (e) => activity.push(e) });
+  const api = createAgents(man, { pageUrl: 'https://x.example/snowglobe/agent/?runtime=duckdb', scheduler, Machine: globalThis.SnowglobeMachine.Machine,
+    createMachine, ask: async () => { asked++; }, confirmFresh: async () => confirm, machineOptions: { idleMs: 0, hiddenMs: 0 }, onactivity: (e) => activity.push(e),
+    granted: () => asked > 0, ...options });
   const host = (name) => hosts.filter((h) => h.config.name === name).at(-1);
   return { api, log, hosts, host, scheduler, activity, get asked() { return asked; } };
 }
@@ -444,4 +456,277 @@ test('a worker that doesn\'t answer: its end is forced after 2 s, a capture fail
   assert.equal(workers[2].terminated, true);
   assert.equal(errors[0].fatal, true);
   await assert.rejects(c.run(), /not running/);
+});
+
+// The agent page with supabase (2 CPUs) and web: the machines a web app is built with
+const appManifest = {
+  ...manifest,
+  runtimes: [
+    { name: 'supabase', title: 'Supabase in the browser', purpose: 'Supabase', sample: 'psql', base: '../supabase/', baseurl: 'https://blobs.example/', build_id: 'b-s', memory_mb: 640, cpus: 2, network: 'fetch' },
+    { name: 'web', title: 'Node + Vite in the browser', purpose: 'web', sample: 'npm run build', base: '../web/', baseurl: 'https://blobs.example/', build_id: 'b-w', memory_mb: 640, cpus: 1, network: 'fetch' },
+    ...manifest.runtimes,
+  ],
+  armless: { ...manifest.armless, wasm_smp: '../supabase/armless/armless-smp.wasm' },
+};
+
+test('a machine on several CPUs: its several-CPU armless where the page is isolated, refused with the reason where it is not', async () => {
+  const { api, host, hosts } = setup({ man: appManifest, options: { isolated: true } });
+  await api.runCommand({ runtime: 'supabase', command: 'nproc' });
+  const h = host('supabase');
+  assert.equal(h.config.cpus, 2);
+  assert.equal(h.config.wasm_smp, 'https://x.example/snowglobe/supabase/armless/armless-smp.wasm');
+  assert.equal(api._describe(api._get('supabase')).cpus, 2);
+  assert.equal(api._describe(api._get('supabase')).unavailable, null);
+
+  const off = setup({ man: appManifest, options: { isolated: false } });
+  await assert.rejects(off.api.runCommand({ runtime: 'supabase', command: 'nproc' }), /2 CPUs, which needs this page cross-origin isolated/);
+  assert.equal(off.hosts.length, 0, 'nothing started for it');
+  assert.match(off.api._describe(off.api._get('supabase')).unavailable, /cross-origin isolated/);
+  await off.api.runCommand({ runtime: 'web', command: 'echo' });
+  assert.equal(off.hosts.length, 1, 'the one-CPU machines run as ever');
+  assert.equal((await off.api.capabilities()).crossOriginIsolated, false);
+  assert.ok(hosts.length >= 1);
+});
+
+test('an open preview keeps its machine busy: never suspended, and a wake beyond the limit waits; closing it lets go', async () => {
+  const { api, activity, scheduler, log } = setup({ man: appManifest, options: { isolated: true } });
+  const r = await api.openPreview({ runtime: 'web', port: 4173 }, { source: 'webmcp' });
+  assert.equal(r.url, 'https://x.example/snowglobe/agent/preview/web/4173/');
+  assert.equal(r.status, 200, 'its first request answered');
+  assert.equal(activity.at(-1).kind, 'preview');
+  assert.equal(activity.at(-1).source, 'webmcp');
+  const web = api._get('web');
+  assert.equal(web.busy(), true);
+  assert.equal(api._describe(web).state, 'busy');
+  assert.match(api._describe(web).doing, /preview \(port 4173\)/);
+  assert.equal(await api.suspend('web'), false, 'a busy machine is not suspended');
+
+  // The page in the preview reaches supabase through it: held awake too
+  const sent = [];
+  await api.previewRequest({ runtime: 'supabase', port: 54321, method: 'GET', path: '/auth/v1/health', headers: [], prefix: '/snowglobe/agent/preview/supabase/54321', origin: 'https://x.example' },
+    (m) => sent.push(m));
+  assert.deepEqual(sent.map((m) => m.type), ['head', 'data', 'end']);
+  assert.deepEqual(api._describe(api._get('supabase')).previewPorts, [54321]);
+  assert.equal(api._get('supabase').busy(), true);
+
+  // Both awake and busy, at a limit of 2: python waits, and is said to
+  let woke = false;
+  const py = api.runCommand({ runtime: 'python', command: 'echo' }).then(() => { woke = true; });
+  await settle();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(woke, false);
+  assert.match(scheduler.waiting, /python waits to wake: every awake machine is busy \(supabase, web\)/);
+  assert.ok(!log.some((l) => /capture (web|supabase)/.test(l)), 'neither was captured');
+
+  await api.closePreview();
+  assert.equal(activity.at(-1).preview, null);
+  await py;
+  assert.equal(woke, true);
+  assert.ok(log.some((l) => /capture (web|supabase)/.test(l)), 'once let go, one of them made room');
+});
+
+test('preview requests: answered only with a preview open and the page allowed; a port that never answers is not held', async () => {
+  const { api, log } = setup({ man: appManifest, options: { isolated: true } });
+  const ask = async (req) => { const sent = []; await api.previewRequest({ method: 'GET', path: '/', headers: [], prefix: '/p', origin: 'https://x.example', ...req }, (m) => sent.push(m)); return sent; };
+  let sent = await ask({ runtime: 'web', port: 4173 });
+  assert.equal(sent[0].type, 'error');
+  assert.equal(sent[0].status, 403);
+  assert.match(sent[0].body, /No preview is open/);
+  assert.ok(!log.some((l) => l.startsWith('boot')), 'nothing woke for it');
+
+  await api.openPreview({ runtime: 'web', port: 4173 });
+  sent = await ask({ runtime: 'web', port: 9999 });
+  assert.equal(sent[0].status, 502);
+  assert.match(sent[0].body, /Nothing is listening/);
+  assert.deepEqual(api._describe(api._get('web')).previewPorts, [4173], '9999 is not held');
+  sent = await ask({ runtime: 'python', port: 80 });
+  assert.equal(sent[0].status, 502);
+  assert.match(sent[0].body, /no network device/);
+  await assert.rejects(api.openPreview({ runtime: 'python', port: 80 }), /no network device/);
+  await assert.rejects(api.openPreview({ runtime: 'web', port: 0 }), /port/);
+  await assert.rejects(api.openPreview({ runtime: 'web', port: 4173, path: 'x' }), /path/);
+});
+
+test('a preview is asked for like a run: the person allows it first', async () => {
+  const s = setup({ man: appManifest, options: { isolated: true } });
+  assert.equal(s.asked, 0);
+  await s.api.openPreview({ runtime: 'web', port: 4173 }, { check: false });
+  assert.equal(s.asked, 1);
+});
+
+test('a connection into the machine: the core over armless\'s connect(), the host as a stream, inline and over a worker\'s messages alike', async () => {
+  globalThis.SnowglobeMachineCore = require('./machine-core.js');
+  const { createMachine } = require('./machine-host.js');
+  const conns = [];
+  // armless's side: connect(port) gives a connection that says connect, data and close
+  class FakeArmless {
+    constructor() { this.ready = Promise.resolve(); }
+    on() {}
+    run() {}
+    destroy() {}
+    connect(port) {
+      const listeners = {};
+      const c = { port, written: [], on: (ev, fn) => { (listeners[ev] ??= []).push(fn); return c; }, emit: (ev, ...a) => (listeners[ev] ?? []).forEach((fn) => fn(...a)),
+        write: (b) => c.written.push(new TextDecoder().decode(b)), close() {}, abort() { c.aborted = true; } };
+      conns.push(c);
+      setImmediate(() => (port === 80 ? c.emit('connect') : c.emit('close')));
+      return c;
+    }
+  }
+  const SC = globalThis.SnowglobeMachineCore;
+  const Core = class extends SC.Core { constructor(o) { super({ ...o, Armless: FakeArmless, agent: null }); } };
+  globalThis.SnowglobeMachineCore = { ...SC, Core, located: (b, c) => c };
+  try {
+    const host = createMachine({ base: 'https://x.example/', config: { network: { tls: 't' }, filesystem: { json: 'f', baseurl: 'b' } }, transport: 'inline' });
+    await host.boot('s');
+    await host.run();
+    const heard = [];
+    const s = host.tcpOpen(80);
+    s.onconnect = () => heard.push('connect');
+    s.ondata = (b) => heard.push(`data ${new TextDecoder().decode(b)}`);
+    s.onclose = () => heard.push('close');
+    await new Promise((r) => setImmediate(r));
+    s.write(new TextEncoder().encode('GET / HTTP/1.1\r\n\r\n'));
+    await new Promise((r) => setTimeout(r, 5));
+    conns[0].emit('data', new TextEncoder().encode('HTTP/1.1 200 OK'));
+    conns[0].emit('close');
+    await new Promise((r) => setTimeout(r, 5));
+    assert.deepEqual(heard, ['connect', 'data HTTP/1.1 200 OK', 'close']);
+    assert.deepEqual(conns[0].written, ['GET / HTTP/1.1\r\n\r\n']);
+    // Nothing listening: a close with no connect before it
+    const refused = [];
+    const r = host.tcpOpen(81);
+    r.onconnect = () => refused.push('connect');
+    r.onclose = () => refused.push('close');
+    await new Promise((res) => setTimeout(res, 5));
+    assert.deepEqual(refused, ['close']);
+    // A machine with no network device can't be connected to: said, not thrown at the caller
+    const off = createMachine({ base: 'https://x.example/', config: { filesystem: { json: 'f', baseurl: 'b' } }, transport: 'inline' });
+    await off.boot('s');
+    await off.run();
+    const err = await new Promise((res) => { off.tcpOpen(80).onerror = res; });
+    assert.match(err.message, /no network device/);
+  } finally {
+    globalThis.SnowglobeMachineCore = SC;
+  }
+});
+
+const sbReq = { runtime: 'supabase', port: 54321, method: 'GET', path: '/auth/v1/health', headers: [], prefix: '/snowglobe/agent/preview/supabase/54321', origin: 'https://x.example' };
+
+test('at an awake limit of 1, web\'s preview reaches supabase (the preview\'s machines count as one); anything else waits, and a preview bounded wait is a clear 503', async () => {
+  const { api, scheduler } = setup({ budget: 1, man: appManifest, options: { isolated: true } });
+  await api.openPreview({ runtime: 'web', port: 4173 });
+  const sent = [];
+  await api.previewRequest(sbReq, (m) => sent.push(m));
+  assert.deepEqual(sent.map((m) => m.type), ['head', 'data', 'end'], 'supabase woken beside web, beyond the limit');
+  assert.equal(scheduler.awake().length, 2);
+  assert.match(scheduler.over, /woken for the preview/);
+
+  // A run in a third machine waits (the preview's machines are busy), without holding the queue
+  let woke = false;
+  const py = api.runCommand({ runtime: 'python', command: 'echo' }).then(() => { woke = true; });
+  await settle();
+  assert.equal(woke, false);
+  assert.match(scheduler.waiting, /python waits to wake/);
+  await api.closePreview();
+  await py;
+  assert.equal(woke, true);
+
+  // A preview whose machine finds every slot busy with a job: a bounded wait, then 503
+  const s = setup({ budget: 1, man: appManifest, options: { isolated: true } });
+  const { jobId } = await s.api.runCommand({ runtime: 'python', command: 'sleep 100' });
+  await assert.rejects(s.api.openPreview({ runtime: 'web', port: 4173 }, { waitMs: 20 }), /no machine slot free/);
+  assert.equal(await s.api.preview(), null, 'the preview that could not open is closed');
+  assert.equal(s.api._get('web').busy(), false, 'nothing held for it');
+  s.host('python').finish(jobId, '');
+});
+
+test('preview requests: concurrent first requests to a port agree on holding it', async () => {
+  const { api } = setup({ budget: 2, man: appManifest, options: { isolated: true } });
+  await api.openPreview({ runtime: 'web', port: 4173 });
+  // Two first requests to supabase:54321 at once; the first is given up before it is answered
+  const stop = new AbortController();
+  const a = [];
+  const b = [];
+  const first = api.previewRequest(sbReq, (m) => a.push(m), { signal: stop.signal });
+  const second = api.previewRequest(sbReq, (m) => b.push(m));
+  stop.abort();
+  await Promise.all([first, second]);
+  assert.equal(a.at(-1).type, 'error');
+  assert.deepEqual(b.map((m) => m.type), ['head', 'data', 'end']);
+  assert.deepEqual(api._describe(api._get('supabase')).previewPorts, [54321], 'held: one of them was answered');
+  assert.equal(api._get('supabase').inflight.size, 0, 'no request left counted');
+  await api.closePreview();
+  assert.equal(api._get('supabase').busy(), false);
+});
+
+test('open_preview\'s probe drops the connection once the head is in, the body never read', async () => {
+  const { api, hosts } = setup({ man: appManifest, options: { isolated: true } });
+  let aborted = 0;
+  let wrote = 0;
+  const r = await api.openPreview({ runtime: 'web', port: 4173 }, { check: false });
+  assert.equal(r.status, undefined);
+  const h = hosts.find((x) => x.config.name === 'web');
+  h.tcpOpen = () => {
+    const c = { write: (b) => {
+      wrote++;
+      // The head, then a body that never ends
+      setImmediate(() => c.ondata(new TextEncoder().encode('HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\nabc')));
+    }, end() {}, abort() { aborted++; } };
+    setImmediate(() => c.onconnect());
+    return c;
+  };
+  const again = await api.openPreview({ runtime: 'web', port: 4173 });
+  assert.equal(again.status, 200);
+  assert.equal(wrote, 1);
+  assert.equal(aborted, 1, 'dropped at the head');
+});
+
+test('connections into a machine: none kept once aborted, and every open one ends when the machine is put away', async () => {
+  globalThis.SnowglobeMachineCore = require('./machine-core.js');
+  const { createMachine } = require('./machine-host.js');
+  const conns = [];
+  class FakeArmless {
+    constructor() { this.ready = Promise.resolve(); }
+    on() {}
+    run() {}
+    destroy() {}
+    connect(port) {
+      const listeners = {};
+      const c = { port, on: (ev, fn) => { (listeners[ev] ??= []).push(fn); return c; }, emit: (ev, ...a) => (listeners[ev] ?? []).forEach((fn) => fn(...a)),
+        write() {}, close() {},
+        // As armless's: an abort says close at once
+        abort() { c.emit('close'); } };
+      conns.push(c);
+      setImmediate(() => c.emit('connect'));
+      return c;
+    }
+  }
+  const SC = globalThis.SnowglobeMachineCore;
+  const Core = class extends SC.Core { constructor(o) { super({ ...o, Armless: FakeArmless, agent: null }); } };
+  globalThis.SnowglobeMachineCore = { ...SC, Core, located: (b, c) => c };
+  try {
+    const host = createMachine({ base: 'https://x.example/', config: { network: { tls: 't' }, filesystem: { json: 'f', baseurl: 'b' } }, transport: 'inline' });
+    await host.boot('s');
+    await host.run();
+    for (let i = 0; i < 5; i++) {
+      const s = host.tcpOpen(80);
+      await new Promise((r) => setImmediate(r));
+      s.abort();
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    assert.equal(host._tcpTracked, 0, 'what a connection said after its abort is dropped, not kept');
+
+    const heard = [];
+    const s = host.tcpOpen(80);
+    s.onclose = () => heard.push('close');
+    s.onerror = () => heard.push('error');
+    await new Promise((r) => setImmediate(r));
+    await host.destroy();
+    await new Promise((r) => setTimeout(r, 2));
+    assert.equal(heard.length, 1, 'the machine went: its connection ended, once');
+    assert.equal(host._tcpTracked, 0);
+  } finally {
+    globalThis.SnowglobeMachineCore = SC;
+  }
 });

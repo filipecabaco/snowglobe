@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 // AgentDir is the agent page's directory beside the sites: /agent/ on the demo site
@@ -42,6 +43,11 @@ var (
 	orchestratorJS []byte
 	//go:embed agent-page.js
 	agentPageJS []byte
+	//go:embed preview.js
+	previewJS []byte
+	// The page's service worker: cross-origin isolation (machines on several CPUs) and the preview
+	//go:embed agent-sw.js
+	agentSW []byte
 )
 
 // AgentScripts are the files WriteAgentPage puts in the agent page's directory, by name
@@ -50,7 +56,7 @@ func AgentScripts() map[string][]byte {
 		"agent.js": agentJS, "agent-webmcp.js": agentWebMCPJS, "agent-panel.js": agentPanelJS, "machine.js": machineJS,
 		"machine-worker.js": machineWorkerJS, "transfer.js": transferJS, "scheduler.js": schedulerJS,
 		"orchestrator.js": orchestratorJS, "agent-page.js": agentPageJS, "sessions.js": sessionsJS,
-		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS,
+		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "sw.js": agentSW,
 	}
 }
 
@@ -65,17 +71,19 @@ type Runtime struct {
 	BaseURL  string `json:"baseurl"` // where its files' blobs are: relative to Base, or absolute
 	BuildID  string `json:"build_id"`
 	MemoryMB int    `json:"memory_mb"`
-	CPUs     int    `json:"cpus"` // 1 today: a site on several CPUs needs the page cross-origin isolated
+	CPUs     int    `json:"cpus"` // more than one: the page must be cross-origin isolated (its sw.js)
 	Network  string `json:"network"`
 }
 
 // Manifest is runtimes.json: the machines, and the files they share
 type Manifest struct {
 	Runtimes []Runtime `json:"runtimes"`
-	// One armless for all of them (every site has the same copy; WriteAgentPage checks)
+	// One armless for all of them (every site has the same copy; WriteAgentPage checks): its
+	// one-CPU build from a one-CPU site, its several-CPU build from a site on several
 	Armless struct {
-		JS   string `json:"js"`
-		Wasm string `json:"wasm"`
+		JS      string `json:"js"`
+		Wasm    string `json:"wasm,omitempty"`
+		WasmSMP string `json:"wasm_smp,omitempty"`
 	} `json:"armless"`
 	Xterm string `json:"xterm"` // a directory with xterm.js, xterm.css and addon-fit.js
 	// The origins the page's tools are shared with: one set of tools reaches every machine, so an
@@ -90,11 +98,17 @@ var (
 )
 
 // WriteAgentPage makes the agent page's directory, root/agent/, from every site directly under
-// root built with --agent on one CPU: runtimes.json (each machine: its site, title, what it is
-// for, a sample command, its blobs, its build), the page's scripts, and at root/agent/<site>/ a
-// redirect to the page with that machine preselected. Each site's "For agents" link points
-// there. The page itself (index.html) is the demo site's own (site/agent/), copied in after.
-// Everything is static: the page needs no server.
+// root built with --agent: runtimes.json (each machine: its site, title, what it is for, a sample
+// command, its blobs, its build, its CPUs), the page's scripts and service worker, and at
+// root/agent/<site>/ a redirect to the page with that machine preselected. Each site's "For
+// agents" link points there. The page itself (index.html) is the demo site's own (site/agent/),
+// copied in after. Everything is static: the page needs no server. A site on several CPUs is a
+// machine there too: the page's service worker makes the page cross-origin isolated, as such a
+// site's own page is.
+//
+// One machine per source: sites built from the same source (an example built for one CPU and for
+// two, say) are one machine, the site named after the source when there is one (examples/supabase:
+// the site supabase), else the first by name; the others' "For agents" links point at it.
 //
 // Run it last, once the pages are final (after pool, the blob store's address and pwa): each
 // site's blob location is read from its page. Every site is checked before anything is written,
@@ -112,10 +126,13 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 	type found struct {
 		Runtime
 		dir       string
+		source    string
 		exposedTo []string
 	}
-	var sites []found
-	var armless [2][]byte // the first site's armless.js and armless.wasm
+	var all []found
+	// The armless files, as the first site with each has them: every site's must be the same
+	armless := map[string][]byte{}
+	armlessFrom := map[string]string{}
 	for _, e := range entries {
 		dir := filepath.Join(root, e.Name())
 		if e.Name() == AgentDir {
@@ -133,6 +150,7 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 		}
 		var run struct {
 			Title    string `json:"title"`
+			Source   string `json:"source"`
 			MemoryMB int    `json:"memory_mb"`
 			Network  string `json:"network"`
 			CPUs     int    `json:"cpus"`
@@ -145,8 +163,7 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 		if err := json.Unmarshal(data, &run); err != nil {
 			return nil, fmt.Errorf("%s: %w", dir, err)
 		}
-		// A site on several CPUs needs a cross-origin isolated page of its own: never a machine here
-		if run.Agent == nil || run.CPUs != 1 {
+		if run.Agent == nil || run.CPUs < 1 {
 			continue
 		}
 		if !siteName.MatchString(e.Name()) {
@@ -168,30 +185,51 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", dir, err)
 		}
-		// One armless for every machine of the page
-		for i, f := range []string{"armless/armless.js", "armless/armless.wasm"} {
+		// One armless for every machine of the page: its script, and the build for these CPUs
+		for _, f := range []string{"armless/armless.js", armlessWasm(run.CPUs)} {
 			b, err := os.ReadFile(filepath.Join(dir, f))
 			if err != nil {
 				return nil, err
 			}
-			if len(sites) == 0 {
-				armless[i] = b
-			} else if !bytes.Equal(armless[i], b) {
-				return nil, fmt.Errorf("%s/%s differs from %s's: the agent page's machines must be built by the same snowglobe", dir, f, sites[0].Name)
+			if from, ok := armlessFrom[f]; !ok {
+				armless[f], armlessFrom[f] = b, e.Name()
+			} else if !bytes.Equal(armless[f], b) {
+				return nil, fmt.Errorf("%s/%s differs from %s's: the agent page's machines must be built by the same snowglobe", dir, f, from)
 			}
 		}
 		if err := notALink(filepath.Join(agentRoot, e.Name())); err != nil {
 			return nil, err
 		}
-		sites = append(sites, found{Runtime: Runtime{
+		all = append(all, found{Runtime: Runtime{
 			Name: e.Name(), Title: run.Title, Purpose: run.Agent.Purpose, Sample: run.Agent.Sample,
 			Base: "../" + e.Name() + "/", BaseURL: string(m[1]), BuildID: buildID, MemoryMB: run.MemoryMB, CPUs: run.CPUs, Network: run.Network,
-		}, dir: dir, exposedTo: run.Agent.ExposedTo})
+		}, dir: dir, source: run.Source, exposedTo: run.Agent.ExposedTo})
 	}
-	if len(sites) == 0 {
+	if len(all) == 0 {
 		return nil, nil
 	}
-	sort.Slice(sites, func(i, j int) bool { return sites[i].Name < sites[j].Name })
+	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+
+	// One machine per source; every site, kept or not, links to its source's machine
+	keep := map[string]string{} // source: the site that is its machine
+	for _, s := range all {
+		if s.source == "" {
+			continue
+		}
+		if _, ok := keep[s.source]; !ok || s.Name == sourceName(s.source) {
+			keep[s.source] = s.Name
+		}
+	}
+	var sites []found
+	machineOf := map[string]string{} // site: the machine its "For agents" link goes to
+	for _, s := range all {
+		machineOf[s.Name] = s.Name
+		if k, ok := keep[s.source]; ok && k != s.Name {
+			machineOf[s.Name] = k
+			continue
+		}
+		sites = append(sites, s)
+	}
 
 	var man Manifest
 	sharing := map[string]int{} // origin: how many sites share their tools with it
@@ -207,9 +245,19 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 			}
 		}
 	}
-	first := sites[0].Base
-	man.Armless.JS, man.Armless.Wasm = first+"armless/armless.js", first+"armless/armless.wasm"
-	man.Xterm = first + "xterm/"
+	// armless from the first machine that has each file
+	for _, s := range sites {
+		if man.Armless.JS == "" {
+			man.Armless.JS = s.Base + "armless/armless.js"
+			man.Xterm = s.Base + "xterm/"
+		}
+		if s.CPUs > 1 && man.Armless.WasmSMP == "" {
+			man.Armless.WasmSMP = s.Base + armlessWasm(s.CPUs)
+		}
+		if s.CPUs == 1 && man.Armless.Wasm == "" {
+			man.Armless.Wasm = s.Base + armlessWasm(s.CPUs)
+		}
+	}
 	man.ExposedTo = []string{}
 	for o, n := range sharing {
 		if n == len(sites) {
@@ -232,7 +280,14 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 			return nil, err
 		}
 	}
-	for _, s := range sites {
+	for _, s := range all {
+		if machineOf[s.Name] != s.Name {
+			// Another site of the same source is the machine: its link goes there
+			if err := linkTo(s.dir, machineOf[s.Name]); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		// The old per-runtime address, /agent/<site>/: the page, that machine preselected
 		target := "../?runtime=" + url.QueryEscape(s.Name)
 		stub := fmt.Sprintf("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <title>%s · machines for agents</title>\n"+
@@ -247,23 +302,50 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 			return nil, err
 		}
 
-		// The terminal page's "For agents" link
-		index := filepath.Join(s.dir, "index.html")
-		page, err := os.ReadFile(index)
-		if err != nil {
+		if err := linkTo(s.dir, s.Name); err != nil {
 			return nil, err
-		}
-		link := fmt.Sprintf(`id="agent-link" href="../%s/?runtime=%s"`, AgentDir, html.EscapeString(url.QueryEscape(s.Name)))
-		if linked := agentLink.ReplaceAllLiteral(page, []byte(link)); !bytes.Equal(linked, page) {
-			if err := os.WriteFile(index, linked, 0o644); err != nil {
-				return nil, err
-			}
 		}
 	}
 	if err := removeStaleStubs(agentRoot, names); err != nil {
 		return nil, err
 	}
 	return man.Runtimes, nil
+}
+
+// linkTo points a site's "For agents" link (its terminal page's) at the agent page, with machine
+// preselected
+func linkTo(dir, machine string) error {
+	index := filepath.Join(dir, "index.html")
+	page, err := os.ReadFile(index)
+	if err != nil {
+		return err
+	}
+	link := fmt.Sprintf(`id="agent-link" href="../%s/?runtime=%s"`, AgentDir, html.EscapeString(url.QueryEscape(machine)))
+	if linked := agentLink.ReplaceAllLiteral(page, []byte(link)); !bytes.Equal(linked, page) {
+		return os.WriteFile(index, linked, 0o644)
+	}
+	return nil
+}
+
+// armlessWasm is the armless build a site on cpus CPUs runs
+func armlessWasm(cpus int) string {
+	if cpus > 1 {
+		return "armless/armless-smp.wasm"
+	}
+	return "armless/armless.wasm"
+}
+
+// sourceName is the site name a source would have by default: its directory's or image's name
+// (examples/supabase, ./supabase.tar and ghcr.io/me/supabase:1 are all "supabase")
+func sourceName(source string) string {
+	name := filepath.Base(strings.TrimRight(source, "/"))
+	if i := strings.LastIndex(name, ":"); i > 0 && !strings.Contains(name[i:], "/") {
+		name = name[:i]
+	}
+	for _, ext := range []string{".tar.gz", ".tar.zst", ".tgz", ".tar"} {
+		name = strings.TrimSuffix(name, ext)
+	}
+	return name
 }
 
 // stubMark is in every redirect stub WriteAgentPage writes

@@ -147,3 +147,47 @@ test('a lower budget suspends idle machines down to it; a cancelled wake gives u
   await assert.rejects(w, { name: 'AbortError' });
   assert.equal(q.by('b').lifecycle.state, 'suspended');
 });
+
+test('a wake waiting for a slot waits out of the queue: other operations go on; a bounded wait fails clearly', async () => {
+  const p = page(['a', 'b', 'c'], { budget: 2 });
+  await p.s.ensureAwake(p.by('a'));
+  await p.s.ensureAwake(p.by('b'));
+  p.by('a').job = p.by('b').job = true;
+  let failed = null;
+  const c = p.s.ensureAwake(p.by('c'), { waitMs: 30000 }).catch((e) => { failed = e; });
+  await settle();
+  assert.match(p.s.waiting, /^c waits to wake/);
+  // Something else that must not overlap a boot runs meanwhile: the queue is not held
+  assert.equal(await p.s.exclusive(async () => 'ran'), 'ran');
+  p.t.fire(); // the 30 s bound (and every other clock) runs out
+  await c;
+  assert.equal(failed?.name, 'TimeoutError');
+  assert.match(failed.message, /^no machine slot free: c waited 30 s to wake, and every awake machine is busy \(a, b\) with 2 allowed at once; raise the awake limit, or close the preview$/);
+  assert.equal(p.s.waiting, null);
+  assert.equal(p.by('c').lifecycle.state, 'suspended');
+});
+
+test('a wake for the preview goes beyond the limit when the preview\'s own machines fill it; any other waits', async () => {
+  const p = page(['web', 'supabase', 'python'], { budget: 1 });
+  const web = p.by('web');
+  await p.s.ensureAwake(web);
+  web.previewHeld = () => true;
+  web.job = true; // held by the preview: busy
+  await p.s.ensureAwake(p.by('supabase'), { preview: true });
+  assert.equal(p.by('supabase').lifecycle.state, 'running');
+  assert.equal(p.s.awake().length, 2);
+  assert.match(p.s.over, /over the limit of 1: supabase was woken for the preview/);
+  // A run elsewhere is not the preview's: it waits (supabase is idle, so it is made room for)
+  p.by('supabase').job = true;
+  let woke = false;
+  const py = p.s.ensureAwake(p.by('python')).then(() => { woke = true; });
+  await settle();
+  assert.equal(woke, false);
+  assert.match(p.s.waiting, /python waits to wake/);
+  // The preview closes: its machines are idle again, and python gets a slot
+  web.previewHeld = () => false;
+  web.job = p.by('supabase').job = false;
+  p.s.notify();
+  await py;
+  assert.equal(woke, true);
+});

@@ -387,6 +387,9 @@ $ snowglobe sh box --timeout 30 'python3 -c "print(6*7)"'
 $ snowglobe cp ./data box:/root/data
 <span class="dim"># an isolated Linux machine for an agent, over MCP</span>
 $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
+                <p>In a browser, agents get <a href="agent/">a page of machines</a>: Supabase, Node with Vite, Python,
+                  DuckDB and PostgreSQL, all in your tab. An agent builds a web app on Supabase, and you use it live in
+                  the page's preview as it does.</p>
               </div>
             </div>
             <div class="step">
@@ -552,6 +555,7 @@ $ claude mcp add snowglobe -- \
       { dir: "rust", tag: "jtab: JSON as tables, with clap", name: "Rust + clap", stack: "jtab, a CLI rendering JSON as tables: clap, serde_json, comfy-table.", show: [1, 2], command: "sh, with jtab on the PATH and sample data in ./data" },
       { dir: "java", tag: "jshell with Gson", name: "Java + Gson", stack: "jshell on OpenJDK 11 with Gson on the classpath.", show: [0, 1, 2, 3] },
       { dir: "duckdb", tag: "Analytical SQL over CSV, Parquet and JSON", name: "DuckDB", stack: "The DuckDB CLI, querying CSV, JSON and Parquet files in the tab: group-bys, aggregates and a Parquet export, offline.", show: [0, 1, 2, 3], command: "sh, with duckdb on the PATH and sample files in ./data" },
+      { dir: "web", tag: "Node 24 with Vite and esbuild", name: "Node + Vite", stack: "Node 24 from Alpine's packages and a ready Vite project with esbuild and supabase-js installed: a page built offline in the tab, and served on the machine's network address.", show: [0, 1, 2], command: "sh, in a Vite project at /root/app, with serve on the PATH" },
       { dir: "curl", tag: "A shell online through your browser", name: "curl + jq", stack: "Plain Alpine packages in a shell, online through your browser: curl against live APIs, piped into jq.", show: [0, 1, 2, 3], command: "sh, with curl and jq from Alpine's packages" },
     ];
 

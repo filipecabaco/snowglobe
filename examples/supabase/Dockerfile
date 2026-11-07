@@ -25,7 +25,8 @@ RUN ln -s /usr/glibc/lib/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1 && \
     ln -s /bin/sh /usr/bin/sh
 
 # What the stack's scripts need, and the C++ runtime the CLI (Bun) links against
-RUN apk add --no-cache bash tar curl jq postgresql-client libstdc++ libgcc && \
+# socat carries the API from the machine's network address to the stack (start.sh)
+RUN apk add --no-cache bash tar curl jq postgresql-client libstdc++ libgcc socat && \
     ln -sf /bin/bash /usr/bin/bash
 
 # The Supabase CLI: its linux-arm64-musl build, a single Bun-compiled binary, straight from npm's
@@ -41,7 +42,7 @@ RUN tar -xzf /tmp/cli.tgz -C /tmp package/bin/supabase && \
 RUN adduser -D -s /bin/bash supa
 USER supa
 WORKDIR /home/supa/app
-ENV SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1
+ENV SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 SUPABASE_NO_UPDATE_NOTIFIER=1
 # The CLI saves this with the stack, and refuses a start asking for another: the first start (below)
 # and the guest's (start.sh) must agree. Long, for a slow build machine's emulated start
 ENV SUPABASE_DB_HEALTH_TIMEOUT=15m
@@ -72,12 +73,24 @@ RUN ["bash", "-c", "CI=1 supabase stack start --runtime native --eager -x realti
 
 USER root
 COPY --chmod=755 start.sh /usr/local/bin/supabase-demo
+# Every login shell (an agent's commands too, as root) gets the stack's variables (API_URL, DB_URL,
+# ANON_KEY, ...), which start.sh writes once the stack is up
+RUN printf '%s\n' '# The local Supabase stack: API_URL, DB_URL, ANON_KEY, ... (written by supabase-demo)' \
+      '[ -r /home/supa/.stack-env ] && . /home/supa/.stack-env' > /etc/profile.d/supabase.sh
 RUN printf '#!/bin/sh\n# notes on the Bun inside the Supabase CLI\nBUN_BE_BUN=1 exec supabase run /home/supa/app/notes.ts "$@"\n' > /usr/local/bin/notes && \
     chmod 755 /usr/local/bin/notes
 ENV LANG=C.UTF-8
 CMD ["/usr/local/bin/supabase-demo"]
 
+# The network is on so the API can be reached from outside the machine: the agent page's preview
+# (and snowglobe run -p 54321:54321) connect to 54321 on its network address. It is also one of the
+# agent page's machines (/agent/ on the demo site), where agents build apps on it
 LABEL snowglobe.title="Supabase in the browser" \
       snowglobe.memory="640" snowglobe.cpus="2" \
+      snowglobe.network="fetch" \
+      snowglobe.agent="true" \
+      snowglobe.agent-purpose="Supabase for web app building: Postgres, Auth and the Data API, with a preview" \
+      snowglobe.agent-sample='psql "$DB_URL" -c "select now()"' \
+      snowglobe.agent-exposed-to='["https://chatgpt.com"]' \
       snowglobe.ready="supa:~/app$ " \
       snowglobe.exercise='["notes signup ada@example.com lovelace-1815", "notes add first program, for the analytical engine", "notes search engine", "notes ls", "notes signup grace@example.com hopper-1906", "notes ls", "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\""]'

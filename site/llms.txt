@@ -30,9 +30,10 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
 - `snowglobe pool <dir>` makes every site under a directory share one content-addressed blob store.
 - `snowglobe pwa <site> [--name N] [--short-name N]` makes a built site an installable Progressive
   Web App that works offline once it has run. Run it after `pool`.
-- `snowglobe agent-pages <dir>` puts every one-CPU `--agent` site under a directory on the agent
-  page, `<dir>/agent/` (its `runtimes.json` and scripts; the page is the demo site's
-  `site/agent/index.html`). Run it after `pool` and `pwa`.
+- `snowglobe agent-pages <dir>` puts every `--agent` site under a directory on the agent page,
+  `<dir>/agent/` (its `runtimes.json`, scripts and service worker; the page is the demo site's
+  `site/agent/index.html`). Sites built from the same source are one machine (the one named after
+  it). Run it after `pool` and `pwa`.
 - `snowglobe pack <site> [-o site.tar.gz]` writes a site as one self-contained tarball (.tar.gz or
   .tar.zst, pooled blobs included) to publish on a CDN.
 - `snowglobe run [site] [--name N] [--detach] [--runtime docker|native]` restores a built site
@@ -218,21 +219,27 @@ Example Dockerfile labels:
 
 ## The agent page (`/agent/`)
 
-One page for agents that need compute, with every one-CPU agent runtime of the site in it: https://filipecabaco.github.io/snowglobe/agent/
-Each runtime is a Linux machine (arm64, one CPU) that runs in the tab, in a Web Worker of its own;
-nothing runs on a server, and the page is static files. `snowglobe agent-pages <dir>` writes its
+One page for agents, with every agent runtime of the site in it: https://filipecabaco.github.io/snowglobe/agent/
+Each runtime is a Linux machine (arm64) that runs in the tab, in a Web Worker of its own; nothing
+runs on a server, and the page is static files. Its headline: an agent builds a web app on
+Supabase, builds its page on `web`, and the person sees it live in the page's preview. `snowglobe agent-pages <dir>` writes its
 list of machines (`agent/runtimes.json`, from each site's `run.json`) and its scripts when a site of
 several runs is assembled; a site's own page links there ("For agents", `../agent/?runtime=<site>`),
 and the old `/agent/<site>/` addresses go there too. `?runtime=<name>` only preselects: nothing
 runs because of the address.
 
+- The page has a service worker (`agent/sw.js`). It makes the page cross-origin isolated, which a
+  machine on several CPUs needs (`supabase` runs on 2: SharedArrayBuffer), and carries the
+  preview's requests. The first visit installs it and reloads once. Where it can't run (no service
+  workers, a hard reload), the several-CPU machines are refused with the reason and the others run.
 - Machines start lazily: nothing boots until a command (or a copy) needs it. Each shows its
   state: asleep, waking, awake, busy, suspending, or failed (with Retry).
 - A few are awake at once: 2 by default ("2 of 2 awake"). The number field "Machines awake at once",
   `set_awake_limit {count}` and `setAwakeLimit(count)` change it, 1 to 8, for this page load; it
-  runs nothing, so it asks no one. Each awake machine is about 650 to 720 MB of memory. Waking
-  another suspends the least recently used idle one first; a busy machine (a job or a copy in it)
-  is never suspended: the wake waits, and the status line says so. A lower limit suspends idle
+  runs nothing, so it asks no one. Each awake machine is about 540 to 740 MB of memory (supabase,
+  on 2 CPUs, about 730). Waking another suspends the least recently used idle one first; a busy
+  machine (a job, a copy or an open preview in it) is never suspended: the wake waits, and the
+  status line says so. A lower limit suspends idle
   machines, least recently used first; busy ones that keep it over the limit are said so, and
   suspended as they finish. Suspends and wakes go one at a time. Idle for 5 minutes, or hidden for
   a minute, a machine is suspended too.
@@ -245,9 +252,9 @@ runs because of the address.
   store is unreachable), the page says so: "can't reach the machine's files (<url>)".
 - Operations on one machine go one at a time, in the order asked: a run asked during a copy waits
   for it; a run beside a running job is refused (one job at a time).
-- Every run and copy, by the form, a WebMCP tool or `window.snowglobeAgent`, asks the person at
-  the page first, once per page load. In another page's frame the page refuses to run and offers
-  no tools. It needs the network (no service worker): it doesn't work offline.
+- Every run, copy and preview, by the form, a WebMCP tool or `window.snowglobeAgent`, asks the
+  person at the page first, once per page load. In another page's frame the page refuses to run and
+  offers no tools. It needs the network: it doesn't work offline.
 - For agents that click and type: the form "Run a command" has the combobox "Runtime", the
   textbox "Shell command", and the buttons "Run" and "Cancel". The first run asks the person at
   the page once per page load ("Let agents use these machines?": Allow). The region "Result" holds
@@ -256,22 +263,27 @@ runs because of the address.
   line under Run (the one `role=status`) says what is happening. "Earlier runs" also lists what
   agents ran and copied through WebMCP or a script, tagged "by WebMCP" or "by a script". "Copy a file between machines"
   has "From runtime", "From path", "To runtime", "To path", "Copy" and "Cancel copy". The selected
-  machine's terminal is under "Show <runtime>'s terminal".
+  machine's terminal is under "Show <runtime>'s terminal". "Preview a machine's web server" has
+  "Runtime", "Port", "Path", "Open preview" and "Close preview"; the open preview is a frame with
+  an address field ("Address in the preview"), "Reload" and "New tab".
 - `window.snowglobeAgent` (promises): `listRuntimes()` (name, purpose, state, sample, saved),
   `capabilities()`, `status(runtime)`, `runCommand({runtime, command, timeoutSeconds, requestId})`
   → `{jobId, runtime}` at once (wakes or boots the machine first), `readJob(jobId)`,
   `cancelJob(jobId)` (job ids are unique across runtimes), `copyFile({fromRuntime, fromPath,
   toRuntime, toPath})` → `{bytes, sha256, readSeconds, writeSeconds}`, `cancelCopy()`,
   `suspend(runtime)`, `wake(runtime)`, `startFresh(runtime)` (asks the person), `setAwakeLimit(count)`
-  → `{awakeLimit, awake, overLimit}`, `unsaved()`, `metrics()`.
+  → `{awakeLimit, awake, overLimit}`, `openPreview({runtime, port, path})` → `{url, base, status |
+  error}`, `closePreview()`, `preview()`, `unsaved()`, `metrics()`.
 - WebMCP tools, registered once where the browser has `document.modelContext` (or a polyfill such
   as MCP-B's `@mcp-b/global`, even one added up to 15 s after the page starts; the first drafts'
   `provideContext` works too): `list_runtimes`; `run_command {runtime, command, timeout_seconds,
   request_id}` returns a job id; `job_status {job_id}` returns its output, ending `[running]`,
   `[exit N]`, `[timed out]` or `[stopped]`; `cancel_job {job_id}`; `copy_file {from_runtime,
   from_path, to_runtime, to_path}` returns the bytes copied and their sha256 (a client's cancel
-  signal stops it); `set_awake_limit {count}` (1 to 8); `list_runtimes` reports `awake_limit`.
-  The first run or copy asks the person at the page.
+  signal stops it); `open_preview {runtime, port, path}` opens the page's preview on a server in a
+  machine and returns its address and what its first request got; `close_preview`;
+  `set_awake_limit {count}` (1 to 8); `list_runtimes` reports `awake_limit`, `preview_base` and
+  the open `preview`. The first run, copy or preview asks the person at the page.
 - Jobs: one at a time in each machine, as root on its serial shell (never the visible terminal),
   from `/root`, so relative paths work and files persist between jobs. Default timeout 300 s, at
   most 3600; out of time or cancelled, everything the command started is killed. A repeated
@@ -281,8 +293,75 @@ runs because of the address.
   replaced only once its copy checks out (its directory is made). It goes over the machines'
   serial lines as base64, so it is slow: tens of KiB a second. Cancellable.
 
+### The preview
+
+A server in a machine, seen in the page, over HTTP/1.1 (no WebSockets). Its address is
+
+    <preview_base><runtime>/<port>/<path>      preview_base: https://filipecabaco.github.io/snowglobe/agent/preview/
+
+The page's service worker hands each request under it to the agent page, which opens a TCP
+connection to `<port>` on the machine's network address, writes the request (Connection: close),
+and streams the answer back: a length, chunked, or to the close; binary as it is. A redirect's
+Location on the server (`/login`, `http://localhost:<port>/...`) stays inside the preview.
+Cookies a server sets are not kept (a service worker can't set them): use tokens, as supabase-js
+does. A port with nothing listening answers 502, "Nothing is listening".
+
+- A server must listen on `0.0.0.0`, not `127.0.0.1` or `localhost` (the page connects from outside
+  the machine): `serve dist 4173` on `web`, `vite preview --host 0.0.0.0`, Bun with `hostname:
+  "0.0.0.0"`.
+- Build pages with relative asset paths: they are served under a prefix. The `web` project's Vite
+  config has `base: "./"`.
+- The page in the preview is this site's own (same origin): it reaches any machine's server at
+  `<preview_base><runtime>/<port>/`. Supabase's API is on port 54321 of `supabase` (Postgres,
+  PostgREST and Auth; `/rest/v1` and `/auth/v1`), so supabase-js's URL is
+  `<preview_base>supabase/54321`, and its key is `$ANON_KEY` on `supabase`. From inside the page:
+  `location.href.split("/preview/")[0] + "/preview/supabase/54321"`.
+- A machine with the preview open, and every machine the page in it reaches, is busy: never
+  suspended until the preview is closed. One preview at a time. The machines a preview uses count
+  as one against the awake limit: a machine the page reaches is woken even beyond the limit, beside
+  the preview's own (so `web` and `supabase` together work at any limit). When every awake machine
+  is busy with something else (a job, a copy), a preview request or `open_preview` waits up to 30 s
+  for one to be free, then fails: 503 "No machine slot free" (raise the awake limit, or close the
+  preview).
+- Answered only while a preview is open and the person has allowed the page; a preview address
+  opened from anywhere but the agent page (typed in, linked from another site) is refused (403).
+
+### Building a web app on Supabase, seen live
+
+1. On `supabase`, a table with row level security (a user sees their own rows), by psql:
+
+       psql "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+       drop table if exists public.notes cascade;
+       create table public.notes (
+         id bigint generated always as identity primary key,
+         user_id uuid not null default auth.uid() references auth.users on delete cascade,
+         body text not null check (length(body) between 1 and 500),
+         created_at timestamptz not null default now());
+       alter table public.notes enable row level security;
+       create policy "read own notes" on public.notes for select to authenticated using ((select auth.uid()) = user_id);
+       create policy "add own notes" on public.notes for insert to authenticated with check ((select auth.uid()) = user_id);
+       notify pgrst, 'reload schema';
+       SQL
+       echo "$ANON_KEY"
+
+2. On `web`, in `/root/app` (a Vite project, vanilla JS, with `@supabase/supabase-js` installed:
+   no network needed): write `.env` (`VITE_SUPABASE_ANON_KEY=<the key>`), `index.html` and
+   `src/main.js` with sign-up, login, add and list, using
+   `createClient(location.href.split("/preview/")[0] + "/preview/supabase/54321", import.meta.env.VITE_SUPABASE_ANON_KEY)`.
+   Then `npm run build && (serve dist 4173 >/tmp/serve.log 2>&1 &)`.
+3. `open_preview {runtime: "web", port: 4173}`: the person signs up, logs in and adds notes in the
+   page's preview.
+4. On `supabase`: `psql "$DB_URL" -c "select n.id, n.body, n.user_id, u.email from notes n join
+   auth.users u on u.id = n.user_id"` shows their rows, with their user's id.
+
+Without a second machine: copy the built `dist` (as a tarball, `copy_file`) to `supabase` and serve
+it there with Bun (`BUN_BE_BUN=1 supabase run serve.ts`, `Bun.serve({hostname: "0.0.0.0", port:
+3000, ...})`), then `open_preview {runtime: "supabase", port: 3000}`.
+
 ### The runtimes on this site
 
+- runtime `supabase`: Supabase for web app building: Postgres, Auth and the Data API, with a preview (2 CPUs; the API on port 54321; `$DB_URL`, `$API_URL`, `$ANON_KEY` in every shell; try `psql "$DB_URL" -c "select now()"`)
+- runtime `web`: build and serve web pages: Node with Vite and esbuild (a Vite project with supabase-js in `/root/app`; try `cd /root/app && npm run build && (serve dist 4173 >/tmp/serve.log 2>&1 &)`)
 - runtime `python`: run Python: scripts, numpy and pandas for data work (try `python3 -c 'import numpy, pandas; print(numpy.__version__, pandas.__version__)'`)
 - runtime `duckdb`: DuckDB for analytics: SQL over CSV, Parquet and JSON files (try `duckdb -c 'select 6 * 7'`)
 - runtime `postgres`: PostgreSQL for database work: load CSV files and query them with psql (try `psql -h /run/postgresql -U postgres -tAc 'select count(*) from planets'`)
@@ -291,8 +370,8 @@ For example: write `/root/data.csv` in `python`, `copy_file` it to `duckdb`, que
 `duckdb -csv -c "select count(*) from 'data.csv'"`, export a CSV, and load it into `postgres` with
 `psql -h /run/postgresql -U postgres -c "\copy t from '/root/x.csv' csv header"`.
 
-The other runs (IEx, TypeScript, Go, Rust, curl + jq, and the two-CPU Elixir + Postgres, Java and
-Supabase) are for people, on the landing page, not on the agent page.
+The other runs (IEx, TypeScript, Go, Rust, curl + jq, Elixir + Postgres and Java) are for people,
+on the landing page, not on the agent page.
 
 ## Networking (`--network fetch`)
 

@@ -31,7 +31,8 @@ label `snowglobe.agent="true"`); without it the page carries none of it.
   a "Shell command" box, Run and Cancel, a status line (`role=status`), and a "Result" section
   with the exit status and a "Command output" `<pre>` that ends as `job_status` does. Same job
   runner, and the same one question per page load: the panel and the tools share it.
-- One-CPU sites only: on more CPUs nothing is registered and `status()` says why.
+- On several CPUs, only in a cross-origin isolated page (the agent page and the site's own are,
+  through their service workers); elsewhere nothing is registered and `status()` says why.
 
 The control channel is the guest's serial line (ttyS0), not a new device. Every snowglobe guest
 has a root shell there beside the app (the boot layer's inittab), and the page only shows the

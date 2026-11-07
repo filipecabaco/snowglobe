@@ -243,6 +243,10 @@ jobs:
             python)     commands='print(f"snowglobe-{6 * 7}")'; expect=snowglobe-42 ;;
             typescript) commands='console.log("snowglobe-" + 6 * 7)'; expect=snowglobe-42 ;;
             duckdb)     commands='select '"'"'snowglobe-'"'"' || 6 * 7;'; expect=snowglobe-42 ;;
+            # A page built with Vite in the machine, offline (its packages are in the image), and
+            # served on the machine's network address
+            web)        commands=$'cd /root/app && npm run build >/dev/null && echo "built-$((6 * 7))"\n(serve dist 4173 >/dev/null 2>&1 &); sleep 3; wget -qO- http://127.0.0.1:4173/ | grep -o "<main id=.app.>"'
+                        expect=$'built-42\n<main id="app">' ;;
             java)       commands='System.out.println("snowglobe-" + 6 * 7)'; expect=snowglobe-42 ;;
             postgres)   commands="SELECT 'snowglobe-' || 6 * 7;"; expect=snowglobe-42 ;;
             rust)       commands='echo snowglobe-$((6 * 7))'; expect=snowglobe-42 ;;
@@ -251,9 +255,10 @@ jobs:
                         expect=$'apk exit=0\n__ _ _ __ _ __ ___' ;;
             # The Supabase CLI's native stack and the notes app on it: Grace can't see Ada's note. The
             # first line waits for Auth and the Data API to answer: just restored from the snapshot, on one
-            # CPU, they can take longer than the gateway allows for a first request
-            supabase)   commands=$'for i in $(seq 30); do curl -fsS -o /dev/null -m 10 "$API_URL/auth/v1/health" && curl -fsS -o /dev/null -m 10 -H "apikey: $ANON_KEY" "$API_URL/rest/v1/" && break; sleep 2; done\nnotes signup ada@example.com lovelace-1815\nnotes add first program, for the analytical engine\nnotes ls\nnotes signup grace@example.com hopper-1906\nnotes ls'
-                        expect=$'#1 added\nada@example.com: 1 note(s)\ngrace@example.com: 0 note(s)' ;;
+            # CPU, they can take longer than the gateway allows for a first request. The last line checks
+            # the API on port 54321 of the machine's network address (start.sh), where the agent page's preview connects
+            supabase)   commands=$'for i in $(seq 30); do curl -fsS -o /dev/null -m 10 "$API_URL/auth/v1/health" && curl -fsS -o /dev/null -m 10 -H "apikey: $ANON_KEY" "$API_URL/rest/v1/" && break; sleep 2; done\nnotes signup ada@example.com lovelace-1815\nnotes add first program, for the analytical engine\nnotes ls\nnotes signup grace@example.com hopper-1906\nnotes ls\nip=$(ip -4 -o addr show scope global | awk \'{ sub(/\\/.*/, "", $4); print $4; exit }\'); curl -sS -o /dev/null -m 10 -w "api-on-network-%{http_code}" -H "apikey: $ANON_KEY" "http://$ip:54321/rest/v1/"; echo'
+                        expect=$'#1 added\nada@example.com: 1 note(s)\ngrace@example.com: 0 note(s)\napi-on-network-200' ;;
             go)         commands= ;;
             *)          echo "::error title=$SITE::no check for $SITE"; exit 1 ;;
           esac

@@ -3,7 +3,7 @@ go = "1.27.1"
 
 [env]
 # <example>-<n>cpu: examples/<example> built with --cpus <n>; supabase-1cpu is what its X card plays
-DEMOS = "supabase supabase-1cpu iex postgres elixir python typescript go rust java curl duckdb"
+DEMOS = "supabase supabase-1cpu iex postgres elixir python typescript go rust java curl duckdb web"
 # Examples built and checked in CI but not on the site (too big, or need the host's network)
 EXAMPLES = "apk"
 
@@ -47,4 +47,4 @@ run = "go run ./cmd/snowglobe serve dist"
 
 [tasks.test]
 description = "Run the tests"
-run = "go test ./... && node --test internal/site/sessions.test.cjs internal/site/agent.test.cjs internal/site/machine.test.cjs internal/site/session-ui.test.cjs internal/site/scheduler.test.cjs internal/site/transfer.test.cjs internal/site/orchestrator.test.cjs bench/lib.test.mjs bench/server.test.mjs"
+run = "go test ./... && node --test internal/site/sessions.test.cjs internal/site/agent.test.cjs internal/site/machine.test.cjs internal/site/session-ui.test.cjs internal/site/scheduler.test.cjs internal/site/transfer.test.cjs internal/site/orchestrator.test.cjs internal/site/preview.test.cjs bench/lib.test.mjs bench/server.test.mjs"

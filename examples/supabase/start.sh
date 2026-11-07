@@ -3,7 +3,7 @@
 if [ "$(id -u)" = 0 ]; then
   exec su supa -s /bin/bash -c "cd ~/app && exec /usr/local/bin/supabase-demo"
 fi
-export SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 CI=1
+export SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 SUPABASE_NO_UPDATE_NOTIFIER=1 CI=1
 
 echo "Starting Supabase's native stack: Postgres, PostgREST and Auth (no Docker) ..."
 # --runtime native: plain processes, no Docker. --eager: every service is up before this returns
@@ -23,6 +23,35 @@ done
 # Never reach the prompt (and so the snapshot) without the stack
 [ -n "$API_URL" ] || { echo "Supabase's stack didn't start."; exit 1; }
 export API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY
+# The same for every other shell (an agent's commands: /etc/profile.d/supabase.sh reads it)
+{
+  for v in API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY; do printf "export %s='%s'\n" "$v" "${!v}"; done
+  echo "export SUPABASE_API_PORT=54321"
+} > "$HOME/.stack-env"
+# The API on the machine's network address too, at a fixed port, 54321 (Supabase's usual one): the
+# stack picks its own ports, on 127.0.0.1, which nothing outside the machine reaches. The agent
+# page's preview (and snowglobe run -p 54321:54321) connect there.
+#  - Already answering on the network address (a stack that listens on 0.0.0.0:54321): nothing to do.
+#  - The stack itself on 127.0.0.1:54321: a listener on 0.0.0.0:54321 can't be bound beside it, so
+#    socat takes the network address alone.
+#  - Otherwise socat listens on 0.0.0.0:54321. A socat that couldn't start says why.
+api_port=${API_URL##*:}
+api_port=${api_port%%/*}
+net_ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4; exit }')
+expose_log="$HOME/.expose-54321.log"
+if [ -n "$net_ip" ] && curl -fsS -o /dev/null -m 5 "http://$net_ip:54321/auth/v1/health" 2>/dev/null; then
+  echo "The API already answers on $net_ip:54321" > "$expose_log"
+else
+  listen="TCP-LISTEN:54321,fork,reuseaddr"
+  [ "$api_port" = 54321 ] && [ -n "$net_ip" ] && listen="$listen,bind=$net_ip"
+  socat "$listen" "TCP:127.0.0.1:$api_port" </dev/null >"$expose_log" 2>&1 &
+  expose_pid=$!
+  sleep 1
+  if ! kill -0 "$expose_pid" 2>/dev/null; then
+    echo "Warning: the API couldn't be offered on port 54321 of the machine's network address" \
+      "(the agent page's preview won't reach it): $(tail -n 3 "$expose_log")"
+  fi
+fi
 # curl with the service role's key, for the REST API
 sb-auth() { curl -sS -H "apikey: $SERVICE_ROLE_KEY" -H "Authorization: Bearer $SERVICE_ROLE_KEY" "$@"; }
 export -f sb-auth

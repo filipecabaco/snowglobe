@@ -14,9 +14,15 @@ func fakeSite(t *testing.T, root, name string, run map[string]any, armless strin
 	t.Helper()
 	dir := filepath.Join(root, name)
 	files := map[string]string{
-		"system/filesystem.json": "{}", "system/state.bin.zst": "state-" + name, "armless/armless.js": armless, "armless/armless.wasm": "wasm",
+		"system/filesystem.json": "{}", "system/state.bin.zst": "state-" + name, "armless/armless.js": armless,
 		"system/tls.json": "{}",
 		"index.html":      `<a id="agent-link" href="../agent/?runtime=x">For agents</a> filesystem: { json: "system/filesystem.json", baseurl: "../blobs/" },`,
+	}
+	// A site has the armless build for its CPUs
+	if cpus, _ := run["cpus"].(int); cpus > 1 {
+		files["armless/armless-smp.wasm"] = "wasm-smp"
+	} else {
+		files["armless/armless.wasm"] = "wasm"
 	}
 	data, _ := json.Marshal(run)
 	files["run.json"] = string(data)
@@ -40,14 +46,14 @@ func TestWriteAgentPage(t *testing.T) {
 	root := t.TempDir()
 	fakeSite(t, root, "python", agentRun("Python", 1, "https://chatgpt.com"), "armless")
 	fakeSite(t, root, "duckdb", agentRun("DuckDB", 1, "https://chatgpt.com", "https://b.example"), "armless")
-	fakeSite(t, root, "java", agentRun("Java", 2), "armless")                                                                 // several CPUs: left out
+	fakeSite(t, root, "java", agentRun("Java", 2, "https://chatgpt.com"), "armless")                                          // several CPUs: a machine too
 	fakeSite(t, root, "elixir", map[string]any{"title": "Elixir", "memory_mb": 512, "network": "none", "cpus": 1}, "armless") // no --agent
 
 	runtimes, err := WriteAgentPage(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runtimes) != 2 || runtimes[0].Name != "duckdb" || runtimes[1].Name != "python" {
+	if len(runtimes) != 3 || runtimes[0].Name != "duckdb" || runtimes[1].Name != "java" || runtimes[2].Name != "python" {
 		t.Fatalf("runtimes: %+v", runtimes)
 	}
 
@@ -59,7 +65,17 @@ func TestWriteAgentPage(t *testing.T) {
 	if err := json.Unmarshal(data, &man); err != nil {
 		t.Fatal(err)
 	}
-	py := man.Runtimes[1]
+	// Each machine's CPUs, as its site has them: the page needs cross-origin isolation for java's
+	if man.Runtimes[1].CPUs != 2 || man.Runtimes[2].CPUs != 1 {
+		t.Errorf("cpus: java %d, python %d", man.Runtimes[1].CPUs, man.Runtimes[2].CPUs)
+	}
+	if !strings.Contains(string(data), `"cpus": 2`) {
+		t.Errorf("runtimes.json lacks java's cpus: %s", data)
+	}
+	if want, _ := Fingerprint(filepath.Join(root, "java"), Page{MemoryMB: 512, CPUs: 2, Network: "none"}); man.Runtimes[1].BuildID != want {
+		t.Errorf("java's build id %s, want %s (its several-CPU armless)", man.Runtimes[1].BuildID, want)
+	}
+	py := man.Runtimes[2]
 	if py.Base != "../python/" || py.BaseURL != "../blobs/" || py.Purpose != "Python" || py.Sample != "echo Python" || py.MemoryMB != 512 || py.Network != "none" {
 		t.Errorf("python: %+v", py)
 	}
@@ -67,7 +83,8 @@ func TestWriteAgentPage(t *testing.T) {
 	if want, _ := Fingerprint(filepath.Join(root, "python"), Page{MemoryMB: 512, CPUs: 1, Network: "none"}); py.BuildID != want {
 		t.Errorf("build id %s, want %s", py.BuildID, want)
 	}
-	if man.Armless.JS != "../duckdb/armless/armless.js" || man.Armless.Wasm != "../duckdb/armless/armless.wasm" || man.Xterm != "../duckdb/xterm/" {
+	if man.Armless.JS != "../duckdb/armless/armless.js" || man.Armless.Wasm != "../duckdb/armless/armless.wasm" || man.Xterm != "../duckdb/xterm/" ||
+		man.Armless.WasmSMP != "../java/armless/armless-smp.wasm" {
 		t.Errorf("shared files: %+v %s", man.Armless, man.Xterm)
 	}
 	// One set of tools reaches every machine: shared only with the origins every site shares with
@@ -92,14 +109,21 @@ func TestWriteAgentPage(t *testing.T) {
 	if !strings.Contains(string(page), `id="agent-link" href="../agent/?runtime=python"`) {
 		t.Errorf("link: %s", page)
 	}
-	for _, left := range []string{"java", "elixir"} {
+	for _, left := range []string{"elixir"} {
 		if _, err := os.Stat(filepath.Join(root, AgentDir, left)); err == nil {
 			t.Errorf("%s is on the agent page", left)
 		}
 	}
 
+	// The page's service worker and the preview's shared part are among its files
+	for _, f := range []string{"sw.js", "preview.js"} {
+		if _, err := os.Stat(filepath.Join(root, AgentDir, f)); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+
 	// Again: the same
-	if again, err := WriteAgentPage(root); err != nil || len(again) != 2 {
+	if again, err := WriteAgentPage(root); err != nil || len(again) != 3 {
 		t.Errorf("again: %v %v", again, err)
 	}
 
@@ -110,6 +134,7 @@ func TestWriteAgentPage(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, AgentDir, "keep"), 0o755)
 	os.WriteFile(filepath.Join(root, AgentDir, "keep", "index.html"), []byte("<p>someone's own page</p>"), 0o644)
 	os.RemoveAll(filepath.Join(root, "duckdb"))
+	os.RemoveAll(filepath.Join(root, "java"))
 	if again, err := WriteAgentPage(root); err != nil || len(again) != 1 {
 		t.Fatalf("without duckdb: %v %v", again, err)
 	}
@@ -125,6 +150,39 @@ func TestWriteAgentPage(t *testing.T) {
 	json.Unmarshal(data, &man)
 	if strings.Join(man.ExposedTo, ",") != "https://chatgpt.com" {
 		t.Errorf("exposed to, python alone: %v", man.ExposedTo)
+	}
+}
+
+// An example built twice (for one CPU, for the X card, and for two) is one machine: the site named
+// after its source, and the other's "For agents" link goes to it
+func TestWriteAgentPageOneMachinePerSource(t *testing.T) {
+	root := t.TempDir()
+	two := agentRun("Supabase", 2)
+	two["source"] = "examples/supabase"
+	one := agentRun("Supabase", 1)
+	one["source"] = "examples/supabase"
+	fakeSite(t, root, "supabase", two, "armless")
+	fakeSite(t, root, "supabase-1cpu", one, "armless")
+	fakeSite(t, root, "web", agentRun("Web", 1), "armless")
+	runtimes, err := WriteAgentPage(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimes) != 2 || runtimes[0].Name != "supabase" || runtimes[0].CPUs != 2 || runtimes[1].Name != "web" {
+		t.Fatalf("runtimes: %+v", runtimes)
+	}
+	if _, err := os.Stat(filepath.Join(root, AgentDir, "supabase-1cpu")); err == nil {
+		t.Error("the one-CPU build has a redirect of its own")
+	}
+	page, _ := os.ReadFile(filepath.Join(root, "supabase-1cpu", "index.html"))
+	if !strings.Contains(string(page), `href="../agent/?runtime=supabase"`) {
+		t.Errorf("supabase-1cpu's link: %s", page)
+	}
+	for source, want := range map[string]string{"examples/supabase": "supabase", "examples/supabase/": "supabase", "./supabase.tar": "supabase",
+		"ghcr.io/me/web:1.2": "web", "localhost:5000/web": "web", "x.tar.zst": "x"} {
+		if got := sourceName(source); got != want {
+			t.Errorf("sourceName(%q) = %q, want %q", source, got, want)
+		}
 	}
 }
 
@@ -177,7 +235,10 @@ func TestWriteAgentPageRefuses(t *testing.T) {
 	})
 }
 
-// Every agent-labelled demo is one of /agent/'s machines: in the site's demos, on one CPU, with
+// The agent page's script, where it registers its service worker
+var agentPageSource = string(agentPageJS)
+
+// Every agent-labelled demo is one of /agent/'s machines: in the site's demos, with
 // what it is for and a sample command (the page lists them from these labels), and in llms.txt
 func TestTheDemoSiteHasEveryAgentRuntimeOnTheAgentPage(t *testing.T) {
 	repo := filepath.Join("..", "..")
@@ -211,11 +272,11 @@ func TestTheDemoSiteHasEveryAgentRuntimeOnTheAgentPage(t *testing.T) {
 	}
 	dockerfiles, _ := filepath.Glob(filepath.Join(repo, "examples", "*", "Dockerfile"))
 	label := func(df, name string) string {
-		m := regexp.MustCompile(`snowglobe\.` + regexp.QuoteMeta(name) + `="([^"]*)"`).FindSubmatch([]byte(df))
+		m := regexp.MustCompile(`snowglobe\.` + regexp.QuoteMeta(name) + `=(?:"([^"]*)"|'([^']*)')`).FindSubmatch([]byte(df))
 		if m == nil {
 			return ""
 		}
-		return string(m[1])
+		return string(m[1]) + string(m[2])
 	}
 	// The runtimes llms.txt lists for the page: exactly the agent-labelled demos
 	listed := map[string]bool{}
@@ -238,8 +299,9 @@ func TestTheDemoSiteHasEveryAgentRuntimeOnTheAgentPage(t *testing.T) {
 		if !inDemos[name] {
 			t.Errorf("%s is labelled for agents but is not one of the site's demos", name)
 		}
-		if c := label(df, "cpus"); c != "" && c != "1" {
-			t.Errorf("%s: agent machines have one CPU", name)
+		// Several CPUs: the page is made cross-origin isolated for it (its service worker)
+		if c := label(df, "cpus"); c != "" && c != "1" && !strings.Contains(string(page), `register("sw.js"`) && !strings.Contains(agentPageSource, `register("sw.js"`) {
+			t.Errorf("%s: on %s CPUs, and the agent page registers no service worker to isolate it", name, c)
 		}
 		for _, l := range []string{"agent-purpose", "agent-sample"} {
 			if label(df, l) == "" {
@@ -262,6 +324,27 @@ func TestTheDemoSiteHasEveryAgentRuntimeOnTheAgentPage(t *testing.T) {
 	for _, name := range []string{"python", "postgres", "duckdb"} {
 		if !labelled[name] {
 			t.Errorf("%s is one of the agent page's machines, and isn't labelled for agents", name)
+		}
+	}
+	// The web app machines: a preview connects to their servers, so they have a network device;
+	// supabase runs on 2 CPUs (the agent page is isolated for it)
+	for name, cpus := range map[string]string{"supabase": "2", "web": ""} {
+		data, err := os.ReadFile(filepath.Join(repo, "examples", name, "Dockerfile"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		df := string(data)
+		if !labelled[name] {
+			t.Errorf("%s is one of the agent page's machines, and isn't labelled for agents", name)
+		}
+		if label(df, "network") != "fetch" {
+			t.Errorf("%s: a preview needs its machine's network device (snowglobe.network=\"fetch\")", name)
+		}
+		if label(df, "cpus") != cpus {
+			t.Errorf("%s: cpus %q, want %q", name, label(df, "cpus"), cpus)
+		}
+		if !strings.Contains(label(df, "agent-exposed-to"), "https://chatgpt.com") {
+			t.Errorf("%s: its tools are shared with chatgpt.com, as the page's other machines'", name)
 		}
 	}
 	if found < 3 {

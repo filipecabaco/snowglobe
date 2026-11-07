@@ -10,8 +10,9 @@
 // a job in one (by runtime) and returns its id; job_status reads its state and output, which ends
 // as `snowglobe mcp`'s run_command does natively ([exit N], [timed out], [stopped]); cancel_job
 // stops it; copy_file copies a file from one machine to another; set_awake_limit says how many
-// machines may be awake at once. The first run or copy asks the person at the page, once for the
-// page load (and window.snowglobeAgent asks the same question, whoever calls it).
+// machines may be awake at once; open_preview shows a machine's web server in the page's preview
+// panel, and close_preview closes it. The first run, copy or preview asks the person at the page,
+// once for the page load (and window.snowglobeAgent asks the same question, whoever calls it).
 (function (root) {
   "use strict";
 
@@ -44,15 +45,17 @@
     return {
       list_runtimes: {
         title: "The machines and their state",
-        description: "The Linux machines (arm64, one CPU each) this page runs in the browser tab: each one's runtime name, what it is good for, " +
+        description: "The Linux machines (arm64) this page runs in the browser tab: each one's runtime name, what it is good for, its CPUs, " +
           "its state (asleep, waking, awake, busy, suspending, failed) and a sample command. A machine boots or wakes on its first command; " +
-          "only a few are awake at once (awake_limit; set_awake_limit changes it), and the least recently used idle one is suspended (its files kept) to wake another.",
+          "only a few are awake at once (awake_limit; set_awake_limit changes it), and the least recently used idle one is suspended (its files kept) to wake another. " +
+          "A machine an open preview uses is busy, so never suspended. preview_base is where previews are: <preview_base><runtime>/<port>/<path>.",
         inputSchema: { type: "object", properties: {} },
         annotations: { readOnlyHint: true },
         async run() {
           const list = await agent.listRuntimes();
           const st = await agent.capabilities();
-          return text(JSON.stringify({ runtimes: list, awake: st.awake, awake_limit: st.awakeLimit, ...(st.overLimit ? { over_limit: st.overLimit } : {}) }, null, 2));
+          return text(JSON.stringify({ runtimes: list, awake: st.awake, awake_limit: st.awakeLimit, ...(st.overLimit ? { over_limit: st.overLimit } : {}),
+            preview_base: st.previewBase, preview: st.preview ?? null }, null, 2));
         },
       },
       run_command: {
@@ -64,7 +67,7 @@
         inputSchema: {
           type: "object",
           properties: {
-            runtime: { type: "string", description: "The machine: a runtime name from list_runtimes (python, duckdb, postgres...)" },
+            runtime: { type: "string", description: "The machine: a runtime name from list_runtimes (python, duckdb, postgres, supabase, web...)" },
             command: { type: "string", description: "The command line" },
             timeout_seconds: { type: "number", description: "Kill it, and everything it started, after this long (default 300, at most 3600)" },
             request_id: { type: "string", description: "Optional: a retry with the same id returns the original job instead of running it twice" },
@@ -140,10 +143,53 @@
             `sha256 ${r.sha256}, the same on both ends. Read ${kb(r.bytes, r.readSeconds)}, wrote ${kb(r.bytes, r.writeSeconds)}.`);
         },
       },
+      open_preview: {
+        title: "Show a machine's web server in the page",
+        description: "Open the page's preview panel on a web server running in one of the machines: runtime, port, and a path (default /). " +
+          "The server must listen on 0.0.0.0 (the machine's network address), not 127.0.0.1 or localhost, and speak HTTP/1.1 (no WebSockets). " +
+          "Returns the preview's address, <preview_base><runtime>/<port>/<path>, and the status its first request got. The page itself, " +
+          "in the preview, reaches any other machine's server at <preview_base><other runtime>/<port>/..., same origin: so a web app built on web " +
+          "uses Supabase at <preview_base>supabase/54321 (supabase-js's URL). Serve pages with relative asset paths (Vite: base './'). " +
+          "The machine (and every machine the page reaches) stays awake while the preview is open; one preview at a time. The machines a " +
+          "preview uses count as one against the awake limit: one the page reaches is woken even beyond the limit, beside the preview's own. " +
+          "When every awake machine is busy with something else (a job, a copy), the preview waits up to 30 s for one to be free, then fails " +
+          "with \"no machine slot free\": raise the awake limit (set_awake_limit), or close the preview.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runtime: { type: "string", description: "The machine the server runs in (list_runtimes)" },
+            port: { type: "integer", minimum: 1, maximum: 65535, description: "The port it listens on, e.g. 4173" },
+            path: { type: "string", description: "Optional: the path to open, starting with / (default /)" },
+          },
+          required: ["runtime", "port"],
+        },
+        annotations: { readOnlyHint: false, consequentialHint: true },
+        async run(input, options) {
+          const runtime = runtimeOf(input);
+          const { port, path } = input;
+          if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("port: the port the server listens on, 1 to 65535");
+          if (path !== undefined && (typeof path !== "string" || !path.startsWith("/"))) throw new Error("path: a path starting with /");
+          await ask(options);
+          const r = await agent.openPreview({ runtime, port, path }, { source: "webmcp", signal: options?.signal });
+          const answered = r.error ? `its first request failed: ${r.error.replace(/\.$/, "")} (a server just started may need a moment: open it again)` : `it answered ${r.status}${r.statusText ? ` ${r.statusText}` : ""}`;
+          return text(`the preview shows ${r.url} (${runtime}'s port ${port}); ${answered}. Other machines' servers are at ${r.base.replace(/[^/]+\/\d+\/$/, "")}<runtime>/<port>/ for the page in it.`,
+            !!r.error);
+        },
+      },
+      close_preview: {
+        title: "Close the preview",
+        description: "Close the page's preview panel: the machines it kept awake can be suspended again (after 5 minutes idle, or to wake another).",
+        inputSchema: { type: "object", properties: {} },
+        annotations: { readOnlyHint: false },
+        async run() {
+          await agent.closePreview({ source: "webmcp" });
+          return text("the preview is closed");
+        },
+      },
       set_awake_limit: {
         title: "Set how many machines are awake at once",
         description: "How many of the page's machines may be awake at once, 1 to 8 (2 by default), for this page load. Each awake machine " +
-          "holds about 650 to 720 MB of the browser's memory. Raise it to keep several machines warm for work that goes back and forth between " +
+          "holds about 540 to 740 MB of the browser's memory. Raise it to keep several machines warm for work that goes back and forth between " +
           "them; lower it to free memory: idle machines are suspended (their files kept), least recently used first, and busy ones once they " +
           "finish. It runs nothing.",
         inputSchema: {
@@ -224,8 +270,9 @@
     });
   }
 
-  const ASK_MESSAGE = "An agent (or someone at this page) wants to run commands on these Linux machines and move files between them. " +
-    "They run as root in the machines, in this tab (not on your computer), and can read or change anything in them. You are asked once for this page load.";
+  const ASK_MESSAGE = "An agent (or someone at this page) wants to run commands on these Linux machines, move files between them, " +
+    "and show their web servers in this page's preview (where what they serve runs as a page of this site). " +
+    "Commands run as root in the machines, in this tab (not on your computer), and can read or change anything in them. You are asked once for this page load.";
 
   /**
    * The page's one question, shared by everything that runs commands (the WebMCP tools and the
@@ -235,8 +282,9 @@
    */
   function consent({ doc = root.document, confirm } = {}) {
     let allowed = null;
+    let yes = false;
     const show = (m) => (confirm ?? ((text) => confirmInPage(doc, text)))(m);
-    return async (options) => {
+    const ask = async (options) => {
       if (allowed === null) {
         allowed = (async () => {
           const client = options?.client ?? options;
@@ -248,7 +296,11 @@
         allowed = null;
         throw new Error("the person at the page did not allow it");
       }
+      yes = true;
     };
+    /** Allowed already in this page load (never asks): the preview's requests are answered only then. */
+    ask.granted = () => yes;
+    return ask;
   }
 
   /** The page's model context, if it has one with a way to add tools: document.modelContext

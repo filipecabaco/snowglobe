@@ -1,5 +1,5 @@
-// The agent page (/agent/): every one-CPU agent runtime of the site in one page, and what
-// coordinates them. It reads runtimes.json (written when the site is assembled: snowglobe
+// The agent page (/agent/): every agent runtime of the site in one page, and what coordinates
+// them. It reads runtimes.json (written when the site is assembled: snowglobe
 // agent-pages), and then, all in the browser:
 //  - makes each machine lazily, on its first use, each in a Web Worker of its own;
 //  - keeps a few awake at once (scheduler.js: 2 unless changed for this page load), suspending the
@@ -10,7 +10,11 @@
 //  - runs commands in any machine, and copies files between machines (transfer.js), one operation
 //    at a time in each machine, in the order asked;
 //  - offers all of it as one form for agents that click and type, as window.snowglobeAgent, and as
-//    one set of WebMCP tools; asking the person at the page once, before anything runs.
+//    one set of WebMCP tools; asking the person at the page once, before anything runs;
+//  - shows a machine's web server in the page (preview.js): an open preview keeps its machine, and
+//    every machine its page reaches through the preview, awake (busy) until it is closed.
+// A machine on several CPUs needs the page cross-origin isolated (its service worker makes it one);
+// where it isn't, that machine is refused with the reason, and the others run as ever.
 // A machine that fails (its worker crashed, it powered off, a capture hung) is ended at once: its
 // worker terminated, its job finished as failed, nothing left holding its memory.
 // Nothing runs because of the address: ?runtime=<name> only preselects a machine.
@@ -20,6 +24,9 @@
   const S = () => root.SnowglobeSessions;
   const MAX_TAPE = 256 << 10; // console output kept per machine, for its terminal
   const SAVE_ID = "machine";
+  // How long the preview (a request through it, or open_preview) waits for an awake slot when
+  // every awake machine is busy with something other than the preview, before it gives up
+  const PREVIEW_WAIT_MS = 30000;
 
   /** One machine's save: one checkpoint in IndexedDB, in a scope of its own, held by one tab. */
   class SaveSlot {
@@ -84,10 +91,14 @@
    * asks the person once per page load). `confirmFresh(m)` asks before a start fresh.
    * `onactivity(event)` hears every run and copy, whoever started it: { kind: "run", runtime,
    * command, jobId, source }, { kind: "job", jobId, runtime } (a job ended), { kind: "copy", id,
-   * from, to, source, state, result | error }.
+   * from, to, source, state, result | error }, { kind: "preview", preview | null, source } (the
+   * preview opened, or closed). `isolated`: the page is cross-origin isolated (machines on several
+   * CPUs need it); crossOriginIsolated when not given. `granted()`: the person has allowed it in
+   * this page load (preview requests are answered only then; ask.granted when not given).
    */
   function createAgents(manifest, { pageUrl, scheduler, Machine, createMachine, ask = notAsked, confirmFresh, onchange, onactivity, now = () => Date.now(),
-    transport = "worker", hidden = false, machineOptions = {}, hostOptions = {} } = {}) {
+    transport = "worker", hidden = false, machineOptions = {}, hostOptions = {}, isolated = root.crossOriginIsolated === true,
+    granted = () => !!ask.granted?.(), preview: Preview = root.SnowglobePreview } = {}) {
     const page = new URL("./", pageUrl);
     const abs = (u) => new URL(u, page).href;
     const scripts = {
@@ -103,15 +114,15 @@
     const down = (n) => Math.max(0, n - 1); // a count that a failure may already have reset
     // Upload lines typed ahead: 4 doubles how fast files go in (measured: 7 to 15 KiB/s), and
     // 4 lines stay under the guest terminal's 4 KiB buffer
-    const state = { transport, uploadWindow: 4 };
+    const state = { transport, uploadWindow: 4, preview: null };
 
     const machines = manifest.runtimes.map((r) => {
       const base = abs(r.base);
-      // CPUs per machine, as its site has them (the page lists one-CPU sites today)
+      // CPUs per machine, as its site has them (several need the page cross-origin isolated)
       const cpus = r.cpus ?? 1;
       const config = { build: r.build_id, memory: r.memory_mb, cpus, network: r.network === "fetch" ? "fetch" : "none" };
       const m = {
-        name: r.name, title: r.title, purpose: r.purpose, sample: r.sample, base,
+        name: r.name, title: r.title, purpose: r.purpose, sample: r.sample, base, cpus, network: r.network === "fetch",
         slot: new SaveSlot(new URL(r.name, page).pathname, config, r.title),
         host: null, job: null, xfers: 0, starting: 0, lastUsed: 0, tape: [], tapeBytes: 0,
         loading: null, memoryBytes: 0, inMemory: null, discard: false, error: null,
@@ -121,11 +132,20 @@
         blobsDown: null,
         // Its operations (a run's start, a copy's half), one at a time, in the order asked
         ops: Promise.resolve(),
-        busy() { return !!this.job || this.xfers > 0 || this.starting > 0; },
+        // Its ports the preview shows (open) or the previewed page reaches (linked): while there
+        // are any, it is busy, so never suspended
+        previews: new Map(),
+        // Preview requests under way, by port: a port is let go only once the last one is over
+        inflight: new Map(),
+        busy() { return !!this.job || this.xfers > 0 || this.starting > 0 || this.previews.size > 0; },
+        // Held by the preview: the scheduler counts the preview's machines as one
+        previewHeld() { return this.previews.size > 0; },
       };
       m.armless = {
         name: r.name,
-        wasm: abs(manifest.armless.wasm), memory_mb: r.memory_mb, cpus,
+        wasm: manifest.armless.wasm ? abs(manifest.armless.wasm) : undefined,
+        wasm_smp: manifest.armless.wasm_smp ? abs(manifest.armless.wasm_smp) : undefined,
+        memory_mb: r.memory_mb, cpus,
         filesystem: { json: "system/filesystem.json", baseurl: r.baseurl ?? "system/filesystem/" },
         initial_state: "system/state.bin.zst",
         warm: "system/warm.pack",
@@ -222,6 +242,9 @@
       m.memoryBytes = 0;
       m.loading = null;
       m.dirty = false; // nothing left to lose
+      // A preview of it is over (the page shows why); one that only reached it lets go
+      if (state.preview?.runtime === m.name) closePreview("failed");
+      m.previews.clear();
       scheduler.notify();
     }
 
@@ -310,7 +333,7 @@
       return {
         name: m.name, title: m.title, purpose: m.purpose, sample: m.sample,
         state: uiState(m),
-        doing: m.job ? `job ${m.job}` : m.xfers ? "copying a file" : null,
+        doing: m.job ? `job ${m.job}` : m.xfers ? "copying a file" : m.previews.size ? `serving the preview (port ${[...m.previews.keys()].join(", ")})` : null,
         saved: !!(m.slot.saved || m.inMemory),
         savedAt: m.slot.saved?.savedAt ?? null,
         storage: m.slot.error ? `not saving: ${m.slot.error}` : "this browser (IndexedDB)",
@@ -321,7 +344,20 @@
         unsaved: m.dirty && uiState(m) !== "asleep" && uiState(m) !== "failed",
         // Its files (the blob store) could not be reached: reads of files not yet fetched fail
         filesUnreachable: m.blobsDown ? `can't reach the machine's files (${m.blobsDown.url})` : null,
+        cpus: m.cpus,
+        // Why it can't run in this page, if it can't (several CPUs, not isolated)
+        unavailable: unavailable(m),
+        // The ports a preview holds it awake for
+        previewPorts: [...m.previews.keys()],
       };
+    }
+
+    function unavailable(m) {
+      if (m.cpus > 1 && !isolated) {
+        return `${m.name} runs on ${m.cpus} CPUs, which needs this page cross-origin isolated (SharedArrayBuffer), and it isn't: ` +
+          "reload the page so its service worker can make it so (a browser without service workers can't)";
+      }
+      return null;
     }
 
     /** The panel's view of a machine: as agent.js's status() has it. */
@@ -339,8 +375,10 @@
       return { state: "ready" };
     }
 
-    async function awake(m, signal) {
-      await scheduler.ensureAwake(m, { signal });
+    async function awake(m, signal, opts = {}) {
+      const why = unavailable(m);
+      if (why) throw new Error(why);
+      await scheduler.ensureAwake(m, { signal, ...opts });
       m.lastUsed = now();
     }
 
@@ -474,6 +512,149 @@
       }
     }
 
+    // ---------------------------------------------------------------- the preview
+
+    const previewUrl = (runtime, port, path) => Preview.previewUrl(page.href, runtime, port, path);
+
+    /** The preview, as the page and the tools see it (null when none is open). */
+    function previewView() {
+      const p = state.preview;
+      if (!p) return null;
+      return { runtime: p.runtime, port: p.port, path: p.path, url: previewUrl(p.runtime, p.port, p.path), base: previewUrl(p.runtime, p.port, "/"),
+        reaching: machines.filter((m) => m.previews.size).map((m) => ({ runtime: m.name, ports: [...m.previews.keys()] })) };
+    }
+
+    /** No preview: every machine it held let go (their idle clocks start again). */
+    function closePreview(why = "closed", source = "script") {
+      const was = state.preview;
+      state.preview = null;
+      for (const m of machines) {
+        if (!m.previews.size) continue;
+        m.previews.clear();
+        m.lastUsed = now();
+        if (m.lifecycle.state === "running") m.lifecycle.touch();
+      }
+      scheduler.notify();
+      changed();
+      if (was) tell({ kind: "preview", preview: null, why, source });
+      return true;
+    }
+
+    /** One GET through the bridge, for its status only: what open_preview says came back. The
+     *  connection is dropped once the head arrives (the body is never read). */
+    async function probe(m, port, path, signal) {
+      let head = null;
+      let error = null;
+      const stop = new AbortController();
+      const abort = () => stop.abort();
+      if (signal?.aborted) abort();
+      signal?.addEventListener?.("abort", abort);
+      try {
+        await Preview.serve((p) => m.host.tcpOpen(p), { runtime: m.name, port, method: "GET", path, headers: [["Accept", "text/html,*/*"]],
+          prefix: new URL(previewUrl(m.name, port, "/")).pathname.replace(/\/$/, ""), origin: page.origin },
+        (msg) => {
+          if (msg.type === "head") {
+            head = msg;
+            stop.abort();
+          }
+          if (msg.type === "error") error = msg;
+        }, { connectMs: 5000, answerMs: 30000, signal: stop.signal });
+      } finally {
+        signal?.removeEventListener?.("abort", abort);
+      }
+      if (head) return { status: head.status, statusText: head.statusText };
+      const detail = /<h1>([^<]*)<\/h1>\s*<p>([^<]*)<\/p>/.exec(error?.body ?? "");
+      return { status: error?.status ?? 502, error: detail ? `${detail[1]}: ${detail[2].replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&")}` : "no answer" };
+    }
+
+    /**
+     * Show a machine's web server in the page's preview: { runtime, port, path? }. Asks the person
+     * first (once per page load), wakes the machine, keeps it busy (never suspended) while the
+     * preview is open, and tries the address once: { url, base, runtime, port, path, status,
+     * statusText | error }. One preview at a time: an earlier one is closed.
+     */
+    async function openPreview(input, { source = "script", check = true, signal, waitMs = PREVIEW_WAIT_MS } = {}) {
+      if (!input || typeof input !== "object") throw new Error("openPreview: { runtime, port, path? }");
+      const m = get(input.runtime);
+      const port = Preview.checkPort(input.port);
+      const path = Preview.checkPath(input.path);
+      if (!m.network) throw new Error(`${m.name} has no network device, so its servers can't be reached: a preview needs a machine built with the network on`);
+      const why = unavailable(m);
+      if (why) throw new Error(why);
+      await ask();
+      if (state.preview) closePreview("replaced", source);
+      m.previews.set(port, "open");
+      state.preview = { runtime: m.name, port, path };
+      changed();
+      try {
+        await awake(m, signal, { waitMs, preview: true });
+      } catch (e) {
+        if (state.preview?.runtime === m.name && state.preview.port === port) closePreview("failed", source);
+        throw e;
+      }
+      const view = previewView();
+      const result = { ...view };
+      if (check) Object.assign(result, await probe(m, port, path, signal));
+      tell({ kind: "preview", preview: view, source, result });
+      return result;
+    }
+
+    /**
+     * A request the page's service worker passed on: { runtime, port, method, path, headers,
+     * body, prefix, origin }. Its answer goes to `send` as it comes (preview.js's serve()). Answered
+     * only while a preview is open and the person has allowed the page; a machine it reaches is
+     * woken if it must be, and held awake (linked) for as long as the preview stays open.
+     */
+    async function previewRequest(req, send, { signal, waitMs = PREVIEW_WAIT_MS } = {}) {
+      const refuse = (status, title, detail) => send({ type: "error", ...Preview.errorPage(status, title, detail, { back: page.href }) });
+      if (!state.preview) return refuse(403, "No preview is open", "This address shows a machine's server only while the agent page has a preview open: open one there (Open preview, or the open_preview tool).");
+      if (!granted()) return refuse(403, "Not allowed", "The person at the agent page hasn't allowed its machines to run yet.");
+      let m;
+      try { m = get(req.runtime); } catch (e) { return refuse(404, "No such machine", String(e?.message ?? e)); }
+      if (!m.network) return refuse(502, "The machine can't be reached", `${m.name} has no network device: nothing in it can be connected to.`);
+      // Held awake while the preview is open: a port is "linking" while requests to it are under
+      // way, "linked" (until the preview closes) once one of them was answered, and let go when
+      // the last one is over without an answer. Counted, so concurrent requests agree
+      const port = req.port;
+      m.inflight.set(port, (m.inflight.get(port) ?? 0) + 1);
+      if (!m.previews.has(port)) {
+        m.previews.set(port, "linking");
+        changed();
+      }
+      let answered = false;
+      try {
+        try {
+          await awake(m, signal, { waitMs, preview: true });
+        } catch (e) {
+          if (e?.name === "AbortError") return refuse(499, "Cancelled", "the page that asked for it went away");
+          if (e?.name === "TimeoutError") return refuse(503, "No machine slot free", `${String(e?.message ?? e)}.`);
+          return refuse(503, `${m.name} is not running`, String(e?.message ?? e));
+        }
+        if (!m.host) return refuse(503, `${m.name} is not running`, "it was put away");
+        m.lastUsed = now();
+        m.lifecycle.touch();
+        if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) m.dirty = true;
+        const host = m.host;
+        await Preview.serve((p) => host.tcpOpen(p), { ...req, runtime: m.name }, (msg, transfer) => {
+          if (msg.type === "head") {
+            answered = true;
+            if (m.previews.get(port) === "linking") m.previews.set(port, "linked");
+          }
+          send(msg, transfer);
+        }, { signal });
+      } finally {
+        const left = (m.inflight.get(port) ?? 1) - 1;
+        if (left > 0) m.inflight.set(port, left);
+        else m.inflight.delete(port);
+        if (left <= 0 && m.previews.get(port) === "linking") {
+          m.previews.delete(port);
+          m.lastUsed = now();
+          scheduler.notify();
+          changed();
+        }
+      }
+    }
+
     /** Back to the snapshot: its save deleted, and (if awake) the machine ended without a save.
      *  Always asks the person at the page first (confirmFresh), whoever calls it. */
     async function startFresh(runtime) {
@@ -514,7 +695,10 @@
           reason: machines.length ? null : "no runtimes",
           maxConcurrentJobsPerRuntime: 1,
           maxCopyBytes: root.SnowglobeTransfer?.limits.MAX_BYTES ?? 8 << 20,
-          features: ["listRuntimes", "runCommand", "readJob", "cancelJob", "copyFile", "suspend", "wake", "startFresh", "setAwakeLimit"],
+          features: ["listRuntimes", "runCommand", "readJob", "cancelJob", "copyFile", "suspend", "wake", "startFresh", "setAwakeLimit", "openPreview", "closePreview"],
+          crossOriginIsolated: isolated,
+          previewBase: new URL(Preview?.PREFIX ?? "preview/", page).href,
+          preview: previewView(),
           workingDirectory: "/root",
           suspendsAfterIdleSeconds: Math.round(root.SnowglobeMachine.defaults.IDLE_MS / 1000),
           suspendsAfterHiddenSeconds: Math.round(root.SnowglobeMachine.defaults.HIDDEN_MS / 1000),
@@ -541,6 +725,10 @@
         return true;
       },
       startFresh,
+      openPreview,
+      async closePreview(opts) { return closePreview("closed", opts?.source); },
+      async preview() { return previewView(); },
+      previewRequest,
       /** How many machines may be awake at once, 1 to 8, for this page load (2 until changed). It
        *  runs nothing, so it asks no one. Lower than what is awake: idle machines are suspended, least
        *  recently used first; busy ones once they finish (capabilities().overLimit says so meanwhile).
@@ -551,7 +739,7 @@
         changed();
         // A trim waits its turn behind wakes under way: not for ever
         let timer;
-        await Promise.race([trimmed, new Promise((r) => { timer = setTimeout(r, 20000); })]);
+        await Promise.race([trimmed, new Promise((r) => { timer = setTimeout(r, 20000); timer?.unref?.(); })]);
         clearTimeout(timer);
         changed();
         return { awakeLimit: scheduler.budget, awake: scheduler.awake().length, overLimit: scheduler.over };

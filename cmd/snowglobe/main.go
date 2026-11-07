@@ -55,9 +55,9 @@ Usage:
   snowglobe pwa <dir> [--name N] [--short-name N]     make a built site an installable app that works
                                                      offline once it has run (manifest, icons,
                                                      service worker)
-  snowglobe agent-pages <dir>                        put every one-CPU --agent site under dir on
-                                                     the agent page, dir/agent/ (runtimes.json and
-                                                     its scripts; after pool and pwa)
+  snowglobe agent-pages <dir>                        put every --agent site under dir on the agent
+                                                     page, dir/agent/ (runtimes.json, its scripts
+                                                     and service worker; after pool and pwa)
   snowglobe pack <dir> [-o site.tar.gz]              pack a built site into one tarball (.tar.gz,
                                                      .tar.zst) to publish on a CDN
   snowglobe bundle <dir | url> [-o FILE]             make the site one executable that runs it with
@@ -242,9 +242,10 @@ Build flags:
                   every runtime in one page, each machine in a Web Worker): agents run
                   commands in it and copy files between machines, by its form,
                   window.snowglobeAgent and WebMCP tools (list_runtimes, run_command,
-                  job_status, cancel_job, copy_file). Its page links there. Labels
-                  snowglobe.agent-purpose and snowglobe.agent-sample describe it there.
-                  One-CPU sites only; off by default
+                  job_status, cancel_job, copy_file, open_preview). Its page links there.
+                  Labels snowglobe.agent-purpose and snowglobe.agent-sample describe it
+                  there. On several CPUs, the agent page is cross-origin isolated for it
+                  (its service worker); off by default
   --agent-exposed-to ORIGIN
                   also share the WebMCP tools with this origin (https://host); repeatable.
                   Default: none, only the page's own
@@ -646,7 +647,7 @@ func runAgentPages(args []string) error {
 		return err
 	}
 	if len(runtimes) == 0 {
-		return fmt.Errorf("no one-CPU site built with --agent under %s", args[0])
+		return fmt.Errorf("no site built with --agent under %s", args[0])
 	}
 	for _, r := range runtimes {
 		fmt.Printf("%s/%s/ runs %s (%s)\n", args[0], site.AgentDir, r.Name, r.Title)

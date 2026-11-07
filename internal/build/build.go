@@ -546,7 +546,8 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		s.Warm = re
 	}
 
-	// Agent jobs: opt-in, and only for a one-CPU site (several CPUs: the page says why it has none)
+	// Agent jobs: opt-in (on several CPUs, they need a cross-origin isolated page, which the agent
+	// page and the site's own are)
 	s.Agent = o.Agent
 	if !s.Agent && label("agent") != "" {
 		b, err := strconv.ParseBool(label("agent"))

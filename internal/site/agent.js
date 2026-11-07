@@ -472,7 +472,8 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
 
   /**
    * The controller over a page's machine. `machine` is { emulator, cpus, network, buildId,
-   * version, state(): "loading" | "ready" | "error" | "stopped", saving(): boolean }.
+   * version, state(): "loading" | "ready" | "error" | "stopped", saving(): boolean, isolated? (a
+   * cross-origin isolated page or worker: crossOriginIsolated when not given) }.
    */
   class Controller {
     constructor(machine, { now = () => Date.now(), timers = root } = {}) {
@@ -506,12 +507,23 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
       });
     }
 
+    /** One CPU always; several where they can run: a cross-origin isolated page or worker (they
+     *  share memory, SharedArrayBuffer, which browsers allow only there). */
     supported() {
-      return this.m.cpus === 1;
+      if (this.m.cpus === 1) return true;
+      return this.m.cpus > 1 && this._isolated();
+    }
+
+    _isolated() {
+      return this.m.isolated ?? (root.crossOriginIsolated === true);
     }
 
     _unsupportedReason() {
-      return `agent jobs need a one-CPU site; this one has ${this.m.cpus} CPUs`;
+      if (this.m.cpus > 1) {
+        return `agent jobs on ${this.m.cpus} CPUs need a cross-origin isolated page (SharedArrayBuffer), and this one isn't: ` +
+          "reload it once its service worker is in control, or use a browser with service workers";
+      }
+      return `agent jobs need one CPU or more; this site has ${this.m.cpus}`;
     }
 
     capabilities() {
