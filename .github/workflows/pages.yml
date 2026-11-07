@@ -241,6 +241,8 @@ jobs:
           case "$SRC" in
             iex|elixir) commands='IO.puts("snowglobe-#{6 * 7}")'; expect=snowglobe-42 ;;
             python)     commands='print(f"snowglobe-{6 * 7}")'; expect=snowglobe-42 ;;
+            # pip install of a wheel from PyPI, through the guest's network (the agent page's python)
+            python-agent) commands=$'import subprocess; subprocess.run(["pip", "install", "-q", "click"], check=True)\nimport click; print(f"pip-{6 * 7}-{click.__name__}")'; expect=pip-42-click ;;
             typescript) commands='console.log("snowglobe-" + 6 * 7)'; expect=snowglobe-42 ;;
             duckdb)     commands='select '"'"'snowglobe-'"'"' || 6 * 7;'; expect=snowglobe-42 ;;
             # The React app built with Vite in the machine, offline (its packages are in the image);

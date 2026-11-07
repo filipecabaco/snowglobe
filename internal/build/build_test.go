@@ -143,6 +143,18 @@ func TestResolveAgentIsOptIn(t *testing.T) {
 	if s, err := Resolve(Options{}, image(map[string]string{"snowglobe.agent": "true", "snowglobe.agent-watch": "/root/app"}, "sh")); err != nil || s.AgentWatch != "/root/app" {
 		t.Errorf("agent-watch: %q, %v", s.AgentWatch, err)
 	}
+	// agent-name: the machine's name on the agent page; a plain name, and only for an agent site
+	if s, err := Resolve(Options{}, image(map[string]string{"snowglobe.agent": "true", "snowglobe.agent-name": "python"}, "sh")); err != nil || s.AgentName != "python" || Page(s, "v1").Agent != true {
+		t.Errorf("agent-name: %q, %v", s.AgentName, err)
+	}
+	for _, bad := range []string{"Py", "a/b", "../x", "-x"} {
+		if _, err := Resolve(Options{}, image(map[string]string{"snowglobe.agent": "true", "snowglobe.agent-name": bad}, "sh")); err == nil {
+			t.Errorf("agent-name %q accepted", bad)
+		}
+	}
+	if _, err := Resolve(Options{}, image(map[string]string{"snowglobe.agent-name": "python"}, "sh")); err == nil {
+		t.Errorf("agent-name without agent accepted")
+	}
 	for _, bad := range []string{"app", "/root/a\npp"} {
 		if _, err := Resolve(Options{}, image(map[string]string{"snowglobe.agent": "true", "snowglobe.agent-watch": bad}, "sh")); err == nil {
 			t.Errorf("agent-watch %q accepted", bad)

@@ -158,6 +158,7 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 			Network  string `json:"network"`
 			CPUs     int    `json:"cpus"`
 			Agent    *struct {
+				Name      string   `json:"name"`
 				Purpose   string   `json:"purpose"`
 				Sample    string   `json:"sample"`
 				Watch     string   `json:"watch"`
@@ -173,9 +174,24 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 		if !siteName.MatchString(e.Name()) {
 			return nil, fmt.Errorf("%s: an agent site's directory name must be lowercase letters, digits, . _ or -", dir)
 		}
+		// The machine's name on the page: its site's directory name, unless the site says otherwise
+		// (label snowglobe.agent-name: a site built for the agent page, with a network the same
+		// image's own page doesn't have, is still "python" there)
+		name := e.Name()
+		if run.Agent.Name != "" {
+			name = run.Agent.Name
+			if !siteName.MatchString(name) {
+				return nil, fmt.Errorf("%s: an agent name must be lowercase letters, digits, . _ or -", dir)
+			}
+		}
+		for _, other := range all {
+			if other.Name == name {
+				return nil, fmt.Errorf("%s: another site of the agent page is already called %q", dir, name)
+			}
+		}
 		// Its redirect stub goes at agent/<name>/: never over one of the page's own files
-		if pageFile(e.Name()) {
-			return nil, fmt.Errorf("%s: a site named %q would collide with the agent page's own %s", dir, e.Name(), e.Name())
+		if pageFile(name) {
+			return nil, fmt.Errorf("%s: a machine named %q would collide with the agent page's own %s", dir, name, name)
 		}
 		page, err := os.ReadFile(filepath.Join(dir, "index.html"))
 		if err != nil {
@@ -201,11 +217,11 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 				return nil, fmt.Errorf("%s/%s differs from %s's: the agent page's machines must be built by the same snowglobe", dir, f, from)
 			}
 		}
-		if err := notALink(filepath.Join(agentRoot, e.Name())); err != nil {
+		if err := notALink(filepath.Join(agentRoot, name)); err != nil {
 			return nil, err
 		}
 		all = append(all, found{Runtime: Runtime{
-			Name: e.Name(), Title: run.Title, Purpose: run.Agent.Purpose, Sample: run.Agent.Sample, Watch: run.Agent.Watch,
+			Name: name, Title: run.Title, Purpose: run.Agent.Purpose, Sample: run.Agent.Sample, Watch: run.Agent.Watch,
 			Base: "../" + e.Name() + "/", BaseURL: string(m[1]), BuildID: buildID, MemoryMB: run.MemoryMB, CPUs: run.CPUs, Network: run.Network,
 		}, dir: dir, source: run.Source, exposedTo: run.Agent.ExposedTo})
 	}

@@ -85,7 +85,10 @@ snowglobe stop tpl</pre>
             <code>snowglobe.agent-purpose</code> (what the machine is good for, in a line) and
             <code>snowglobe.agent-sample</code> (a command to try) describe it on the page, and
             <code>snowglobe.agent-watch</code> (a project directory, such as <code>/root/app</code>) has the page show
-            which files in it each command changed, with their diffs.</p>
+            which files in it each command changed, with their diffs. <code>snowglobe.agent-name</code> names the machine on the page
+            when its directory has another name: the page's Python is built from <code>examples/python-agent</code> (a
+            network, for <code>pip install</code>) and is still <code>python</code>, while <code>examples/python</code> is the
+            page for people, with no network.</p>
           <pre>snowglobe build examples/duckdb --agent --out dist/duckdb
 snowglobe pool dist; snowglobe pwa dist/duckdb
 snowglobe agent-pages dist      # dist/agent/runtimes.json, the page's scripts and service worker</pre>
@@ -100,7 +103,7 @@ snowglobe agent-pages dist      # dist/agent/runtimes.json, the page's scripts a
 python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the exit status and output.</pre>
           <p>Each machine runs in a Web Worker of its own, so several run on several cores and the page stays
             responsive. The page is for agents that build and compute: Supabase (on two CPUs) and a React app on it,
-            built with Vite and rebuilt as it changes, and Python with numpy and pandas, DuckDB for analytics and PostgreSQL for databases;
+            built with Vite and rebuilt as it changes, and Python with numpy and pandas (and <code>pip install</code>, which fetches wheels from PyPI through your browser), DuckDB for analytics and PostgreSQL for databases;
             the other runs are on the landing page, for people. A machine starts lazily, on its first command. Each one
             awake holds 540 to 740 MB, so only a few are awake at once: two unless the
             field <strong>Machines awake at once</strong>, the tool <code>set_awake_limit</code> or
