@@ -43,7 +43,7 @@ test('the wrapper reports what a command added, changed and deleted, and measure
     let out;
     let status = 0;
     try {
-      out = execFileSync('sh', ['-c', w.command], { cwd: tmp, env: { ...process.env, EXCLAVE_WORKSPACE: ws }, encoding: 'utf8' });
+      out = execFileSync('sh', ['-c', w.command], { cwd: tmp, env: { ...process.env, EXCLAVE_WORKSPACE: ws, LC_ALL: 'C' }, encoding: 'utf8' });
     } catch (e) {
       out = e.stdout;
       status = e.status;
@@ -54,8 +54,8 @@ test('the wrapper reports what a command added, changed and deleted, and measure
   assert.equal(a.status, 4);
   assert.equal(a.output, 'done\n');
   assert.deepEqual(a.changes.files.map((f) => [f.status, f.path, f.added, f.removed]),
-    [['deleted', 'gone.txt', 0, 1], ['added', 'src/a b.txt', 1, 0], ['modified', 'src/App.jsx', 1, 1]]);
-  assert.match(a.changes.files[2].diff, /^@@ .* @@\n one\n-two\n\+TWO\n three\n$/);
+    [['deleted', 'gone.txt', 0, 1], ['modified', 'src/App.jsx', 1, 1], ['added', 'src/a b.txt', 1, 0]]); // C order, as the guest sorts
+  assert.match(a.changes.files[1].diff, /^@@ .* @@\n one\n-two\n\+TWO\n three\n$/);
   // Measured from the last report: nothing changed since
   const b = run('echo again', 1);
   assert.deepEqual([b.status, b.output, b.changes.files.length], [0, 'again\n', 0]);
