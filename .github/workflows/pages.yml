@@ -32,9 +32,12 @@ permissions:
   pages: write
   id-token: write
 
-# A newer push to a pull request replaces its run; main's runs (and deploys) queue
+# A newer push to a pull request replaces its run; main's runs (and deploys) queue. A release's
+# checks (release.yml, release: true) queue on their own: a change to VERSION on main starts both
+# this workflow and release.yml for the same ref, and a group keeps only one run waiting, so
+# sharing it would cancel main's run (and its deploy)
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ inputs.release && '-release' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
