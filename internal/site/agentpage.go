@@ -45,6 +45,8 @@ var (
 	agentPageJS []byte
 	//go:embed preview.js
 	previewJS []byte
+	//go:embed builder.js
+	builderJS []byte
 	// The page's service worker: cross-origin isolation (machines on several CPUs) and the preview
 	//go:embed agent-sw.js
 	agentSW []byte
@@ -56,7 +58,7 @@ func AgentScripts() map[string][]byte {
 		"agent.js": agentJS, "agent-webmcp.js": agentWebMCPJS, "agent-panel.js": agentPanelJS, "machine.js": machineJS,
 		"machine-worker.js": machineWorkerJS, "transfer.js": transferJS, "scheduler.js": schedulerJS,
 		"orchestrator.js": orchestratorJS, "agent-page.js": agentPageJS, "sessions.js": sessionsJS,
-		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "sw.js": agentSW,
+		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "builder.js": builderJS, "sw.js": agentSW,
 	}
 }
 
@@ -67,8 +69,9 @@ type Runtime struct {
 	Title    string `json:"title"`
 	Purpose  string `json:"purpose"`
 	Sample   string `json:"sample"`
-	Base     string `json:"base"`    // the site's directory: ../<name>/
-	BaseURL  string `json:"baseurl"` // where its files' blobs are: relative to Base, or absolute
+	Watch    string `json:"watch,omitempty"` // a project directory: the page shows what each command changed in it
+	Base     string `json:"base"`            // the site's directory: ../<name>/
+	BaseURL  string `json:"baseurl"`         // where its files' blobs are: relative to Base, or absolute
 	BuildID  string `json:"build_id"`
 	MemoryMB int    `json:"memory_mb"`
 	CPUs     int    `json:"cpus"` // more than one: the page must be cross-origin isolated (its sw.js)
@@ -157,6 +160,7 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 			Agent    *struct {
 				Purpose   string   `json:"purpose"`
 				Sample    string   `json:"sample"`
+				Watch     string   `json:"watch"`
 				ExposedTo []string `json:"exposed_to"`
 			} `json:"agent"`
 		}
@@ -201,7 +205,7 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 			return nil, err
 		}
 		all = append(all, found{Runtime: Runtime{
-			Name: e.Name(), Title: run.Title, Purpose: run.Agent.Purpose, Sample: run.Agent.Sample,
+			Name: e.Name(), Title: run.Title, Purpose: run.Agent.Purpose, Sample: run.Agent.Sample, Watch: run.Agent.Watch,
 			Base: "../" + e.Name() + "/", BaseURL: string(m[1]), BuildID: buildID, MemoryMB: run.MemoryMB, CPUs: run.CPUs, Network: run.Network,
 		}, dir: dir, source: run.Source, exposedTo: run.Agent.ExposedTo})
 	}

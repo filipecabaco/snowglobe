@@ -242,10 +242,11 @@ Build flags:
                   every runtime in one page, each machine in a Web Worker): agents run
                   commands in it and copy files between machines, by its form,
                   window.snowglobeAgent and WebMCP tools (list_runtimes, run_command,
-                  job_status, cancel_job, copy_file, open_preview). Its page links there.
-                  Labels snowglobe.agent-purpose and snowglobe.agent-sample describe it
-                  there. On several CPUs, the agent page is cross-origin isolated for it
-                  (its service worker); off by default
+                  job_status, cancel_job, write_file, copy_file, open_preview). Its page
+                  links there. Labels snowglobe.agent-purpose and snowglobe.agent-sample
+                  describe it there; snowglobe.agent-watch=DIR has the page show the files
+                  each command changed in DIR, with diffs. On several CPUs, the agent page
+                  is cross-origin isolated for it (its service worker); off by default
   --agent-exposed-to ORIGIN
                   also share the WebMCP tools with this origin (https://host); repeatable.
                   Default: none, only the page's own

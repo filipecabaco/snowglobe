@@ -243,11 +243,11 @@ jobs:
             python)     commands='print(f"snowglobe-{6 * 7}")'; expect=snowglobe-42 ;;
             typescript) commands='console.log("snowglobe-" + 6 * 7)'; expect=snowglobe-42 ;;
             duckdb)     commands='select '"'"'snowglobe-'"'"' || 6 * 7;'; expect=snowglobe-42 ;;
-            # A page built with Vite in the machine, offline (its packages are in the image), and
-            # served on the machine's network address. Node's first start in the machine is slow, so
-            # the request retries until the server answers rather than after a fixed sleep
-            web)        commands=$'cd /root/app && npm run build >/dev/null && echo "built-$((6 * 7))"\n(serve dist 4173 >/dev/null 2>&1 &); for i in $(seq 30); do wget -qO- http://127.0.0.1:4173/ 2>/dev/null | grep -o "<main id=.app.>" && break; sleep 2; done'
-                        expect=$'built-42\n<main id="app">' ;;
+            # The React app built with Vite in the machine, offline (its packages are in the image);
+            # served from boot on the machine's network address by serve --watch, which builds it
+            # again after a change and says so at /__build
+            web)        commands=$'cd /root/app && npm run build >/dev/null && echo "built-$((6 * 7))"\nfor i in $(seq 30); do wget -qO- http://127.0.0.1:4173/ 2>/dev/null | grep -o "<div id=.root.>" && break; sleep 2; done\nsed -i "s|<h1>Notes</h1>|<h1>Rebuilt</h1>|" src/App.jsx; for i in $(seq 60); do v=$(wget -qO- http://127.0.0.1:4173/__build); case "$v" in *\'"version":0,\'*|*\'"version":1,\'*) sleep 1 ;; *\'"state":"ok"\'*) echo "rebuilt-$((6 * 7))"; break ;; *) sleep 1 ;; esac; done'
+                        expect=$'built-42\n<div id="root">\nrebuilt-42' ;;
             java)       commands='System.out.println("snowglobe-" + 6 * 7)'; expect=snowglobe-42 ;;
             postgres)   commands="SELECT 'snowglobe-' || 6 * 7;"; expect=snowglobe-42 ;;
             rust)       commands='echo snowglobe-$((6 * 7))'; expect=snowglobe-42 ;;

@@ -6,11 +6,11 @@
   <title>Machines for agents · snowglobe</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/agent/">
   <link rel="alternate" type="text/plain" href="../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="Linux machines for agents, all in one browser tab: Supabase, Node with Vite, Python with numpy and pandas, DuckDB and PostgreSQL. Run shell commands in any of them, copy files between them, and see the web app they build in the page. No server.">
+  <meta name="description" content="Linux machines for agents, all in one browser tab: Supabase, a React app built with Vite, Python with numpy and pandas, DuckDB and PostgreSQL. Run shell commands in any of them, copy files between them, and see the web app they build in the page, rebuilt as they change it. No server.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="Machines for agents · snowglobe">
-  <meta property="og:description" content="Supabase, Node with Vite, Python, DuckDB and PostgreSQL in one page: an agent builds a web app on Supabase and you see it live, beside the machines. They run in your browser tab.">
+  <meta property="og:description" content="Supabase, a React app, Python, DuckDB and PostgreSQL in one page: an agent changes a web app on Supabase and you see it rebuilt live, beside what it changed. They run in your browser tab.">
   <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/agent/">
   <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
@@ -138,6 +138,44 @@
     #preview-frame { display: block; width: 100%; height: min(70vh, 640px); min-height: 360px; border: 0; background: #fff; }
     #preview-note { margin: 0 0 24px; overflow-wrap: anywhere; }
 
+    /* What the agent changed: a feed of commands, the files each changed (diffs in the page's one
+       dark surface, with the terminal's own red and green), and the rebuilds */
+    #builder { border-top: 1px solid var(--rule); padding-bottom: 24px; }
+    .builder-h { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 20px; }
+    .builder-ctl { display: flex; align-items: center; gap: 16px; }
+    .builder-ctl label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+    .builder-ctl select { width: auto; height: 36px; font-size: 14px; }
+    #builder-status { margin: 0 0 4px; font-size: 15px; overflow-wrap: anywhere; }
+    #builder .actions { margin: 6px 0 14px; }
+    #builder .ap-empty { margin: 0 0 12px; }
+    .feed { list-style: none; margin: 0; padding: 0; max-height: min(85vh, 960px); overflow: auto; }
+    .ev { padding: 10px 0 12px; border-top: 1px solid var(--rule); }
+    .ev-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 14px; }
+    .ev-head .run-time { margin-left: auto; }
+    .ev-cmd { display: block; margin-top: 6px; max-height: 7.5em; overflow: auto; font: 14px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .ev-text { margin: 6px 0 0; font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
+    .ev[data-kind="note"] .ev-text { color: var(--ink); font-size: 15px; }
+    .ev-files .ev-text { color: var(--ink); }
+    .files { list-style: none; margin: 4px 0 0; padding: 0; }
+    .files summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 4px 0; cursor: pointer; font: 14px/1.4 var(--mono); }
+    .files summary::marker { color: var(--ink-2); }
+    .files .st { font: 550 12px var(--sans); color: var(--ink-2); }
+    .files .st[data-status="added"] { color: var(--ink); }
+    .files .path { overflow-wrap: anywhere; }
+    .files .counts { color: var(--ink-2); }
+    .diff { margin: 4px 0 8px; padding: 10px 12px; max-height: 24em; overflow: auto; white-space: pre; background: var(--panel); color: var(--panel-ink);
+      box-shadow: 0 0 0 1px var(--panel-edge); border-radius: 6px; font: 13px/1.5 var(--mono); }
+    .diff .dl[data-kind="add"] { color: #7fd18b; }
+    .diff .dl[data-kind="del"] { color: #ff6b4a; }
+    .diff .dl[data-kind="hunk"], .diff .dl[data-kind="note"] { color: #8d8d88; }
+    .ev-error { white-space: pre-wrap; overflow-wrap: anywhere; }
+    /* Wide: the page an agent builds and what it changed, side by side */
+    @media (min-width: 1360px) {
+      .studio.open { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 24px; align-items: start; }
+      .studio.open #builder { border-top: 0; }
+      .studio.open .feed { max-height: min(70vh, 640px); }
+    }
+
     .note { margin-top: 64px; padding-top: 16px; border-top: 1px solid var(--ink); display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 16px 48px; }
     .note p { margin: 0; color: var(--ink-2); font-size: 16px; max-width: 40em; }
 
@@ -185,9 +223,9 @@
       <section class="intro" aria-labelledby="title">
         <div>
           <h1 id="title">Machines for agents</h1>
-          <p class="lede">Linux machines for agents, in this browser tab: Supabase and a Node machine with Vite to build
-            web apps, which you see live in the preview below, and Python, DuckDB and PostgreSQL for work that needs
-            compute. Run a shell command in any of them, copy files from one to another, and open a machine's web server
+          <p class="lede">Linux machines for agents, in this browser tab: Supabase and a React app on it, which you see
+            live in the preview below, rebuilt after every change an agent makes, beside what it changed; and Python,
+            DuckDB and PostgreSQL for work that needs compute. Run a shell command in any of them, copy files from one to another, and open a machine's web server
             here. A machine starts on its first command; only a few stay awake at once, and the rest sleep with their files
             saved.</p>
         </div>
@@ -204,7 +242,7 @@
           <ul class="machines" id="machines" aria-label="Machines">
             <!-- Until the page has read runtimes.json (or without JavaScript): what it runs -->
             <li class="machine"><span class="pick">Supabase</span><p class="purpose">Supabase for web app building: Postgres, Auth and the Data API, with a preview</p></li>
-            <li class="machine"><span class="pick">Node + Vite</span><p class="purpose">Build and serve web pages: Node with Vite and esbuild</p></li>
+            <li class="machine"><span class="pick">React + Vite</span><p class="purpose">Build web apps: a React app on Supabase, rebuilt and served on port 4173 as it changes (Vite, Node)</p></li>
             <li class="machine"><span class="pick">Python + Rich</span><p class="purpose">Run Python: scripts, numpy and pandas for data work.</p></li>
             <li class="machine"><span class="pick">DuckDB</span><p class="purpose">DuckDB for analytics: SQL over CSV, Parquet and JSON files.</p></li>
             <li class="machine"><span class="pick">PostgreSQL</span><p class="purpose">PostgreSQL for database work: load CSV files and query them with psql.</p></li>
@@ -252,15 +290,38 @@
                 <button id="preview-close" data-part="close-preview" type="button" disabled>Close preview</button>
               </div>
             </form>
-            <div id="preview-panel" hidden>
-              <div class="pbar">
-                <input id="preview-address" type="text" aria-label="Address in the preview" autocomplete="off" spellcheck="false">
-                <button id="preview-reload" type="button">Reload</button>
-                <a id="preview-tab" href="./" target="_blank" rel="noopener">New tab</a>
+            <div class="studio" id="studio">
+              <div class="studio-preview">
+                <div id="preview-panel" hidden>
+                  <div class="pbar">
+                    <input id="preview-address" type="text" aria-label="Address in the preview" autocomplete="off" spellcheck="false">
+                    <button id="preview-reload" type="button">Reload</button>
+                    <a id="preview-tab" href="./" target="_blank" rel="noopener">New tab</a>
+                  </div>
+                  <iframe id="preview-frame" title="Preview of a machine's web server"></iframe>
+                </div>
+                <p class="hint" id="preview-note">No preview is open. A server in a machine must listen on 0.0.0.0 to be seen here.</p>
               </div>
-              <iframe id="preview-frame" title="Preview of a machine's web server"></iframe>
+
+              <!-- What agents do and change, beside the page they build (builder.js) -->
+              <section id="builder" aria-labelledby="builder-title">
+                <div class="builder-h">
+                  <h3 class="zone-h" id="builder-title">What the agent changed</h3>
+                  <div class="builder-ctl">
+                    <label for="feed-filter">Show<select id="feed-filter" name="feedFilter"><option value="">All machines</option></select></label>
+                    <button class="link" id="feed-clear" type="button" aria-label="Clear the activity list">Clear</button>
+                  </div>
+                </div>
+                <p id="builder-status">Every command in every machine shows here, newest first, with the files it changed in web's app.
+                  web rebuilds its app on each change, and the preview reloads with it.</p>
+                <div class="actions">
+                  <button id="demo-play" type="button">Watch an agent build</button>
+                  <button id="demo-stop" type="button" hidden>Stop the walkthrough</button>
+                </div>
+                <p class="ap-empty" id="feed-empty">Nothing has run yet.</p>
+                <ol class="feed" id="feed" aria-label="Agent activity, newest first"></ol>
+              </section>
             </div>
-            <p class="hint" id="preview-note">No preview is open. A server in a machine must listen on 0.0.0.0 to be seen here.</p>
           </section>
 
           <section id="copy" aria-labelledby="copy-title">
@@ -303,7 +364,7 @@
           page loses what an awake one did since its last suspend, and the browser asks first. Start fresh goes back to
           the machine as built. The page needs the network: it doesn't work offline.</p>
         <p>Browsers with WebMCP get the tools <code>list_runtimes</code>, <code>run_command</code>, <code>job_status</code>,
-          <code>cancel_job</code>, <code>copy_file</code>, <code>open_preview</code>, <code>close_preview</code> and
+          <code>cancel_job</code>, <code>write_file</code>, <code>copy_file</code>, <code>open_preview</code>, <code>close_preview</code> and
           <code>set_awake_limit</code>; scripts in the page get <code>window.snowglobeAgent</code>. Every run, copy and
           preview asks the person at this page first, once per page load, and the page refuses to run inside another
           page's frame. A preview is this site's page: what the machine serves runs here as one.
@@ -327,6 +388,7 @@
   <script src="machine-core.js"></script>
   <script src="machine-host.js"></script>
   <script src="preview.js"></script>
+  <script src="builder.js"></script>
   <script src="scheduler.js"></script>
   <script src="orchestrator.js"></script>
   <script src="agent-page.js"></script>
