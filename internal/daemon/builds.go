@@ -15,6 +15,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/filipecabaco/snowglobe/internal/lifeline"
 )
 
 // BuildRequest asks the daemon to build a site and make it a template: from a directory on this
@@ -253,9 +255,13 @@ func (s *Server) runBuild(b *Build) {
 		cmd.Stdout, cmd.Stderr = log, log
 		// Its log is read as text, by people and agents: no colour codes in it
 		cmd.Env = append(os.Environ(), "NO_COLOR=1", "TERM=dumb")
-		// Its own process group: a cancel stops what it started too
+		// Its own process group: a cancel, or the daemon stopping, stops what it started too
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		err = cmd.Start()
+		// And it ends with the daemon, however that ends (its snapshot with it, by a lifeline of
+		// its own)
+		if err = lifeline.Pass(cmd); err == nil {
+			err = cmd.Start()
+		}
 	}
 	if err == nil {
 		s.builds.procs[b.ID] = cmd.Process
@@ -271,7 +277,8 @@ func (s *Server) runBuild(b *Build) {
 
 	s.builds.mu.Lock()
 	delete(s.builds.procs, b.ID)
-	cancelled := b.Status == "cancelled"
+	// Cancelled, or interrupted by the daemon stopping (stopAll): it says so already
+	cancelled := b.Status == "cancelled" || b.Status == "interrupted"
 	s.builds.mu.Unlock()
 	if !cancelled && err == nil && !b.noTemplate {
 		if _, terr := s.AddTemplate(AddTemplate{Site: b.Site, Name: b.Name}); terr != nil {

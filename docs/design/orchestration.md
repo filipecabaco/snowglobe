@@ -43,11 +43,21 @@ A fork shares the template's memory copy-on-write: ~20 ms and ~15 MB a machine o
 One process per host (`snowglobe daemon`) keeps templates, machines, snapshots and services in
 `state.json` under the user cache (`$SNOWGLOBE_DAEMON_DIR`), and serves the API on a 0600 Unix
 socket there, and over TCP to requests bearing a token (`--listen ADDR --token-file F`). Template
-servers run in sessions of their own, so templates and machines outlive the daemon: one started
-again takes back what still runs (ports included), and forgets what stopped.
+servers run in sessions of their own (a process group with their machines), and nothing the
+daemon starts outlives it. Stopped (SIGINT, SIGTERM, `snowglobe daemon stop`, `POST
+/v1/shutdown`), it saves the replicas of services that keep their state, interrupts its builds,
+and stops every server's and build's process group: SIGTERM, up to 5 s (a second interrupt skips the wait), then SIGKILL; their
+sockets go and `state.json` says nothing runs. Killed outright (a crash, `kill -9`, the OOM
+killer), it can't: each `snowglobe-vm` it starts inherits a lifeline, the read end of a pipe whose
+only write end the daemon holds (`SNOWGLOBE_LIFELINE` names it), and stops when it reads
+end-of-file; a fork server makes one of its own for its machines and jobs, so they end with it;
+a build's `snowglobe build` passes one on to its `snowglobe-vm snapshot`. Started again, a daemon
+takes nothing back: it starts its templates again from their sites (those asleep stay asleep),
+holds its services' ports and starts their replicas (to their minimum), and forgets machines.
 
 ```
 GET    /v1/health
+POST   /v1/shutdown                  stop it and what it started (answered once they have)
 GET    /v1/templates                 POST /v1/templates {site, name?, max_machines?, snapshot?}
 DELETE /v1/templates/{t}             (its machines too; refused while a service runs on it)
 POST   /v1/templates/{t}/jobs        a job on a fresh fork

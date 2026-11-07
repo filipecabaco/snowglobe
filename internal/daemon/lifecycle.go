@@ -176,7 +176,7 @@ func (s *Server) lifecycle() {
 		s.life.mu.Lock()
 		last, seen := s.life.lastUsed[t.Name]
 		if !seen {
-			// Taken back by a daemon started again, or never used: idle from now
+			// Started again with the daemon, or never used: idle from now
 			s.life.lastUsed[t.Name] = now
 			last = now
 		}

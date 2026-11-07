@@ -4,8 +4,10 @@
 // token when asked). Machines' ports are forwarded by the daemon itself: a forked machine's
 // sandbox binds no TCP port, so each connection goes in through its control socket.
 //
-// The daemon's state is written to state.json as it changes; a daemon that restarts takes back the
-// templates and machines that are still running.
+// The daemon's state is written to state.json as it changes. Nothing it starts outlives it: it
+// stops its template servers, machines and builds as it stops, and if it dies they stop
+// themselves, each holding its lifeline (package lifeline). A daemon started again starts its
+// templates again from their sites, and its services' replicas; machines are not brought back.
 package daemon
 
 import (

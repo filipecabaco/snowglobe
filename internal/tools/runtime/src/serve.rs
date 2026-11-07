@@ -19,8 +19,13 @@
 //! A line `{"mode": "job", ...}`, as an instance's control socket takes it (`job::from_json`), is
 //! answered as that socket answers it: `snowglobe run --detach --fork` is such an instance, whose
 //! `snowglobe sh` commands each run on a fresh copy of the machine.
+//!
+//! Nothing it forks outlives it: each child watches a line whose write end only this process
+//! holds (`lifeline.rs`), and ends when it breaks. Started by the daemon, this process watches the
+//! daemon's lifeline from its accept loop, and ends (its children with it) when the daemon does.
 
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -93,8 +98,21 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
             *running = running.saturating_sub(1);
         }
     };
-    for conn in listener.incoming() {
-        let Ok(mut conn) = conn else { continue };
+    // This process ends with what started it (the daemon's lifeline, watched here: it starts no
+    // thread), and its children end with it: they watch a line whose write end only it holds
+    let started_by = crate::lifeline::inherited();
+    let (kids_line, kids_hold) = sys::pipe().map_err(|e| format!("pipe: {e}"))?;
+    loop {
+        match crate::lifeline::accept_or_gone(&listener, started_by.as_ref()) {
+            Ok(true) => {},
+            Ok(false) => {
+                // Its machines and jobs follow as this process ends (their line breaks)
+                let _ = std::fs::remove_file(socket);
+                crate::lifeline::stop("what started this server")
+            },
+            Err(e) => return Err(format!("{socket}: {e}")),
+        }
+        let Ok((mut conn, _)) = listener.accept() else { continue };
         while let Some((pid, _)) = sys::wait(-1, false) {
             reap(pid, &mut running, &mut machines);
         }
@@ -143,12 +161,16 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
         match sys::fork() {
             Ok(sys::Forked::Child) => {
                 drop(listener);
+                // Only the server holds its children's line; they are tied to it, not to what
+                // started it
+                drop(kids_hold);
+                drop(started_by);
                 let runner = runner.take().expect("the restored machine");
                 let code = match &spawn {
-                    Some(s) => machine_child(&board, runner, &site, &policy, &spec, net, s, conn).map_err(|e| format!("machine: {e}")),
+                    Some(s) => machine_child(&board, runner, &site, &policy, &spec, net, s, conn, kids_line).map_err(|e| format!("machine: {e}")),
                     None => {
                         let mut runner = runner;
-                        child(&board, &mut runner, &site, &policy, &root, &spec, net, &line, conn, learned.as_ref())
+                        child(&board, &mut runner, &site, &policy, &root, &spec, net, &line, conn, learned.as_ref(), kids_line)
                             .map_err(|e| format!("job: {e}"))
                     },
                 };
@@ -172,7 +194,6 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
             },
         }
     }
-    Ok(0)
 }
 
 /// How long a client gets to send its request line
@@ -230,6 +251,7 @@ fn machine_child(
     net: machine::Net,
     spawn: &Spawn,
     mut conn: UnixStream,
+    server_line: OwnedFd,
 ) -> Result<(), String> {
     let sock = spawn.sock.as_path();
     let refuse = |conn: &mut UnixStream, e: String| {
@@ -237,6 +259,12 @@ fn machine_child(
         e
     };
     sandbox::apply_stage(policy, sandbox::Stage::Child).map_err(|e| refuse(&mut conn, e))?;
+    // Its first thread, once confined: it ends with its server
+    let gone_sock = sock.to_path_buf();
+    crate::lifeline::watch(server_line, move || {
+        let _ = std::fs::remove_file(&gone_sock);
+        crate::lifeline::stop("its template's server")
+    });
     if let Some(state) = &spawn.state {
         // A machine saved before, over this copy of the template's: the code compiled from the
         // template's memory doesn't hold for it
@@ -307,6 +335,7 @@ fn child(
     line: &str,
     conn: UnixStream,
     learned: Option<&profile::Learned>,
+    server_line: OwnedFd,
 ) -> Result<(), String> {
     let mut w = conn;
     let ask = match ask(line, root) {
@@ -322,6 +351,8 @@ fn child(
 
     // The rest of the sandbox, before any thread
     sandbox::apply_stage(policy, sandbox::Stage::Child)?;
+    // Its first thread, once confined: it ends with its server
+    crate::lifeline::watch(server_line, || crate::lifeline::stop("its server"));
     // This copy of the machine gets randomness of its own
     board.seed(&armless::runner::os_entropy());
     // Compiling moves to a thread, and a module, of this job's own; what the parent compiled

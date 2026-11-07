@@ -220,13 +220,12 @@ func TestAServiceIsCheckedAndHoldsItsTemplate(t *testing.T) {
 	}
 }
 
-func TestAServiceOutlivesItsDaemon(t *testing.T) {
+func TestAServiceComesBackWithItsDaemon(t *testing.T) {
 	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
 	fastScaling(t)
 	dir := shortTemp(t)
 	d := startDaemon(t, dir, Options{})
-	tpl, _ := d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "t"})
-	defer syscall.Kill(-tpl.Pid, syscall.SIGKILL)
+	d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "t"})
 	svc, err := d.c.AddService(Service{Name: "web", Template: "t", Ports: []Port{{IP: "127.0.0.1", Guest: 80}}, Idle: Duration(time.Minute)})
 	if err != nil {
 		t.Fatal(err)

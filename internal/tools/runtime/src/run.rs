@@ -237,6 +237,9 @@ pub fn site_spec(site: &Site) -> Result<(serde_json::Value, Spec, String), Strin
 pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // A job for a serving process: no machine here
     if let Some(socket) = args.get("server") {
+        if let Some(line) = crate::lifeline::inherited() {
+            crate::lifeline::watch(line, || crate::lifeline::stop("what started this job"));
+        }
         return crate::serve::client(args, socket);
     }
     let site = match bundled {
@@ -266,6 +269,10 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // first time) before the sandbox, which then needn't reach the cache's images
     let image = image::open(&site, spec.memory_mb << 20);
     let sandboxed = sandbox::apply(&policy(args, &site, &controls, log_dir.as_deref(), &socket, spec.network == "fetch"))?;
+    // Tied to what started it, if that asked: watched once confined, from a thread of its own
+    if let Some(line) = crate::lifeline::inherited() {
+        crate::lifeline::watch(line, || crate::lifeline::stop("what started this run"));
+    }
 
     let started = Instant::now();
     if let Some(dir) = &log_dir {

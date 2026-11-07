@@ -17,6 +17,7 @@ import (
 
 	"github.com/filipecabaco/snowglobe/internal/boot"
 	"github.com/filipecabaco/snowglobe/internal/docker"
+	"github.com/filipecabaco/snowglobe/internal/lifeline"
 	"github.com/filipecabaco/snowglobe/internal/native"
 	"github.com/filipecabaco/snowglobe/internal/oci"
 	"github.com/filipecabaco/snowglobe/internal/rootfs"
@@ -264,6 +265,11 @@ func Run(o Options, version string) error {
 				cmd := exec.Command(vm, tools.SnapshotArgs(filepath.Join(out, "system"), s.Memory, s.Ready, s.Exercise,
 					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)...)
 				cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+				// It ends with this build, however the build ends (a SIGTERM, a kill -9, the
+				// daemon that started the build stopping): never left booting on its own
+				if err := lifeline.Pass(cmd); err != nil {
+					return err
+				}
 				return cmd.Run()
 			}
 			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)
