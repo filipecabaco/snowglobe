@@ -9,14 +9,32 @@
 // { version, state: "building" | "ok" | "error", error, ms, at }. version goes up once a build is
 // written (or has failed). The agent page's preview reads it and reloads the page after each new
 // build: its bridge into the machine has no WebSockets, so Vite's hot reload can't reach it.
-import { createServer } from "node:http";
+//
+// --registry PORT: npm's registry on 127.0.0.1:PORT (the machine's /root/.npmrc points npm there),
+// passed on to https://registry.npmjs.org with nothing but an Accept header. In the browser every
+// request the machine makes is the page's own fetch(), so CORS applies: the registry answers GETs
+// with access-control-allow-origin *, but npm's own headers (npm-command, npm-session, pacote-...)
+// would make each request preflighted, and the registry answers no preflight (OPTIONS is a 404).
+// A GET with only Accept is a simple request: no preflight, and it works from any page.
+import { Agent as HttpAgent, createServer, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { createReadStream, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { extname, join, normalize, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const args = process.argv.slice(2);
-const watch = args[0] === "--watch" && !!args.shift();
+let watch = false;
+let registry = null;
+while (args[0]?.startsWith("--")) {
+  const flag = args.shift();
+  if (flag === "--watch") watch = true;
+  else if (flag === "--registry") registry = Number(args.shift());
+  else {
+    console.error(`serve: no option ${flag} (serve [--watch] [--registry PORT] [dir] [port])`);
+    process.exit(2);
+  }
+}
 const root = resolve(args[0] ?? "dist");
 const port = Number(args[1] ?? 4173);
 const types = {
@@ -66,6 +84,33 @@ createServer((req, res) => {
   if (req.method === "HEAD") return res.end();
   createReadStream(found.path).pipe(res);
 }).listen(port, "0.0.0.0", () => console.log(`serving ${root} on http://0.0.0.0:${port}/${watch ? " (rebuilding on changes; /__build says how)" : ""}`));
+
+if (registry) {
+  const upstream = process.env.NPM_UPSTREAM ?? "https://registry.npmjs.org";
+  const plain = upstream.startsWith("http:"); // a local mirror, or a test
+  const agent = new (plain ? HttpAgent : HttpsAgent)({ keepAlive: true, maxSockets: 6 });
+  const send = plain ? httpRequest : httpsRequest;
+  // A CORS-safelisted Accept: no ( ) : < > ? @ [ \ ] { } " and at most 128 bytes
+  const accept = (a) => typeof a === "string" && a.length <= 128 && !/[\x00-\x08\x0a-\x1f"():<>?@[\\\]{}\x7f]/.test(a) ? a : "application/json";
+  const DROP = new Set(["connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length", "set-cookie"]);
+  createServer((req, res) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { "content-type": "text/plain; charset=utf-8" }).end("this registry is read only: install and view work, publish and login don't\n");
+      return;
+    }
+    const up = send(upstream + req.url, { method: req.method, agent, headers: { accept: accept(req.headers.accept) } }, (r) => {
+      const headers = {};
+      for (const [k, v] of Object.entries(r.headers)) if (!DROP.has(k)) headers[k] = v;
+      res.writeHead(r.statusCode ?? 502, headers);
+      r.pipe(res);
+    });
+    up.on("error", (e) => {
+      if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: `the registry could not be reached: ${e.message}` }) + "\n");
+    });
+    up.end();
+  }).listen(registry, "127.0.0.1", () => console.log(`npm's registry on http://127.0.0.1:${registry}/ (from ${upstream}, as simple GETs)`));
+}
 
 if (watch) {
   // The project's own Vite (its node_modules), with its vite.config.js, writing to dir

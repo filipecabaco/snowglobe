@@ -394,7 +394,7 @@
     /** A command started in a machine: { jobId, runtime }. Asks the person first (once per page
      *  load). Behind a copy in the same machine, it waits for it; beside a job, it is refused.
      *  `source` says who asked, for the page's history: "form", "webmcp", or "script". */
-    async function runCommand(input, { source = "script", files, display } = {}) {
+    async function runCommand(input, { source = "script", files, display, wrap = true, silent = false } = {}) {
       if (!input || typeof input !== "object") throw new Error("runCommand: { runtime, command, timeoutSeconds?, requestId? }");
       const m = get(input.runtime);
       const { command, timeoutSeconds, requestId } = input;
@@ -416,19 +416,21 @@
           if (m.job) throw busyJob(m);
           await awake(m);
           if (!m.host) throw new Error(`${m.name} is not running`);
-          // In a watched machine the command runs inside a wrapper that reports what it changed
-          const nonce = m.watch ? token() : null;
-          const run = m.watch ? B().wrapCommand(command, m.watch, nonce) : { command, files: {} };
+          // In a watched machine the command runs inside a wrapper that reports what it changed (not
+          // a read: wrap false)
+          const wrapped = m.watch && wrap;
+          const nonce = wrapped ? token() : null;
+          const run = wrapped ? B().wrapCommand(command, m.watch, nonce) : { command, files: {} };
           const { jobId } = await m.host.runCommand({ command: run.command, timeoutSeconds,
-            ...(files || m.watch ? { files: { ...files, ...run.files } } : {}) });
+            ...(files || wrapped ? { files: { ...files, ...run.files } } : {}) });
           m.job = jobId;
-          m.dirty = true;
+          if (wrap) m.dirty = true;
           const j = { machine: m, final: null, nonce };
           j.ended = new Promise((resolve) => { j.end = resolve; });
           jobs.set(jobId, j);
           if (requestId !== undefined) requests.set(requestId, { runtime: m.name, command, jobId });
           changed();
-          tell({ kind: "run", runtime: m.name, command: display ?? command, jobId, source, watch: m.watch });
+          if (!silent) tell({ kind: "run", runtime: m.name, command: display ?? command, jobId, source, watch: wrapped ? m.watch : null, ...(typeof silent === "object" ? silent : {}) });
           return { jobId, runtime: m.name };
         });
       } finally {
@@ -510,6 +512,122 @@
         throw new Error(`${path} was not written: ${v.state === "exited" ? `exit ${v.exitStatus}` : v.state}${v.error ? ` (${v.error})` : ""}${v.output.trim() ? `: ${v.output.trim().slice(-300)}` : ""}`);
       }
       return { jobId, runtime, path, bytes: bytes.length, changes: v.changes ?? null, watch: v.watch ?? null };
+    }
+
+    /** A job run to its end: its view (output, exit status, changes). `signal` cancels it. */
+    async function finish(jobId, signal) {
+      const j = jobs.get(jobId);
+      const abort = () => { cancelJob(jobId).catch(() => {}); };
+      signal?.addEventListener?.("abort", abort);
+      try { await j.ended; } finally { signal?.removeEventListener?.("abort", abort); }
+      return readJob(jobId);
+    }
+
+    /** A job of the page's own (a read, a listing): run unwrapped and to its end, its output if it
+     *  exited 0, else an error saying how it ended. */
+    async function quietJob(runtime, command, { files, signal, source, display, kind } = {}) {
+      const { jobId } = await runCommand({ runtime, command }, { source, files, wrap: false, silent: true });
+      const v = await finish(jobId, signal);
+      if (v.state !== "exited" || v.exitStatus !== 0) {
+        throw new Error(`${display ?? "it"} failed: ${v.state === "exited" ? `exit ${v.exitStatus}` : v.state}${v.error ? ` (${v.error})` : ""}${v.output?.trim() ? `: ${v.output.trim().slice(-300)}` : ""}`);
+      }
+      if (source !== "studio" && kind) tell({ kind, runtime, source, ...kind === "read" ? { paths: display } : { path: display } });
+      return v.output ?? "";
+    }
+
+    /**
+     * A directory's files: { runtime, path?, depth? } (path: the machine's watched project, else
+     * /root). One job; node_modules, dist and .git are listed, not entered. Resolves to { dir,
+     * entries: [{ path, type, size, skipped? }], truncated }.
+     */
+    async function listFiles(input, { source = "script", signal } = {}) {
+      const m = get(input?.runtime);
+      const dir = input.path ?? m.watch ?? "/root";
+      const out = await quietJob(m.name, B().listCommand(dir, input.depth ?? 4), { signal, source, display: dir, kind: "list" });
+      return { runtime: m.name, ...B().parseList(out) };
+    }
+
+    /**
+     * Text files' contents: { runtime, paths } (or path), up to 20 files in one job, 256 KiB of each
+     * at most (truncated says so). Resolves to [{ path, size, text, truncated } | { path, binary } |
+     * { path, error }].
+     */
+    async function readFiles(input, { source = "script", signal } = {}) {
+      const m = get(input?.runtime);
+      const paths = input.paths ?? (input.path !== undefined ? [input.path] : null);
+      if (!Array.isArray(paths) || !paths.length) throw new Error("paths: the files to read");
+      const out = await quietJob(m.name, B().readCommand(paths), { signal, source, display: paths, kind: "read" });
+      return B().parseRead(out, paths);
+    }
+
+    /**
+     * Several changes to a machine's files in one job: { runtime, files: [{ path, content }], move:
+     * [{ from, to }], delete: [path] }. Written to temporary names first and moved into place
+     * together (so a watcher sees them at once, and rebuilds once). Resolves once done: { jobId,
+     * runtime, written, bytes, changes, watch }.
+     */
+    async function writeFiles(input, { source = "script", signal } = {}) {
+      if (!input || typeof input !== "object") throw new Error("writeFiles: { runtime, files, move?, delete? }");
+      const w = B().writeFilesCommand({ files: input.files ?? [], move: input.move ?? [], remove: input.delete ?? [] });
+      const n = (input.files ?? []).length;
+      const what = [n && `${n} file${n === 1 ? "" : "s"}`, input.move?.length && `${input.move.length} moved`, input.delete?.length && `${input.delete.length} deleted`].filter(Boolean).join(", ");
+      const { jobId, runtime } = await runCommand({ runtime: input.runtime, command: w.command }, { source, files: w.files, display: `write ${what}` });
+      const v = await finish(jobId, signal);
+      if (v.state !== "exited" || v.exitStatus !== 0) {
+        throw new Error(`not done: ${v.state === "exited" ? `exit ${v.exitStatus}` : v.state}${v.error ? ` (${v.error})` : ""}${v.output?.trim() ? `: ${v.output.trim().slice(-300)}` : ""}`);
+      }
+      return { jobId, runtime, written: n, bytes: w.bytes, changes: v.changes ?? null, watch: v.watch ?? null };
+    }
+
+    /** A watched project taken back: { runtime, to: "previous" | "start" } (builder.js's
+     *  revertCommand), as a job whose report says what it changed: { jobId, changes, output }. */
+    async function revert(input, { source = "script", signal } = {}) {
+      const m = get(input?.runtime);
+      if (!m.watch) throw new Error(`${m.name} has no watched project to revert (list_runtimes' watch)`);
+      const command = B().revertCommand(m.watch, input.to);
+      const { jobId } = await runCommand({ runtime: m.name, command }, { source, display: input.to === "start" ? "revert the project to how it began" : "undo the last change" });
+      const v = await finish(jobId, signal);
+      if (v.state === "exited" && v.exitStatus === 3) throw new Error(v.output.trim() || "nothing to revert");
+      if (v.state !== "exited" || v.exitStatus !== 0) throw new Error(`not reverted: ${v.state === "exited" ? `exit ${v.exitStatus}` : v.state}${v.output?.trim() ? `: ${v.output.trim().slice(-300)}` : ""}`);
+      return { jobId, runtime: m.name, changes: v.changes ?? null, watch: m.watch, output: v.output.trim() };
+    }
+
+    /**
+     * SQL on a database machine: { runtime (supabase by default), sql }, through psql with
+     * ON_ERROR_STOP (Supabase's $DB_URL, else the local server's socket), then
+     * `notify pgrst, 'reload schema'` so Supabase's Data API sees a schema change at once. The SQL
+     * goes in as a file of the job's: no quoting. Resolves once done: { jobId, exitStatus, output }.
+     * `tsv`: rows as tab-separated values, no headers (for the page's own reads).
+     */
+    async function runSql(input, { source = "script", signal, tsv = false, silent = false } = {}) {
+      if (!input || typeof input.sql !== "string" || !input.sql.trim()) throw new Error("sql: the statements to run");
+      const runtime = input.runtime ?? "supabase";
+      const sql = new TextEncoder().encode(input.sql);
+      if (sql.length > MAX_WRITE) throw new Error("sql: at most 1 MiB");
+      const db = `"\${DB_URL:-postgresql://postgres@/postgres?host=/run/postgresql}"`;
+      const command = `psql ${db} -X -v ON_ERROR_STOP=1 -P pager=off ${tsv ? `-A -t -F "$(printf '\\t')" ` : ""}-f "$EXCLAVE_WORKSPACE/in/sql"; sg_rc=$?\n` +
+        `[ "$sg_rc" -eq 0 ] && psql ${db} -X -q -c "notify pgrst, 'reload schema'" >/dev/null 2>&1\nexit $sg_rc\n`;
+      const first = input.sql.trim().split("\n")[0];
+      const { jobId } = await runCommand({ runtime, command }, { source, files: { sql }, display: `SQL: ${first.length > 120 ? first.slice(0, 120) + "…" : first}`, wrap: false, silent });
+      const v = await finish(jobId, signal);
+      return { jobId, runtime, state: v.state, exitStatus: v.exitStatus, output: v.output ?? "", error: v.error ?? null };
+    }
+
+    /**
+     * How the last build of a machine's `serve --watch` went: { runtime (web by default), port
+     * (4173) }. Wakes the machine if it must (asking the person first, as a run does) and reads its
+     * /__build over the machine's network: { version, state: "building" | "ok" | "error", error, ms,
+     * at }, or { state: "none" } when nothing answers there.
+     */
+    async function buildStatus(input = {}, { signal } = {}) {
+      const m = get(input.runtime ?? "web");
+      if (!m.network) throw new Error(`${m.name} has no network device: its servers can't be reached`);
+      await ask();
+      await awake(m, signal);
+      if (!m.host) throw new Error(`${m.name} is not running`);
+      const r = await fetchText(m, Preview.checkPort(input.port ?? 4173), "/__build", { signal });
+      if (!r || r.status === 404 || r.error) return { runtime: m.name, state: "none", detail: r?.status === 404 ? "the server there has no /__build (it isn't serve --watch)" : "nothing answers on that port" };
+      try { return { runtime: m.name, ...JSON.parse(r.body) }; } catch { return { runtime: m.name, state: "none", detail: "/__build didn't answer JSON" }; }
     }
 
     /**
@@ -672,6 +790,12 @@
       if (!state.preview || !granted()) return null;
       const m = get(runtime);
       if (m.lifecycle.state !== "running" || !m.host || !m.network) return null;
+      return fetchText(m, port, path, { signal, answerMs });
+    }
+
+    /** A small GET to a running machine's server, over its network: { status, body } (64 KiB at
+     *  most), { status, error: true }, or null if nothing answered. */
+    async function fetchText(m, port, path, { signal, answerMs = 10000 } = {}) {
       const host = m.host;
       let head = null;
       let error = null;
@@ -787,7 +911,7 @@
           reason: machines.length ? null : "no runtimes",
           maxConcurrentJobsPerRuntime: 1,
           maxCopyBytes: root.SnowglobeTransfer?.limits.MAX_BYTES ?? 8 << 20,
-          features: ["listRuntimes", "runCommand", "readJob", "cancelJob", "writeFile", "copyFile", "suspend", "wake", "startFresh", "setAwakeLimit", "openPreview", "closePreview"],
+          features: ["listRuntimes", "runCommand", "readJob", "cancelJob", "writeFile", "writeFiles", "readFiles", "listFiles", "revert", "runSql", "buildStatus", "copyFile", "suspend", "wake", "startFresh", "setAwakeLimit", "openPreview", "closePreview"],
           maxWriteBytes: MAX_WRITE,
           crossOriginIsolated: isolated,
           previewBase: new URL(Preview?.PREFIX ?? "preview/", page).href,
@@ -804,6 +928,12 @@
       readJob,
       cancelJob,
       writeFile,
+      writeFiles,
+      readFiles,
+      listFiles,
+      revert,
+      runSql,
+      buildStatus,
       copyFile,
       async cancelCopy(id) {
         for (const [k, c] of copies) if (id === undefined || k === id) c.abort();

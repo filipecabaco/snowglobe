@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Machines for agents · snowglobe</title>
+  <title>App studio for agents · snowglobe</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/agent/">
   <link rel="alternate" type="text/plain" href="../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="Linux machines for agents, all in one browser tab: Supabase, a React app built with Vite, Python with numpy and pandas, DuckDB and PostgreSQL. Run shell commands in any of them, copy files between them, and see the web app they build in the page, rebuilt as they change it. No server.">
+  <meta name="description" content="An app studio in one browser tab: your agent builds a React app on Supabase and you watch it rebuilt live, beside every change it makes. Supabase, a React and Vite machine, Python, DuckDB and PostgreSQL run in the tab. No server.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
-  <meta property="og:title" content="Machines for agents · snowglobe">
-  <meta property="og:description" content="Supabase, a React app, Python, DuckDB and PostgreSQL in one page: an agent changes a web app on Supabase and you see it rebuilt live, beside what it changed. They run in your browser tab.">
+  <meta property="og:title" content="App studio for agents · snowglobe">
+  <meta property="og:description" content="Your agent builds a React app on Supabase in your browser tab: the live preview, its code and every change it made, side by side. The machines run in the tab.">
   <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/agent/">
   <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
@@ -22,24 +22,215 @@
   </script>
   <style>
     [hidden] { display: none !important; }
-    .intro { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px 48px; padding: 48px 0 36px; }
-    h1 { margin: 0 0 14px; font-size: clamp(2rem, 3.4vw, 3rem); line-height: 1; letter-spacing: -.03em; font-weight: 600; text-wrap: balance; }
-    .lede { margin: 0; max-width: 40em; font-size: 18px; line-height: 1.5; color: var(--ink-2); }
-    .awake { display: grid; justify-items: end; gap: 10px; }
-    .budget { margin: 0; text-align: right; }
-    .budget b { display: block; font-size: clamp(32px, 3.4vw, 48px); font-weight: 560; letter-spacing: -.035em; line-height: 1; }
-    .budget span { color: var(--ink-2); font-size: 13px; }
-    .limit-ctl { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
-    .limit-ctl input { font: 16px var(--sans); width: 4.5em; height: 44px; padding: 0 10px; color: var(--ink); background: var(--bg); border: 1px solid var(--ink-2); border-radius: 6px; }
-    .limit-ctl input:hover { border-color: var(--ink); }
-    .limit-note { margin: 0; max-width: 26em; text-align: right; color: var(--ink-2); font-size: 13px; }
-    .limit-note:empty { display: none; }
+    /* An app tool: wider than the site's reading pages, the masthead tighter */
+    .wrap { max-width: 1760px; }
+    .top { padding: 18px 0; }
+    :root { --ease: cubic-bezier(.2,.8,.2,1); }
+    .vh { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-    /* Two zones: the machines, a ruled list; the selected machine's work beside it */
+    /* Shared controls: pills, as everywhere on the site; small ones in toolbars */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: 550 15px/1 var(--sans); height: 44px; padding: 0 18px; border-radius: 999px;
+      cursor: pointer; border: 1px solid var(--ink); background: transparent; color: var(--ink); text-decoration: none; white-space: nowrap;
+      transition: background-color .2s var(--ease), color .2s var(--ease), border-color .2s var(--ease); }
+    .btn.go { background: var(--signal); border-color: var(--signal); color: var(--on-signal); }
+    .btn:not(:disabled):hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+    .btn:disabled { opacity: .38; cursor: default; }
+    .btn.sm { height: 34px; padding: 0 14px; font-size: 14px; }
+    .btn svg, .ico { width: 14px; height: 14px; flex: none; }
+    .ibtn { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--ink); cursor: pointer; }
+    .ibtn:hover { border-color: var(--ink); }
+    .ibtn svg { width: 15px; height: 15px; }
+    .link { font: inherit; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .link:hover { text-decoration-thickness: 2px; }
+    .link:disabled { color: var(--ink-2); text-decoration: none; cursor: default; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-2); flex: none; }
+    .dot[data-on="live"] { background: var(--signal); border-color: var(--signal); }
+    .dot[data-on="ok"] { background: var(--ink); border-color: var(--ink); }
+    @keyframes live { 50% { opacity: .35; } }
+
+    /* ================================================================ the studio
+       The app being built is the page: its live preview fills the stage; what the agent did runs
+       down the left, as a builder's conversation does; the machines are below. */
+    .studio-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 32px; padding: 16px 0 14px; }
+    h1 { margin: 0; font-size: 26px; line-height: 1.1; letter-spacing: -.025em; font-weight: 620; }
+    .studio { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); height: clamp(600px, calc(100dvh - 132px), 1180px);
+      border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+
+    /* The agent: who drives, and its steps */
+    .pane { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; border-right: 1px solid var(--rule); }
+    .pane-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px 16px 10px 0; border-bottom: 1px solid var(--rule); }
+    .pane-head h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+    .conn { font-size: 13px; color: var(--ink-2); }
+    .builder-ctl { display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--ink-2); }
+    .builder-ctl label { display: flex; align-items: center; gap: 6px; }
+    .builder-ctl select { font: 13px var(--sans); height: 30px; padding: 0 6px; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; }
+    .stream { overflow: auto; padding: 0 16px 0 0; overscroll-behavior: contain; display: flex; flex-direction: column; }
+    #builder-status { margin: 12px 0 0; font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
+
+    /* Before anything happens: how to bring an agent here. This page has no AI of its own */
+    .connect { padding: 16px 0 8px; }
+    .connect h3 { margin: 0 0 6px; font-size: 20px; font-weight: 600; letter-spacing: -.02em; line-height: 1.2; }
+    .connect p { margin: 0 0 12px; font-size: 15px; color: var(--ink-2); }
+    .connect .row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .prompt { margin: 0 0 12px; }
+    .prompt > summary { display: flex; align-items: center; gap: 8px; width: max-content; cursor: pointer; padding: 4px 0; font-size: 14px; font-weight: 550; list-style: none; }
+    .prompt > summary::-webkit-details-marker { display: none; }
+    .prompt > summary svg { width: 12px; height: 12px; flex: none; transition: transform .2s var(--ease); }
+    .prompt[open] > summary svg { transform: rotate(90deg); }
+    .prompt pre { margin: 8px 0 0; max-height: 9.5em; overflow: auto; white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; padding: 12px 14px; }
+    #connect-note { margin: 0; font-size: 13px; }
+
+    /* The steps: a conversation's shape, the newest at the bottom. The list is newest first in
+       reading order (its label says so); column-reverse shows it as a chat, held at its end */
+    .feed { list-style: none; margin: 0; padding: 4px 0 12px; display: flex; flex-direction: column-reverse; gap: 2px; }
+    .ev { position: relative; padding: 10px 0 10px 26px; border-top: 1px solid var(--rule); }
+    .ev:last-child { border-top: 0; }
+    .ev::before { content: ""; position: absolute; left: 2px; top: 13px; width: 14px; height: 14px; background: var(--ink-2);
+      -webkit-mask: var(--i) center / contain no-repeat; mask: var(--i) center / contain no-repeat; }
+    .ev[data-step="edit"]::before { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Cpath d='M10.5 2.5l3 3L6 13H3v-3z'/%3E%3C/svg%3E"); background: var(--ink); }
+    .ev[data-step="run"]::before, .ev[data-step="sql"]::before { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Cpath d='M3 4l4 4-4 4M8.5 12.5H13'/%3E%3C/svg%3E"); }
+    .ev[data-step="read"]::before, .ev[data-step="list"]::before { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Cpath d='M4 1.75h5.5L12.25 4.5v9.75H4zM6.5 7.5h3.5M6.5 10.5h3.5'/%3E%3C/svg%3E"); }
+    .ev[data-step="build"]::before { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Cpath d='M3 8.5l3 3 7-7'/%3E%3C/svg%3E"); background: var(--ink); }
+    .ev[data-step="build-error"]::before { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M8 4.5v4.5M8 10.75v.75'/%3E%3C/svg%3E"); background: var(--ink); }
+    .ev[data-step="undo"]::before { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Cpath d='M5.5 3.5L2.5 6.5l3 3M2.75 6.5H10a3.5 3.5 0 010 7H7'/%3E%3C/svg%3E"); }
+    .ev[data-step="preview"]::before { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Crect x='1.75' y='2.75' width='12.5' height='10.5' rx='1'/%3E%3Cpath d='M1.75 5.75h12.5'/%3E%3C/svg%3E"); }
+    .ev[data-step="copy"]::before { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Cpath d='M2.5 8h10M9 4.5L12.5 8 9 11.5'/%3E%3C/svg%3E"); }
+    .ev[data-step="note"]::before { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Cpath d='M2.5 3h11v7.5H7l-3 2.5v-2.5H2.5z'/%3E%3C/svg%3E"); background: var(--ink); }
+    .ev[data-state="running"]::before { background: var(--signal); animation: live 2s ease-in-out infinite; }
+    .ev-title { margin: 0; font-size: 15px; font-weight: 550; line-height: 1.35; overflow-wrap: anywhere; }
+    .ev[data-step="note"] .ev-title { font-weight: 400; }
+    .ev-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin-top: 2px; font-size: 13px; color: var(--ink-2); }
+    .ev-head .run-time { margin-left: auto; }
+    .tag { font: 12.5px var(--mono); color: var(--ink-2); }
+    .badge { font-weight: 550; color: var(--ink); }
+    .badge::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; vertical-align: .05em; box-sizing: border-box; }
+    .badge[data-tone="ok"]::before { background: var(--ink); }
+    .badge[data-tone="bad"]::before { border: 1.5px solid var(--ink); }
+    .badge[data-tone="live"]::before { background: var(--signal); animation: live 2s ease-in-out infinite; }
+    .run-time { color: var(--ink-2); white-space: nowrap; }
+    .ev-cmd { display: block; margin-top: 6px; max-height: 6em; overflow: auto; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+    .ev-text { margin: 6px 0 0; font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
+    .ev[data-step="note"] .ev-text { display: none; }
+    .ev-files .ev-text { display: none; }
+    .files { list-style: none; margin: 6px 0 0; padding: 0; }
+    .files summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 3px 0; cursor: pointer; font: 13px/1.4 var(--mono); }
+    .files summary::marker { color: var(--ink-2); }
+    .files .st { font: 550 12px var(--sans); color: var(--ink-2); }
+    .files .st[data-status="added"] { color: var(--ink); }
+    .files .path { overflow-wrap: anywhere; }
+    .files .counts { color: var(--ink-2); }
+    .diff { margin: 4px 0 8px; padding: 10px 12px; max-height: 22em; overflow: auto; white-space: pre; background: var(--panel); color: var(--panel-ink);
+      box-shadow: 0 0 0 1px var(--panel-edge); border-radius: 6px; font: 12.5px/1.5 var(--mono); }
+    .diff .dl[data-kind="add"] { color: #7fd18b; }
+    .diff .dl[data-kind="del"] { color: #ff6b4a; }
+    .diff .dl[data-kind="hunk"], .diff .dl[data-kind="note"] { color: #8d8d88; }
+    .ev-error { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .ap-empty { margin: 12px 0; color: var(--ink-2); font-size: 14px; }
+
+    .pane-foot { display: grid; gap: 10px; padding: 12px 16px 14px 0; border-top: 1px solid var(--rule); }
+    .pane-foot .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+    /* The stage: Preview | Code | Database, and the preview's own tools */
+    .stage { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+    .stage-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 0 8px 16px; border-bottom: 1px solid var(--rule); }
+    [role="tablist"] { display: flex; gap: 20px; }
+    [role="tab"] { font: 500 15px/1 var(--sans); color: var(--ink-2); background: none; border: 0; padding: 10px 0 9px; cursor: pointer; border-bottom: 2px solid transparent; }
+    [role="tab"]:hover { color: var(--ink); }
+    [role="tab"][aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+    .ptools { display: flex; align-items: center; gap: 6px; flex: 1 1 420px; min-width: 0; justify-content: flex-end; }
+    .devices { display: inline-flex; border: 1px solid var(--rule); border-radius: 999px; padding: 2px; }
+    .devices button { display: inline-grid; place-items: center; width: 32px; height: 28px; border: 0; border-radius: 999px; background: none; color: var(--ink-2); cursor: pointer; }
+    .devices button svg { width: 15px; height: 15px; }
+    .devices button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+    .devices button:not([aria-pressed="true"]):hover { color: var(--ink); }
+    .addr { flex: 1 1 200px; min-width: 120px; max-width: 560px; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--rule); border-radius: 999px; background: var(--bg); }
+    .addr:focus-within { border-color: var(--ink); }
+    .addr .host { font: 12.5px var(--mono); color: var(--ink-2); white-space: nowrap; }
+    .addr input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--ink); font: 13px var(--mono); padding: 0; }
+    .tabpanel { position: relative; min-height: 0; overflow: hidden; }
+
+    /* The preview: the app as built, at a device's width on a quiet ground */
+    #preview-panel { position: absolute; inset: 0; display: grid; place-items: stretch; background: var(--soft); }
+    .device { position: relative; justify-self: center; width: 100%; height: 100%; transition: width .35s var(--ease); background: #fff; }
+    .device[data-size="tablet"] { width: min(820px, 100%); margin: 14px 0; height: calc(100% - 28px); box-shadow: 0 0 0 1px var(--rule), 0 12px 32px -18px var(--sheet-shadow); border-radius: 6px; overflow: hidden; }
+    .device[data-size="phone"] { width: min(390px, 100%); margin: 14px 0; height: min(calc(100% - 28px), 844px); align-self: center; box-shadow: 0 0 0 1px var(--rule), 0 12px 32px -18px var(--sheet-shadow); border-radius: 6px; overflow: hidden; }
+    #preview-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; transition: opacity .25s var(--ease), filter .25s var(--ease); }
+    /* A new build arrives: the old page dims and softens for the moment it takes to load */
+    #preview-frame.reloading { opacity: .55; filter: blur(1.5px) saturate(.8); }
+    /* While the machine builds: a hairline of live state along the top of the stage */
+    .building { position: absolute; left: 0; right: 0; top: 0; height: 2px; z-index: 2; background: linear-gradient(90deg, transparent, var(--signal), transparent) 0 0 / 40% 100% no-repeat; animation: sweep 1.1s linear infinite; }
+    @keyframes sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+    .build-fail { position: absolute; left: 16px; right: 16px; bottom: 16px; z-index: 2; max-height: 45%; overflow: auto; padding: 14px 16px; border-radius: 6px; background: var(--panel); color: var(--panel-ink); box-shadow: 0 0 0 1px var(--panel-edge), 0 16px 40px -20px rgb(0 0 0 / .5); }
+    .build-fail h3 { margin: 0 0 6px; font: 600 14px var(--sans); display: flex; justify-content: space-between; gap: 12px; }
+    .build-fail h3 button { font: 13px var(--sans); color: var(--panel-ink); background: none; border: 0; text-decoration: underline; cursor: pointer; }
+    .build-fail pre { margin: 0; padding: 0; background: none; color: #ff8a70; font-size: 12.5px; white-space: pre-wrap; }
+    .stage-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 32px; text-align: center; }
+    .stage-empty h2 { margin: 0; font-size: 15px; font-weight: 550; color: var(--ink-2); }
+    .stage-empty .row { display: grid; justify-items: center; gap: 10px; }
+    #preview-note { max-width: 36em; color: var(--ink-2); font-size: 14px; }
+    #preview-note:empty, #builder-status:empty, #storage:empty { display: none; }
+    #preview-note { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+
+    /* Code: the project's files, read from the machine; the open one, highlighted, on the panel */
+    #code-panel { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(180px, 250px) minmax(0, 1fr); }
+    .tree { overflow: auto; padding: 10px 12px 16px 16px; border-right: 1px solid var(--rule); font-size: 13.5px; }
+    .tree ul { list-style: none; margin: 0; padding: 0; }
+    .tree ul ul { padding-left: 14px; }
+    .tree .dir { padding: 4px 0 2px; color: var(--ink-2); font-size: 13px; }
+    .tree button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 6px; margin: 0 -6px; border: 0; border-radius: 4px; background: none; color: var(--ink); font: 13px/1.3 var(--mono); text-align: left; cursor: pointer; }
+    .tree button:hover { background: var(--soft); }
+    .tree button[aria-current="true"] { background: var(--ink); color: var(--bg); }
+    .tree .chg { margin-left: auto; font: 550 11px var(--sans); color: var(--ink-2); }
+    .tree button[aria-current="true"] .chg { color: inherit; }
+    .tree .chg[data-fresh] { color: var(--ink); }
+    .tree-note { margin: 8px 0 0; color: var(--ink-2); font-size: 12.5px; }
+    .viewer { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; padding: 10px 16px 16px; }
+    .viewer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding-bottom: 8px; font-size: 13px; color: var(--ink-2); }
+    .viewer-bar code { font-size: 13px; color: var(--ink); }
+    .viewer-bar .seg { margin-left: auto; display: inline-flex; gap: 14px; }
+    .code { margin: 0; overflow: auto; padding: 12px 0; background: var(--panel); color: var(--panel-ink); box-shadow: 0 0 0 1px var(--panel-edge); border-radius: 6px; font: 12.5px/1.6 var(--mono); white-space: pre; counter-reset: ln; tab-size: 2; }
+    .code .ln { display: block; padding: 0 16px 0 0; }
+    .code .ln::before { counter-increment: ln; content: counter(ln); display: inline-block; width: 3.6em; padding-right: 1.2em; text-align: right; color: #7d7d76; user-select: none; }
+    .code .ln.hot { background: rgb(127 209 139 / .1); }
+    .code .k { color: #d59cff; } .code .s { color: #7fd18b; } .code .n { color: #e0c46c; } .code .c { color: #8d8d88; font-style: italic; }
+    .code .t { color: #7cb7ff; } .code .a { color: #6fd6d6; } .code .p { color: #b9b9b3; }
+    .code.diff-view .ln::before { content: none; }
+    .code.diff-view .ln { padding-left: 16px; }
+    .code .ln[data-kind="add"] { color: #7fd18b; background: rgb(127 209 139 / .08); }
+    .code .ln[data-kind="del"] { color: #ff6b4a; background: rgb(255 107 74 / .08); }
+    .code .ln[data-kind="hunk"], .code .ln[data-kind="note"] { color: #8d8d88; }
+    .code-empty { display: grid; place-content: center; gap: 12px; justify-items: start; padding: 32px; color: var(--ink-2); font-size: 15px; }
+    .code-empty p { margin: 0; max-width: 32em; }
+
+    /* Database: the tables an agent made, read from Supabase's Postgres */
+    #db-panel { position: absolute; inset: 0; overflow: auto; padding: 18px 16px 24px 24px; }
+    .db-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; margin-bottom: 8px; }
+    .db-head p { margin: 0; color: var(--ink-2); font-size: 14px; max-width: 46em; }
+    .tables { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0 32px; margin: 0; padding: 0; list-style: none; }
+    .tables > li { padding: 12px 0 14px; border-top: 1px solid var(--ink); }
+    .tables h3 { margin: 0 0 2px; font: 600 16px var(--mono); letter-spacing: 0; }
+    .tables .rls { margin: 0 0 8px; font-size: 13px; color: var(--ink-2); }
+    .tables table { margin: 0; font-size: 13px; }
+    .tables td { padding: 5px 12px 5px 0; text-align: left; }
+    .tables td:first-child { font-family: var(--mono); }
+    .tables td:last-child { color: var(--ink-2); }
+
+    /* ================================================================ the machines */
+    .machines-sec { margin-top: clamp(56px, 6vw, 88px); }
+    .intro { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 48px; padding: 0 0 16px; }
+    .intro h2 { margin: 0 0 4px; font-size: 22px; line-height: 1.15; letter-spacing: -.02em; font-weight: 600; }
+    .lede { margin: 0; max-width: 40em; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+    .awake { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+    .budget { margin: 0; text-align: right; }
+    .budget b { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .budget span { margin-left: 6px; color: var(--ink-2); font-size: 14px; }
+    .limit-ctl { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); white-space: nowrap; }
+    .limit-ctl input { font: 16px var(--sans); width: 4.5em; height: 44px; padding: 0 10px; color: var(--ink); background: var(--bg); border: 1px solid var(--ink-2); border-radius: 6px; }
+    .limit-note { margin: 0; flex-basis: 100%; max-width: 26em; color: var(--ink-2); font-size: 13px; }
+    .limit-note:empty { display: none; }
+    .limit-note:empty { display: none; }
     .desk { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 0 48px; border-top: 1px solid var(--ink); }
     .zone-h { margin: 0; padding: 12px 0 10px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
-
-    /* A machine: name, state, what it is for; a 2px ink bar marks the selected one */
     .machines { list-style: none; margin: 0; padding: 0; }
     .machine { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 12px 0 12px 14px; border-top: 1px solid var(--rule); }
     .machine:last-child { border-bottom: 1px solid var(--rule); }
@@ -52,48 +243,30 @@
     .machine[data-state="busy"] .state::before { background: var(--signal); border-color: var(--signal); animation: live 2s ease-in-out infinite; }
     .machine[data-state="waking"] .state::before, .machine[data-state="suspending"] .state::before { background: var(--restoring); border-color: var(--restoring); }
     .machine[data-state="failed"] .state::before { border-color: var(--ink); }
-    @keyframes live { 50% { opacity: .35; } }
     .purpose { grid-column: 1 / -1; margin: 0; color: var(--ink-2); font-size: 14.5px; line-height: 1.45; }
     .facts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 4px; font-size: 13px; color: var(--ink-2); }
     .facts:empty { display: none; }
     .acts { display: inline-flex; gap: 14px; }
-    .link { font: inherit; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-    .link:hover { text-decoration-thickness: 2px; }
-    .link:disabled { color: var(--ink-2); text-decoration: none; cursor: default; }
     .storage { margin: 14px 0 0; color: var(--ink-2); font-size: 13px; }
 
-    /* The work: the command, its result, the copy, the earlier runs, the terminal */
     .work > section, .work > details { border-top: 1px solid var(--rule); }
     .work > section:first-child { border-top: 0; }
     form { display: grid; gap: 10px; padding-bottom: 28px; }
-    .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px 16px; }
+    .row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px 16px; }
     label { display: grid; gap: 6px; align-content: start; font-size: 13px; color: var(--ink-2); }
-    select, input[type="text"], textarea { font: 15px/1.5 var(--mono); color: var(--ink); background: var(--bg); width: 100%; border: 1px solid var(--ink-2); border-radius: 6px; padding: 9px 12px; }
+    select, input[type="text"], input[type="number"], textarea { font: 15px/1.5 var(--mono); color: var(--ink); background: var(--bg); width: 100%; border: 1px solid var(--ink-2); border-radius: 6px; padding: 9px 12px; }
     select { font-family: var(--sans); font-size: 16px; height: 44px; padding: 0 10px; }
     textarea { min-height: 5.4em; resize: vertical; }
-    select:hover, input[type="text"]:hover, textarea:hover { border-color: var(--ink); }
+    select:hover, input[type="text"]:hover, input[type="number"]:hover, textarea:hover { border-color: var(--ink); }
+    .addr input:hover { border: 0; }
     ::placeholder { color: var(--ink-2); opacity: 1; }
     .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
-    .actions button { font: 550 15px/1 var(--sans); height: 44px; padding: 0 20px; border-radius: 999px; cursor: pointer; border: 1px solid var(--ink); background: transparent; color: var(--ink);
-      transition: background-color .2s cubic-bezier(.2,.8,.2,1), color .2s cubic-bezier(.2,.8,.2,1), border-color .2s cubic-bezier(.2,.8,.2,1); }
-    .actions .go { background: var(--signal); border-color: var(--signal); color: var(--on-signal); min-width: 84px; }
-    .actions button:not(:disabled):hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
-    .actions button:disabled { opacity: .38; cursor: default; }
     .hint { margin: 0; color: var(--ink-2); font-size: 14px; }
     #agent-status { margin: 0 0 28px; padding: 10px 0 0; border-top: 1px solid var(--ink); min-height: 2.6em; overflow-wrap: anywhere; font-size: 15px; }
-
     .block-h { margin: 0; padding: 12px 0 0; font-size: 13px; font-weight: 500; color: var(--ink-2); }
-    .ap-empty { margin: 10px 0 24px; color: var(--ink-2); font-size: 15px; }
     .run-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 20px; margin: 10px 0 12px; }
     .run-cmd { flex: 1 1 24ch; min-width: 0; font: 15px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
     .run-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font-size: 14px; }
-    .run-time { color: var(--ink-2); white-space: nowrap; }
-    .tag { font: 13px var(--mono); color: var(--ink-2); }
-    .badge { font-weight: 550; }
-    .badge::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; vertical-align: .02em; box-sizing: border-box; }
-    .badge[data-tone="ok"]::before { background: var(--ink); }
-    .badge[data-tone="bad"]::before { border: 1.5px solid var(--ink); }
-    .badge[data-tone="live"]::before { background: var(--signal); animation: live 2s ease-in-out infinite; }
     .run-out { margin: 0 0 24px; white-space: pre; max-height: min(55vh, 30em); overflow: auto; }
     .run-out:empty::before { content: "No output yet"; color: var(--ink-2); font-family: var(--sans); }
     #agent-runs { margin: 0; padding: 0; list-style: none; }
@@ -101,21 +274,19 @@
     #agent-runs .run-out { margin: 0; max-height: 18em; }
     .run-fold > summary { cursor: pointer; width: max-content; color: var(--ink-2); font-size: 14px; padding: 2px 0 8px; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
     #agent-history { padding-bottom: 24px; }
-
-    #copy-form { padding-top: 14px; }
-    #copy-form .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px 16px; }
+    #copy-form, #preview-form { padding-top: 14px; }
+    .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px 16px; }
+    .trio { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr); gap: 10px 16px; }
     .limit { color: var(--ink-2); font-size: 14px; margin: 0; }
-
-    /* The terminal, behind a disclosure: the page's one dark surface */
     #terminal-box > summary { display: flex; align-items: center; gap: 8px; width: max-content; max-width: 100%; cursor: pointer; padding: 14px 0; font-weight: 600; font-size: 15px; list-style: none; }
     #terminal-box > summary::-webkit-details-marker { display: none; }
-    #terminal-box > summary svg { width: 14px; height: 14px; flex: none; transition: transform .2s cubic-bezier(.2,.8,.2,1); }
+    #terminal-box > summary svg { width: 14px; height: 14px; flex: none; transition: transform .2s var(--ease); }
     #terminal-box[open] > summary svg { transform: rotate(90deg); }
     #terminal-panel { position: relative; height: min(60vh, 460px); min-height: 300px; padding: 10px; background: var(--panel); box-shadow: 0 0 0 1px var(--panel-edge); border-radius: 6px; overflow: hidden; }
     #terminal { height: 100%; }
     #terminal-note { position: absolute; right: 12px; bottom: 10px; z-index: 1; margin: 0; max-width: calc(100% - 24px); font: 12px var(--mono); color: #8d8d88; pointer-events: none; }
 
-    /* The question before anything runs, and the one before a start fresh */
+    /* The question before anything runs, and the ones before a start fresh or a revert */
     .sg-ask { max-width: 30rem; padding: 22px 24px 20px; border: 1px solid var(--ink); border-radius: 6px; background: var(--bg); color: var(--ink); font: 16px/1.5 var(--sans); }
     .sg-ask::backdrop { background: rgb(0 0 0 / .45); }
     .sg-ask h2 { margin: 0 0 8px; font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
@@ -125,84 +296,42 @@
     .sg-ask .sg-ask-yes { background: var(--ink); color: var(--bg); }
     .sg-ask button:hover { background: var(--ink); color: var(--bg); }
 
-    /* The preview: a machine's web server, in a frame of this page */
-    #preview-form { padding-top: 14px; padding-bottom: 18px; }
-    #preview-form .trio { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr); gap: 10px 16px; }
-    #preview-form input[type="number"] { font: 15px/1.5 var(--mono); color: var(--ink); background: var(--bg); width: 100%; border: 1px solid var(--ink-2); border-radius: 6px; padding: 9px 12px; }
-    #preview-panel { margin: 0 0 12px; border: 1px solid var(--ink); border-radius: 6px; overflow: hidden; }
-    .pbar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
-    .pbar input { flex: 1 1 auto; min-width: 0; height: 36px; padding: 0 10px; font: 14px var(--mono); }
-    .pbar button { font: 550 14px/1 var(--sans); height: 36px; padding: 0 14px; border-radius: 999px; cursor: pointer; border: 1px solid var(--ink); background: transparent; color: var(--ink); }
-    .pbar button:hover { background: var(--ink); color: var(--bg); }
-    .pbar a { font-size: 14px; color: var(--ink); white-space: nowrap; }
-    #preview-frame { display: block; width: 100%; height: min(70vh, 640px); min-height: 360px; border: 0; background: #fff; }
-    #preview-note { margin: 0 0 24px; overflow-wrap: anywhere; }
 
-    /* What the agent changed: a feed of commands, the files each changed (diffs in the page's one
-       dark surface, with the terminal's own red and green), and the rebuilds */
-    #builder { border-top: 1px solid var(--rule); padding-bottom: 24px; }
-    .builder-h { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 20px; }
-    .builder-ctl { display: flex; align-items: center; gap: 16px; }
-    .builder-ctl label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
-    .builder-ctl select { width: auto; height: 36px; font-size: 14px; }
-    #builder-status { margin: 0 0 4px; font-size: 15px; overflow-wrap: anywhere; }
-    #builder .actions { margin: 6px 0 14px; }
-    #builder .ap-empty { margin: 0 0 12px; }
-    .feed { list-style: none; margin: 0; padding: 0; max-height: min(85vh, 960px); overflow: auto; }
-    .ev { padding: 10px 0 12px; border-top: 1px solid var(--rule); }
-    .ev-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 14px; }
-    .ev-head .run-time { margin-left: auto; }
-    .ev-cmd { display: block; margin-top: 6px; max-height: 7.5em; overflow: auto; font: 14px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-    .ev-text { margin: 6px 0 0; font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
-    .ev[data-kind="note"] .ev-text { color: var(--ink); font-size: 15px; }
-    .ev-files .ev-text { color: var(--ink); }
-    .files { list-style: none; margin: 4px 0 0; padding: 0; }
-    .files summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 4px 0; cursor: pointer; font: 14px/1.4 var(--mono); }
-    .files summary::marker { color: var(--ink-2); }
-    .files .st { font: 550 12px var(--sans); color: var(--ink-2); }
-    .files .st[data-status="added"] { color: var(--ink); }
-    .files .path { overflow-wrap: anywhere; }
-    .files .counts { color: var(--ink-2); }
-    .diff { margin: 4px 0 8px; padding: 10px 12px; max-height: 24em; overflow: auto; white-space: pre; background: var(--panel); color: var(--panel-ink);
-      box-shadow: 0 0 0 1px var(--panel-edge); border-radius: 6px; font: 13px/1.5 var(--mono); }
-    .diff .dl[data-kind="add"] { color: #7fd18b; }
-    .diff .dl[data-kind="del"] { color: #ff6b4a; }
-    .diff .dl[data-kind="hunk"], .diff .dl[data-kind="note"] { color: #8d8d88; }
-    .ev-error { white-space: pre-wrap; overflow-wrap: anywhere; }
-    /* Wide: the page an agent builds and what it changed, side by side */
-    @media (min-width: 1360px) {
-      .studio.open { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 24px; align-items: start; }
-      .studio.open #builder { border-top: 0; }
-      .studio.open .feed { max-height: min(70vh, 640px); }
+    /* ================================================================ narrower */
+    @media (max-width: 1180px) {
+      .studio { grid-template-columns: minmax(0, 1fr); height: auto; }
+      .stage { order: -1; height: clamp(520px, 78dvh, 900px); border-bottom: 1px solid var(--rule); }
+      .stage-bar { padding-left: 0; }
+      .pane { border-right: 0; max-height: 80dvh; }
+      .pane-head, .pane-foot, .stream { padding-right: 0; }
     }
-
-    .note { margin-top: 64px; padding-top: 16px; border-top: 1px solid var(--ink); display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 16px 48px; }
-    .note p { margin: 0; color: var(--ink-2); font-size: 16px; max-width: 40em; }
-
     @media (max-width: 1080px) {
       .desk { grid-template-columns: minmax(0, 1fr); }
       .machines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; }
       .machine:nth-last-child(2) { border-bottom: 1px solid var(--rule); }
       .work { margin-top: 28px; border-top: 1px solid var(--ink); }
-      .note { grid-template-columns: minmax(0, 1fr); }
     }
     @media (max-width: 720px) {
       .top nav a:not([href^="https"]):not([aria-current]) { display: none; }
-      .intro { padding: 32px 0 24px; }
+      .ptools { flex-basis: 100%; justify-content: flex-start; }
+      .devices { display: none; }
+      #code-panel { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+      .tree { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--rule); }
+      .viewer { padding: 10px 0 0; }
+      #db-panel { padding-left: 0; }
       .budget, .limit-note { text-align: left; }
       .awake { justify-items: start; }
       .machines { grid-template-columns: minmax(0, 1fr); }
       .machine:nth-last-child(2) { border-bottom: 0; }
-      .row, #copy-form .pair, #preview-form .trio { grid-template-columns: minmax(0, 1fr); }
-      .pbar { flex-wrap: wrap; }
-      .pbar input { flex-basis: 100%; }
-      #preview-frame { height: 70vh; }
+      .row2, .pair, .trio { grid-template-columns: minmax(0, 1fr); }
       body { font-size: 16px; }
     }
-    @media (pointer: coarse) { .link { padding-block: 12px; margin-block: -12px; } }
+    @media (pointer: coarse) { .link { padding-block: 12px; margin-block: -12px; } .tree button { padding-block: 10px; } [role="tab"] { padding-block: 14px 13px; } .ibtn, .devices button { width: 44px; height: 44px; } }
     @media (prefers-reduced-motion: reduce) {
-      .machine[data-state="busy"] .state::before, .badge[data-tone="live"]::before { animation: none; }
-      #terminal-box > summary svg, .actions button { transition: none; }
+      .machine[data-state="busy"] .state::before, .badge[data-tone="live"]::before, .ev[data-state="running"]::before { animation: none; }
+      .building { animation: none; background: var(--signal); opacity: .6; }
+      #terminal-box > summary svg, .prompt > summary svg, .btn, .device, #preview-frame { transition: none; }
+      #preview-frame.reloading { filter: none; }
     }
   </style>
 </head>
@@ -220,156 +349,231 @@
     </header>
 
     <main>
-      <section class="intro" aria-labelledby="title">
-        <div>
-          <h1 id="title">Machines for agents</h1>
-          <p class="lede">Linux machines for agents, in this browser tab: Supabase and a React app on it, which you see
-            live in the preview below, rebuilt after every change an agent makes, beside what it changed; and Python,
-            DuckDB and PostgreSQL for work that needs compute. Run a shell command in any of them, copy files from one to another, and open a machine's web server
-            here. A machine starts on its first command; only a few stay awake at once, and the rest sleep with their files
-            saved.</p>
-        </div>
-        <div class="awake">
-          <p class="budget" id="budget"><b>0 of 2 awake</b><span>on this page</span></p>
-          <label class="limit-ctl" for="awake-limit">Machines awake at once<input id="awake-limit" name="awakeLimit" type="number" min="1" max="8" step="1" value="2" inputmode="numeric"></label>
-          <p class="limit-note" id="limit-note" aria-live="polite"></p>
-        </div>
-      </section>
-
-      <div class="desk">
-        <section aria-labelledby="machines-title">
-          <h2 class="zone-h" id="machines-title">Machines</h2>
-          <ul class="machines" id="machines" aria-label="Machines">
-            <!-- Until the page has read runtimes.json (or without JavaScript): what it runs -->
-            <li class="machine"><span class="pick">Supabase</span><p class="purpose">Supabase for web app building: Postgres, Auth and the Data API, with a preview</p></li>
-            <li class="machine"><span class="pick">React + Vite</span><p class="purpose">Build web apps: a React app on Supabase, rebuilt and served on port 4173 as it changes (Vite, Node)</p></li>
-            <li class="machine"><span class="pick">Python + Rich</span><p class="purpose">Run Python: scripts, numpy and pandas for data work; pip install adds packages from PyPI.</p></li>
-            <li class="machine"><span class="pick">DuckDB</span><p class="purpose">DuckDB for analytics: SQL over CSV, Parquet and JSON files.</p></li>
-            <li class="machine"><span class="pick">PostgreSQL</span><p class="purpose">PostgreSQL for database work: load CSV files and query them with psql.</p></li>
-          </ul>
-          <p class="storage" id="storage">A machine's files are saved in this browser when it is suspended. What an awake machine did since then is lost on reload.</p>
-        </section>
-
-        <div class="work">
-          <section id="command" aria-labelledby="command-title">
-            <h2 class="zone-h" id="command-title">Run a command</h2>
-            <form id="agent-form" data-part="form" aria-label="Run a command">
-              <div class="row">
-                <label>Runtime<select id="agent-runtime" name="runtime"></select></label>
-                <label>Shell command<textarea id="agent-command" data-part="command" name="command" rows="3" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="uname -m"></textarea></label>
-              </div>
-              <p class="hint" id="agent-sample">Runs as root, from /root, one at a time per machine. Ctrl+Enter runs it.</p>
-              <div class="actions">
-                <button id="agent-run" class="go" data-part="run" type="submit" disabled>Run</button>
-                <button id="agent-cancel" data-part="cancel" type="button" disabled>Cancel</button>
-              </div>
-            </form>
-            <p id="agent-status" data-part="status" role="status" aria-live="polite">Loading the machines…</p>
-
-            <section id="agent-out" aria-labelledby="agent-out-title">
-              <h3 class="block-h" id="agent-out-title">Result</h3>
-              <p class="ap-empty" data-part="empty">No command has run yet.</p>
-              <div class="run-head" data-part="latest-head" hidden>
-                <code class="run-cmd" data-part="latest-command"></code>
-                <span class="run-meta"><span class="tag" data-part="latest-runtime"></span><span id="agent-result" class="badge" data-part="result"></span><time class="run-time" data-part="latest-time"></time></span>
-              </div>
-              <pre id="agent-output" class="run-out" data-part="output" tabindex="0" aria-label="Command output" hidden></pre>
-            </section>
-          </section>
-
-          <section id="preview" aria-labelledby="preview-title">
-            <form id="preview-form" data-part="preview-form" aria-labelledby="preview-title">
-              <h2 class="zone-h" id="preview-title">Preview a machine's web server</h2>
-              <div class="trio">
-                <label>Runtime<select id="preview-runtime" name="previewRuntime"></select></label>
-                <label>Port<input id="preview-port" name="previewPort" type="number" min="1" max="65535" step="1" value="4173" inputmode="numeric"></label>
-                <label>Path<input id="preview-path" name="previewPath" type="text" value="/" autocomplete="off" spellcheck="false"></label>
-              </div>
-              <div class="actions">
-                <button id="preview-open" data-part="open-preview" type="submit">Open preview</button>
-                <button id="preview-close" data-part="close-preview" type="button" disabled>Close preview</button>
-              </div>
-            </form>
-            <div class="studio" id="studio">
-              <div class="studio-preview">
-                <div id="preview-panel" hidden>
-                  <div class="pbar">
-                    <input id="preview-address" type="text" aria-label="Address in the preview" autocomplete="off" spellcheck="false">
-                    <button id="preview-reload" type="button">Reload</button>
-                    <a id="preview-tab" href="./" target="_blank" rel="noopener">New tab</a>
-                  </div>
-                  <iframe id="preview-frame" title="Preview of a machine's web server"></iframe>
-                </div>
-                <p class="hint" id="preview-note">No preview is open. A server in a machine must listen on 0.0.0.0 to be seen here.</p>
-              </div>
-
-              <!-- What agents do and change, beside the page they build (builder.js) -->
-              <section id="builder" aria-labelledby="builder-title">
-                <div class="builder-h">
-                  <h3 class="zone-h" id="builder-title">What the agent changed</h3>
-                  <div class="builder-ctl">
-                    <label for="feed-filter">Show<select id="feed-filter" name="feedFilter"><option value="">All machines</option></select></label>
-                    <button class="link" id="feed-clear" type="button" aria-label="Clear the activity list">Clear</button>
-                  </div>
-                </div>
-                <p id="builder-status">Every command in every machine shows here, newest first, with the files it changed in web's app.
-                  web rebuilds its app on each change, and the preview reloads with it.</p>
-                <div class="actions">
-                  <button id="demo-play" type="button">Watch an agent build</button>
-                  <button id="demo-stop" type="button" hidden>Stop the walkthrough</button>
-                </div>
-                <p class="ap-empty" id="feed-empty">Nothing has run yet.</p>
-                <ol class="feed" id="feed" aria-label="Agent activity, newest first"></ol>
-              </section>
-            </div>
-          </section>
-
-          <section id="copy" aria-labelledby="copy-title">
-            <form id="copy-form" aria-labelledby="copy-title">
-              <h2 class="zone-h" id="copy-title">Copy a file between machines</h2>
-              <div class="pair">
-                <label>From runtime<select id="copy-from" name="from"></select></label>
-                <label>From path<input id="copy-from-path" name="fromPath" type="text" value="/root/data.csv" autocomplete="off" spellcheck="false"></label>
-                <label>To runtime<select id="copy-to" name="to"></select></label>
-                <label>To path<input id="copy-to-path" name="toPath" type="text" value="/root/data.csv" autocomplete="off" spellcheck="false"></label>
-              </div>
-              <p class="limit">Any file up to 8 MiB, checked by sha256 on both ends. It goes over the machines' serial lines: expect tens of KiB a second.</p>
-              <div class="actions">
-                <button id="copy-go" type="submit" disabled>Copy</button>
-                <button id="copy-cancel" type="button" disabled>Cancel copy</button>
-              </div>
-            </form>
-          </section>
-
-          <section id="agent-history" aria-labelledby="agent-history-title" data-part="history" hidden>
-            <h2 class="block-h" id="agent-history-title">Earlier runs</h2>
-            <ol id="agent-runs" data-part="runs"></ol>
-          </section>
-
-          <details id="terminal-box">
-            <summary><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg><span id="terminal-label">Show terminal</span></summary>
-            <div id="terminal-panel">
-              <div id="terminal"></div>
-              <p id="terminal-note" hidden></p>
-            </div>
-          </details>
-        </div>
+      <div class="studio-head">
+        <h1 id="title">App studio</h1>
       </div>
 
-      <section class="note" aria-label="About this page">
-        <p>Each machine runs in a Web Worker of its own, in this tab; nothing runs on a server. Supabase runs on two
-          CPUs, which needs the page cross-origin isolated: its service worker does that, so the first visit reloads once. A machine left idle for
-          5 minutes, or hidden for a minute, is suspended: its state saved in this browser and its memory freed. The
-          next command wakes it with its files as they were. Only a suspended machine's state is kept: reloading the
-          page loses what an awake one did since its last suspend, and the browser asks first. Start fresh goes back to
-          the machine as built. The page needs the network: it doesn't work offline.</p>
-        <p>Browsers with WebMCP get the tools <code>list_runtimes</code>, <code>run_command</code>, <code>job_status</code>,
-          <code>cancel_job</code>, <code>write_file</code>, <code>copy_file</code>, <code>open_preview</code>, <code>close_preview</code> and
-          <code>set_awake_limit</code>; scripts in the page get <code>window.snowglobeAgent</code>. Every run, copy and
-          preview asks the person at this page first, once per page load, and the page refuses to run inside another
-          page's frame. A preview is this site's page: what the machine serves runs here as one.
-          More in <a href="../docs/agents/#in-the-page">For agents and programs</a> and <a href="../llms.txt">llms.txt</a>.</p>
+      <div class="studio" id="studio">
+        <!-- The agent: how to connect one, and what it did, as a conversation -->
+        <section class="pane" id="builder" aria-labelledby="builder-title">
+          <div class="pane-head">
+            <h2 id="builder-title"><span class="dot" id="agent-dot" aria-hidden="true"></span>Agent</h2>
+            <div class="builder-ctl">
+              <span class="conn" id="webmcp-state">Looking for WebMCP…</span>
+              <label for="feed-filter"><span class="vh">Show</span><select id="feed-filter" name="feedFilter" aria-label="Show"><option value="">All machines</option></select></label>
+              <button class="link" id="feed-clear" type="button" aria-label="Clear the activity list">Clear</button>
+            </div>
+          </div>
+
+          <div class="stream" id="stream">
+            <div class="connect" id="connect">
+              <h3>Connect an agent</h3>
+              <p>Open this page in your agent's browser and give it the prompt. This page has no AI of its own.</p>
+              <details class="prompt">
+                <summary><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg>The prompt</summary>
+                <pre id="agent-prompt" tabindex="0" aria-label="Prompt for your agent"></pre>
+              </details>
+              <div class="row">
+                <button class="btn sm" id="copy-prompt" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.25" y="5.25" width="8.5" height="8.5" rx="1"/><path d="M10.75 5.25V2.25h-8.5v8.5h3"/></svg>Copy the prompt</button>
+                <button class="btn sm" id="demo-play" type="button" title="Builds a small todo list from the blank starter, through the tools an agent uses">Watch an agent build</button>
+              </div>
+            </div>
+            <p class="ap-empty" id="feed-empty" hidden>Nothing has run yet.</p>
+            <ol class="feed" id="feed" aria-label="Agent activity, newest first"></ol>
+            <p id="builder-status"></p>
+          </div>
+
+          <div class="pane-foot">
+            <div class="actions">
+              <button class="btn sm" id="undo-change" type="button" title="Takes web's app back one change; the last 20 are kept"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5.5 3.5L2.5 6.5l3 3M2.75 6.5H10a3.5 3.5 0 010 7H7"/></svg>Undo last change</button>
+              <button class="btn sm" id="revert-start" type="button" title="Takes web's app back to the blank starter; Undo brings it back">Revert to starter…</button>
+              <button class="btn sm" id="demo-stop" type="button" hidden>Stop the walkthrough</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- The stage: the app as built, its code, its database -->
+        <section class="stage" aria-label="The app">
+          <div class="stage-bar">
+            <div role="tablist" aria-label="View">
+              <button role="tab" id="tab-preview" aria-controls="panel-preview" aria-selected="true">Preview</button>
+              <button role="tab" id="tab-code" aria-controls="panel-code" aria-selected="false" tabindex="-1">Code</button>
+              <button role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false" tabindex="-1">Database</button>
+            </div>
+            <div class="ptools" id="preview-bar" hidden>
+              <div class="devices" role="group" aria-label="Preview width">
+                <button type="button" data-size="desktop" aria-pressed="true" aria-label="Desktop width"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="8.5" rx="1"/><path d="M5.5 13.75h5"/></svg></button>
+                <button type="button" data-size="tablet" aria-pressed="false" aria-label="Tablet width, 820 pixels"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.25" y="1.75" width="9.5" height="12.5" rx="1"/></svg></button>
+                <button type="button" data-size="phone" aria-pressed="false" aria-label="Phone width, 390 pixels"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4.75" y="1.75" width="6.5" height="12.5" rx="1"/><path d="M7.25 12h1.5"/></svg></button>
+              </div>
+              <div class="addr">
+                <span class="host" id="preview-host">web:4173</span>
+                <input id="preview-address" type="text" aria-label="Address in the preview" autocomplete="off" spellcheck="false">
+              </div>
+              <button class="ibtn" id="preview-reload" type="button" aria-label="Reload"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M13 3v3.5H9.5"/><path d="M12.6 6.4A5 5 0 103 8"/></svg></button>
+              <a class="ibtn" id="preview-tab" href="./" target="_blank" rel="noopener" aria-label="New tab"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v4H2.5V4h4"/></svg></a>
+            </div>
+          </div>
+
+          <div class="tabpanel" role="tabpanel" id="panel-preview" aria-labelledby="tab-preview">
+            <div class="stage-empty" id="preview-empty">
+              <h2>No app open</h2>
+              <div class="row">
+                <button class="btn go" id="open-app" type="button" title="Starts web: up to about 1.4 GB of this tab's memory">Open the app</button>
+                <span id="preview-note"></span>
+              </div>
+            </div>
+            <div id="preview-panel" hidden>
+              <div class="building" id="building" hidden></div>
+              <div class="device" id="device" data-size="desktop">
+                <iframe id="preview-frame" title="Preview of the app"></iframe>
+              </div>
+              <div class="build-fail" id="build-fail" role="alert" hidden>
+                <h3><span id="build-fail-title">The build failed: the preview keeps the last page that built</span><button type="button" id="build-fail-close">Hide</button></h3>
+                <pre id="build-fail-text"></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="tabpanel" role="tabpanel" id="panel-code" aria-labelledby="tab-code" hidden>
+            <div id="code-panel">
+              <nav class="tree" aria-label="Files of web's app">
+                <ul id="code-tree"></ul>
+                <p class="tree-note" id="code-tree-note"></p>
+              </nav>
+              <div class="viewer">
+                <div class="viewer-bar">
+                  <code id="code-path">No file open</code>
+                  <span id="code-meta"></span>
+                  <span class="seg">
+                    <button class="link" id="code-diff" type="button" aria-pressed="false" disabled>Last change</button>
+                    <button class="link" id="code-refresh" type="button">Refresh</button>
+                  </span>
+                </div>
+                <div class="code-empty" id="code-empty">
+                  <p>web's files, as the agent changes them.</p>
+                  <button class="btn sm" id="code-load" type="button">Show the files</button>
+                </div>
+                <pre class="code" id="code-view" tabindex="0" aria-label="Code" hidden></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="tabpanel" role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>
+            <div id="db-panel">
+              <div class="db-head">
+                <p id="db-note">Supabase's tables.</p>
+                <button class="btn sm" id="db-load" type="button">Show the tables</button>
+              </div>
+              <ul class="tables" id="db-tables"></ul>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="machines-sec" aria-labelledby="machines-h">
+        <div class="intro">
+          <div>
+            <h2 id="machines-h">Machines</h2>
+            <p class="lede">Linux machines in this tab. A few stay awake; the rest sleep with their files saved.</p>
+          </div>
+          <div class="awake">
+            <p class="budget" id="budget"><b>0 of 2 awake</b><span>on this page</span></p>
+            <label class="limit-ctl" for="awake-limit">Machines awake at once<input id="awake-limit" name="awakeLimit" type="number" min="1" max="8" step="1" value="2" inputmode="numeric"></label>
+            <p class="limit-note" id="limit-note" aria-live="polite"></p>
+          </div>
+        </div>
+
+        <div class="desk">
+          <section aria-labelledby="machines-title">
+            <h3 class="zone-h" id="machines-title">Machines</h3>
+            <ul class="machines" id="machines" aria-label="Machines">
+              <!-- Until the page has read runtimes.json (or without JavaScript): what it runs -->
+              <li class="machine"><span class="pick">Supabase</span><p class="purpose">Supabase for web app building: Postgres, Auth and the Data API, with a preview</p></li>
+              <li class="machine"><span class="pick">React + Vite</span><p class="purpose">Build web apps: a blank React project on Supabase, rebuilt and served on port 4173 as it changes (Vite, Tailwind, TypeScript, npm)</p></li>
+              <li class="machine"><span class="pick">Python + Rich</span><p class="purpose">Run Python: scripts, numpy and pandas for data work; pip install adds packages from PyPI.</p></li>
+              <li class="machine"><span class="pick">DuckDB</span><p class="purpose">DuckDB for analytics: SQL over CSV, Parquet and JSON files.</p></li>
+              <li class="machine"><span class="pick">PostgreSQL</span><p class="purpose">PostgreSQL for database work: load CSV files and query them with psql.</p></li>
+            </ul>
+            <p class="storage" id="storage"></p>
+          </section>
+
+          <div class="work">
+            <section id="command" aria-labelledby="command-title">
+              <h3 class="zone-h" id="command-title">Run a command</h3>
+              <form id="agent-form" data-part="form" aria-label="Run a command">
+                <div class="row2">
+                  <label>Runtime<select id="agent-runtime" name="runtime"></select></label>
+                  <label>Shell command<textarea id="agent-command" data-part="command" name="command" rows="3" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="uname -m"></textarea></label>
+                </div>
+                <p class="hint" id="agent-sample">Runs as root, from /root, one at a time per machine. Ctrl+Enter runs it.</p>
+                <div class="actions">
+                  <button id="agent-run" class="btn go" data-part="run" type="submit" disabled>Run</button>
+                  <button id="agent-cancel" class="btn" data-part="cancel" type="button" disabled>Cancel</button>
+                </div>
+              </form>
+              <p id="agent-status" data-part="status" role="status" aria-live="polite">Loading the machines…</p>
+
+              <section id="agent-out" aria-labelledby="agent-out-title">
+                <h4 class="block-h" id="agent-out-title">Result</h4>
+                <p class="ap-empty" data-part="empty">No command has run yet.</p>
+                <div class="run-head" data-part="latest-head" hidden>
+                  <code class="run-cmd" data-part="latest-command"></code>
+                  <span class="run-meta"><span class="tag" data-part="latest-runtime"></span><span id="agent-result" class="badge" data-part="result"></span><time class="run-time" data-part="latest-time"></time></span>
+                </div>
+                <pre id="agent-output" class="run-out" data-part="output" tabindex="0" aria-label="Command output" hidden></pre>
+              </section>
+            </section>
+
+            <section id="preview" aria-labelledby="preview-title">
+              <form id="preview-form" data-part="preview-form" aria-labelledby="preview-title">
+                <h3 class="zone-h" id="preview-title">Preview a machine's web server</h3>
+                <div class="trio">
+                  <label>Runtime<select id="preview-runtime" name="previewRuntime"></select></label>
+                  <label>Port<input id="preview-port" name="previewPort" type="number" min="1" max="65535" step="1" value="4173" inputmode="numeric"></label>
+                  <label>Path<input id="preview-path" name="previewPath" type="text" value="/" autocomplete="off" spellcheck="false"></label>
+                </div>
+                <p class="hint">Shows in Preview above. The server must listen on 0.0.0.0.</p>
+                <div class="actions">
+                  <button id="preview-open" class="btn" data-part="open-preview" type="submit">Open preview</button>
+                  <button id="preview-close" class="btn" data-part="close-preview" type="button" disabled>Close preview</button>
+                </div>
+              </form>
+            </section>
+
+            <section id="copy" aria-labelledby="copy-title">
+              <form id="copy-form" aria-labelledby="copy-title">
+                <h3 class="zone-h" id="copy-title">Copy a file between machines</h3>
+                <div class="pair">
+                  <label>From runtime<select id="copy-from" name="from"></select></label>
+                  <label>From path<input id="copy-from-path" name="fromPath" type="text" value="/root/data.csv" autocomplete="off" spellcheck="false"></label>
+                  <label>To runtime<select id="copy-to" name="to"></select></label>
+                  <label>To path<input id="copy-to-path" name="toPath" type="text" value="/root/data.csv" autocomplete="off" spellcheck="false"></label>
+                </div>
+                <p class="limit">Up to 8 MiB, at tens of KiB a second.</p>
+                <div class="actions">
+                  <button id="copy-go" class="btn" type="submit" disabled>Copy</button>
+                  <button id="copy-cancel" class="btn" type="button" disabled>Cancel copy</button>
+                </div>
+              </form>
+            </section>
+
+            <section id="agent-history" aria-labelledby="agent-history-title" data-part="history" hidden>
+              <h3 class="block-h" id="agent-history-title">Earlier runs</h3>
+              <ol id="agent-runs" data-part="runs"></ol>
+            </section>
+
+            <details id="terminal-box">
+              <summary><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg><span id="terminal-label">Show terminal</span></summary>
+              <div id="terminal-panel">
+                <div id="terminal"></div>
+                <p id="terminal-note" hidden></p>
+              </div>
+            </details>
+          </div>
+        </div>
       </section>
+
     </main>
 
     <footer>
@@ -389,6 +593,7 @@
   <script src="machine-host.js"></script>
   <script src="preview.js"></script>
   <script src="builder.js"></script>
+  <script src="studio.js"></script>
   <script src="scheduler.js"></script>
   <script src="orchestrator.js"></script>
   <script src="agent-page.js"></script>

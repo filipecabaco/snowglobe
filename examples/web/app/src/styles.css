@@ -1,21 +1,8 @@
-:root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; color: #111; background: #fafaf8; }
-body { margin: 0; }
-.app { max-width: 36rem; margin: 0 auto; padding: 32px 20px; display: grid; gap: 20px; }
-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
-h1 { margin: 0; font-size: 2rem; letter-spacing: -.02em; }
-.who { margin: 0; display: flex; align-items: baseline; gap: 10px; }
-.card { display: grid; gap: 12px; }
-label { display: grid; gap: 4px; font-size: 14px; color: #555; }
-input { font: inherit; padding: 8px 10px; border: 1px solid #888; border-radius: 6px; background: #fff; color: inherit; }
-button { font: inherit; padding: 8px 14px; border: 1px solid #111; border-radius: 999px; background: transparent; color: inherit; cursor: pointer; }
-button[type="submit"] { background: #111; color: #fff; }
-button:disabled { opacity: .5; cursor: default; }
-.row { display: flex; gap: 10px; }
-.row input { flex: 1; min-width: 0; }
-.notes { list-style: none; margin: 0; padding: 0; }
-.notes li { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid #ddd; }
-.notes li span { flex: 1; overflow-wrap: anywhere; }
-.notes li button { padding: 4px 10px; font-size: 14px; }
-.quiet { color: #666; font-size: 14px; margin: 0; }
-.error { color: #a40000; margin: 0; }
-footer { overflow-wrap: anywhere; }
+/* Tailwind v4: its utility classes work in any component (className="p-4 text-lg ..."). Put the
+   app's own rules in a layer (@layer base, @layer components), as the base below is: CSS outside a
+   layer wins over every layered rule, Tailwind's utilities included. */
+@import "tailwindcss";
+
+@layer base {
+  :root { color-scheme: light; font-family: system-ui, sans-serif; color: #111; background: #fafaf8; }
+}
