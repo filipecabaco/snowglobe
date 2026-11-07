@@ -262,7 +262,7 @@ test('commands are refused until the machine is ready, and on several CPUs where
 });
 
 // The page's API over one machine, as the agent page has it over several: by runtime
-const ALL = ['list_runtimes', 'run_command', 'job_status', 'cancel_job', 'write_file', 'list_files', 'read_file', 'write_files', 'revert_changes', 'build_status', 'run_sql', 'copy_file', 'open_preview', 'close_preview', 'set_awake_limit'];
+const ALL = ['list_runtimes', 'run_command', 'job_status', 'cancel_job', 'write_file', 'list_files', 'read_file', 'write_files', 'revert_changes', 'build_status', 'run_sql', 'copy_file', 'open_preview', 'preview_snapshot', 'preview_interact', 'close_preview', 'set_awake_limit'];
 function pageApi(c, copies = [], calls = []) {
   const rt = (i) => { if (i.runtime !== 'py') throw new Error(`no runtime ${i.runtime}`); };
   let limit = 2;
@@ -746,4 +746,35 @@ test('afterBuild: a change no build follows is said once it settles; one that ke
   assert.equal((await W.afterBuild(slow, 'web', { version: 3, state: 'ok' }, { ...clock, timeoutMs: 5000 })).state, 'waiting');
   assert.equal(await W.afterBuild(same, 'web', { state: 'none' }, clock), null);
   assert.equal(W.buildLine({ state: 'unchanged' }), "\n[no rebuild: the change isn't part of the app's build]");
+});
+
+test('WebMCP: preview_snapshot and preview_interact read and use the open preview, asking first; no preview, said so', async () => {
+  const calls = [];
+  let asked = 0;
+  const agent = {
+    previewSnapshot: async (input, o) => { calls.push(['snapshot', input, o.source]); return { text: 'page: web:4173/\noutline:\n- button "Add" [e1]' }; },
+    previewInteract: async (input, o) => { calls.push(['interact', input, o.source]); return { text: 'done: clicked button "Add"', error: null }; },
+  };
+  const dispatch = W.dispatcher(W.definitions(agent, { jobText: A.jobText, ask: async () => { asked++; } }));
+  let r = await dispatch('preview_snapshot', {});
+  assert.equal(asked, 1);
+  assert.match(r.content[0].text, /button "Add" \[e1\]/);
+  assert.ok(!r.isError);
+  r = await dispatch('preview_interact', { actions: [{ type: 'click', ref: 'e1' }] });
+  assert.deepEqual(calls[1], ['interact', { actions: [{ type: 'click', ref: 'e1' }], maxChars: undefined }, 'webmcp']);
+  assert.match(r.content[0].text, /clicked/);
+  assert.ok((await dispatch('preview_interact', { actions: [] })).isError, 'actions are required');
+  assert.ok((await dispatch('preview_snapshot', { maxChars: 10 })).isError, 'maxChars bounded');
+  assert.equal(calls.length, 2, 'bad input runs nothing');
+  // A failed action, and no preview open: errors, with the page's words
+  agent.previewInteract = async () => ({ text: 'FAILED: action 1 (click): ref e1 is stale', error: 'ref e1 is stale' });
+  r = await dispatch('preview_interact', { actions: [{ type: 'click', ref: 'e1' }] });
+  assert.ok(r.isError);
+  agent.previewSnapshot = async () => { throw new Error('no preview is open: open_preview first (web, port 4173, for the app)'); };
+  r = await dispatch('preview_snapshot', {});
+  assert.ok(r.isError);
+  assert.match(r.content[0].text, /open_preview first/);
+  // A page without them (an older one): said, not a crash
+  const bare = W.dispatcher(W.definitions({}, { jobText: A.jobText, ask: async () => {} }));
+  assert.match((await bare('preview_snapshot', {})).content[0].text, /can't read its preview/);
 });

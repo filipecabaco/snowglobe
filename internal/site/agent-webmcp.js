@@ -15,8 +15,10 @@
 // build went, and run_sql changes or queries Supabase's database; copy_file
 // copies a file from one machine to another; set_awake_limit says how many
 // machines may be awake at once; open_preview shows a machine's web server in the page's preview
-// panel, and close_preview closes it. The first run, copy or preview asks the person at the page,
-// once for the page load (and window.snowglobeAgent asks the same question, whoever calls it).
+// panel, and close_preview closes it; preview_snapshot reads the page in the preview (its outline,
+// text and what it logged) and preview_interact clicks and types in it (inspect.js). The first
+// run, copy or preview asks the person at the page, once for the page load (and
+// window.snowglobeAgent asks the same question, whoever calls it).
 (function (root) {
   "use strict";
 
@@ -109,7 +111,8 @@
           "A machine an open preview uses is busy, so never suspended. preview_base is where previews are: <preview_base><runtime>/<port>/<path>. " +
           "A runtime's watch, if it has one, is a project directory: each command's job_status (and write_file) says which files in it changed. " +
           "To build an app: list_files and read_file to see web's project, write_files to change it (it waits for the rebuild), " +
-          "revert_changes to undo, build_status for the last build, run_sql for Supabase's schema, open_preview to show it (web, port 4173).",
+          "revert_changes to undo, build_status for the last build, run_sql for Supabase's schema, open_preview to show it (web, port 4173), " +
+          "preview_snapshot to see it (and its runtime errors), preview_interact to use it.",
         inputSchema: { type: "object", properties: {} },
         annotations: { readOnlyHint: true },
         async run() {
@@ -414,6 +417,69 @@
           const answered = r.error ? `its first request failed: ${r.error.replace(/\.$/, "")} (a server just started may need a moment: open it again)` : `it answered ${r.status}${r.statusText ? ` ${r.statusText}` : ""}`;
           return text(`the preview shows ${r.url} (${runtime}'s port ${port}); ${answered}. Other machines' servers are at ${r.base.replace(/[^/]+\/\d+\/$/, "")}<runtime>/<port>/ for the page in it.`,
             !!r.error);
+        },
+      },
+      preview_snapshot: {
+        title: "See the app in the preview",
+        description: "What the open preview shows, read from the page in it (open_preview first): its address and title; an outline of its " +
+          "landmarks, headings and controls (buttons, links, fields with their labels and values, checkboxes checked or not, selects and " +
+          "their options), each control with a ref like [e3] for preview_interact; its visible text; what it logged since it last loaded " +
+          "(console errors and warnings, uncaught errors, rejected promises, failed requests: the runtime errors a build doesn't catch); " +
+          "and the build line: whether what is shown is web's latest build, one under way, or the last that worked before a failed one. " +
+          "Runs nothing in a machine. Bounded by maxChars (default 12000); a longer page is cut and says so.",
+        inputSchema: {
+          type: "object",
+          properties: { maxChars: { type: "integer", minimum: 500, maximum: 60000, description: "Optional: at most this many characters of outline and text (default 12000)" } },
+        },
+        annotations: { readOnlyHint: true, untrustedContentHint: true },
+        async run(input, options) {
+          if (input.maxChars !== undefined && (!Number.isInteger(input.maxChars) || input.maxChars < 500 || input.maxChars > 60000)) throw new Error("maxChars: a whole number, 500 to 60000");
+          if (typeof agent.previewSnapshot !== "function") throw new Error("this page can't read its preview");
+          await ask(options);
+          const r = await agent.previewSnapshot({ maxChars: input.maxChars }, { source: "webmcp", signal: options?.signal });
+          return text(r.text, !!r.error);
+        },
+      },
+      preview_interact: {
+        title: "Use the app in the preview",
+        description: "Run actions in the open preview's page, in order, as a person would, with real DOM events: " +
+          "{type: \"click\", ref}; {type: \"type\", ref, value} (replaces the field's text; React sees it); {type: \"press\", key, ref?} " +
+          "(Enter submits a form's field); {type: \"select\", ref, value} (an option's value or label); {type: \"check\", ref, value?: false to uncheck}; " +
+          "{type: \"scroll\", ref?, value?: pixels | \"top\" | \"bottom\"}; {type: \"wait_for\", text | ref | selector, gone?: true, timeoutMs? (default 5000, at most 30000)}. " +
+          "A target is a ref from the latest preview_snapshot (a stale one, after a re-render or reload, is refused: snapshot again), a CSS " +
+          "selector, or for click and check the control's visible label (text). After each action it waits for the page to settle; it stops at " +
+          "the first that fails and says why. Returns what was done and a fresh snapshot, with what the page logged meanwhile.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            actions: {
+              type: "array", minItems: 1, maxItems: 30,
+              items: {
+                type: "object",
+                properties: {
+                  type: { type: "string", enum: ["click", "type", "press", "select", "check", "scroll", "wait_for"] },
+                  ref: { type: "string", description: "A ref from preview_snapshot, e.g. e3" },
+                  selector: { type: "string", description: "Or a CSS selector" },
+                  text: { type: "string", description: "click, check: the control's label; wait_for: text to wait for" },
+                  value: { description: "type: the text; select: the option; check: false to uncheck; scroll: pixels, \"top\" or \"bottom\"" },
+                  key: { type: "string", description: "press: Enter, Escape, Tab, ArrowDown, a..." },
+                  gone: { type: "boolean", description: "wait_for: wait for it to go instead" },
+                  timeoutMs: { type: "integer", minimum: 0, maximum: 30000, description: "wait_for: how long (default 5000)" },
+                },
+                required: ["type"],
+              },
+            },
+            maxChars: { type: "integer", minimum: 500, maximum: 60000, description: "Optional: bounds the snapshot returned (default 6000)" },
+          },
+          required: ["actions"],
+        },
+        annotations: { readOnlyHint: false, consequentialHint: true, untrustedContentHint: true },
+        async run(input, options) {
+          if (!Array.isArray(input.actions) || !input.actions.length) throw new Error("actions: a list of actions, e.g. [{type: \"click\", ref: \"e3\"}]");
+          if (typeof agent.previewInteract !== "function") throw new Error("this page can't use its preview");
+          await ask(options);
+          const r = await agent.previewInteract({ actions: input.actions, maxChars: input.maxChars }, { source: "webmcp", signal: options?.signal });
+          return text(r.text, !!r.error);
         },
       },
       close_preview: {

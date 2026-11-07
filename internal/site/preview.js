@@ -461,8 +461,80 @@
     });
   }
 
+  // ---------------------------------------------------------------- the hook in the preview's pages
+  // The service worker puts a <script> first in every HTML page the preview shows (preview-hook.js,
+  // from the agent page's directory): what the page logs reaches the agent page, for
+  // preview_snapshot. Inserted into the bytes as they pass, once the start of the document is in.
+
+  const HOOK_FILE = "preview-hook.js";
+  // How much of a page's start is looked through for where the hook goes
+  const HOOK_SCAN = 64 << 10;
+
+  /** Is this answer one to put the hook in: a page (a navigation's HTML) whose body is readable
+   *  bytes (no encoding left on it), with a body at all? */
+  function wantsHook({ navigate, method = "GET", status, headers }) {
+    if (!navigate || method === "HEAD" || NO_BODY.has(status) || status < 200) return false;
+    const get = (n) => headers.filter(([k]) => k.toLowerCase() === n).map(([, v]) => String(v).toLowerCase());
+    if (!get("content-type").some((v) => /^\s*text\/html\b/.test(v))) return false;
+    return get("content-encoding").every((v) => !v.trim() || v.trim() === "identity");
+  }
+
+  /**
+   * Where the hook goes in the start of a page (as latin1 text, so an index is a byte offset):
+   * just after <head …>; before the first other element's tag when there is no <head>; else (`final`: the whole start is in) after <html …>, a doctype, or at 0. -1: not
+   * known yet, more of the page is needed.
+   */
+  function hookAt(text, final = false) {
+    const head = /<head(?=[\s>/])[^>]*>/i.exec(text);
+    if (head) return head.index + head[0].length;
+    const tagged = /<(?!(?:html|head)(?=[\s>/]))[a-z][a-z0-9-]*(?=[\s>/])/i.exec(text);
+    if (tagged) return tagged.index;
+    if (!final && text.length < HOOK_SCAN) return -1;
+    const html = /<html(?=[\s>])[^>]*>/i.exec(text);
+    if (html) return html.index + html[0].length;
+    const doctype = /^\s*<!doctype[^>]*>/i.exec(text);
+    return doctype ? doctype[0].length : 0;
+  }
+
+  /** The hook's tag: a classic script (it runs before the page's modules and its later scripts). */
+  const hookTag = (src) => `<script src="${escapeHtml(src)}"></script>`;
+
+  /** A TransformStream of a page's bytes that puts the hook's tag at hookAt. A page in UTF-16
+   *  (a byte order mark) is passed on as it is. */
+  function hookStream(src, { Stream = root.TransformStream } = {}) {
+    const tagBytes = latin1Bytes(hookTag(src));
+    let held = new Uint8Array(0);
+    let done = false;
+    const emit = (c, final) => {
+      if (held.length >= 2 && ((held[0] === 0xfe && held[1] === 0xff) || (held[0] === 0xff && held[1] === 0xfe))) {
+        done = true;
+        c.enqueue(held);
+        return;
+      }
+      const at = hookAt(latin1Text(held), final);
+      if (at < 0) return;
+      done = true;
+      const out = new Uint8Array(held.length + tagBytes.length);
+      out.set(held.subarray(0, at));
+      out.set(tagBytes, at);
+      out.set(held.subarray(at), at + tagBytes.length);
+      c.enqueue(out);
+      held = null;
+    };
+    return new Stream({
+      transform(chunk, c) {
+        if (done) return c.enqueue(chunk);
+        held = concat(held, chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
+        emit(c, held.length >= HOOK_SCAN);
+      },
+      flush(c) {
+        if (!done) emit(c, true);
+      },
+    });
+  }
+
   const SnowglobePreview = { route, previewUrl, checkPort, checkPath, requestHead, ResponseParser, rewriteLocation, responseHeaders, errorPage, serve,
-    reasonPhrase, decoding, latin1Text, NO_BODY, limits: { MAX_BODY, MAX_HEAD, CONNECT_MS, ANSWER_MS, IDLE_MS }, PREFIX };
+    reasonPhrase, decoding, latin1Text, wantsHook, hookAt, hookTag, hookStream, HOOK_FILE, NO_BODY, limits: { MAX_BODY, MAX_HEAD, CONNECT_MS, ANSWER_MS, IDLE_MS }, PREFIX };
   if (typeof module === "object" && module.exports) module.exports = SnowglobePreview;
   else root.SnowglobePreview = SnowglobePreview;
 })(typeof window !== "undefined" ? window : globalThis);

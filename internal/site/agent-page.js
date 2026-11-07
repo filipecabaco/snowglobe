@@ -2,7 +2,7 @@
 // studio: the app an agent builds in its preview (with its width, address, reload, and its build's
 // state), its code (studio.js: the project's tree and files, read from the machine) and database
 // (Supabase's tables), and beside it the agent's steps as a conversation (builder.js's feed), how
-// to connect an agent, the walkthrough, undo and revert. Below, the machines: their list and state,
+// to connect an agent, undo and revert. Below, the machines: their list and state,
 // the awake limit, the command form (agent-panel.js), the preview, the copy form, the terminal of
 // the selected machine. And the WebMCP tools. Everything here runs only in answer
 // to someone: a click, a key, an agent's call, and every run, copy and preview, whoever asks, needs
@@ -143,7 +143,7 @@
 
   // Runs and copies that didn't come from this page's forms (WebMCP tools, a script): in the
   // history too, tagged with who asked, so the person sees what an agent did
-  const BY = { webmcp: "WebMCP", script: "a script", walkthrough: "the walkthrough" };
+  const BY = { webmcp: "WebMCP", script: "a script" };
   const others = new Map(); // job id or copy id: the run in the history
   async function activity(e) {
     builderActivity(e).catch(() => {});
@@ -442,6 +442,7 @@
   previewFrame.addEventListener("load", () => {
     previewFrame.classList.remove("reloading");
     if (!current) return;
+    shownBuild = lastOk;
     try {
       const loc = previewFrame.contentWindow.location;
       const base = new URL(current.base);
@@ -611,7 +612,7 @@
     const any = feed.entries.length > 0;
     feedEmpty.hidden = !any || feed.entries.some((e) => feed.shows(e));
     feedEmpty.textContent = "Nothing from this machine yet.";
-    // How to connect an agent, until one (or the walkthrough) does something
+    // How to connect an agent, until one does something
     connect.hidden = any;
   }
   feedFilter.addEventListener("change", () => { feed.setFilter(feedFilter.value); feedState(); });
@@ -683,7 +684,6 @@
     }
   }
   $("build-fail-close").addEventListener("click", () => showBuildFail(null));
-  const buildWaiters = new Set();
   const buildWatch = new B.BuildWatch({
     get: () => current ? api.previewGet({ runtime: current.runtime, port: current.port, path: "/__build" }) : Promise.resolve(null),
     visible: () => !doc.hidden,
@@ -694,6 +694,7 @@
     onBuild: (b) => {
       const rt = current?.runtime;
       if (b.state === "ok") {
+        lastOk = b.version;
         reloadPreview();
         showBuildFail(null);
         feed.add({ kind: "build", runtime: rt, state: "ok", version: b.version, ms: b.ms, text: "The preview reloaded." });
@@ -703,16 +704,92 @@
         feed.add({ kind: "build", runtime: rt, state: "error", version: b.version, error: b.error ?? "unknown error", text: "The preview keeps the last page that built." });
         sayBuilder(`${rt}'s build failed: ${String(b.error ?? "").split("\n").find((l) => l.trim()) ?? "see the steps"}`);
       }
-      for (const w of buildWaiters) w(b);
     },
   });
   addEventListener("visibilitychange", () => { if (!doc.hidden && current) buildWatch.kick(); });
-  /** The next build of the preview's server, or null after `ms`. */
-  const nextBuild = (ms = 60000) => new Promise((resolve) => {
-    const done = (b) => { buildWaiters.delete(done); clearTimeout(timer); resolve(b); };
-    const timer = setTimeout(() => done(null), ms);
-    buildWaiters.add(done);
+
+  // ---------------------------------------------------------------- the agent's eyes on the preview
+  // preview_snapshot and preview_interact (inspect.js): the page in the preview, read and used from
+  // here (it is this site's: same origin). What it logs comes from the hook the service worker puts
+  // in each of its pages (preview-hook.js), posted here. The build line says whether what it shows
+  // is the server's latest build
+  const I = SnowglobeInspect;
+  const inspector = new I.Inspector();
+  let lastOk = null; // the last build seen to succeed
+  let shownBuild = null; // the build the preview's page was last loaded with
+  addEventListener("message", (e) => {
+    if (e.data?.type !== "snowglobe-preview-log" || e.origin !== location.origin || e.source !== previewFrame.contentWindow) return;
+    inspector.log(e.data);
   });
+  const needPreview = () => {
+    if (!current) throw new Error("no preview is open: open_preview first (web, port 4173, for the app)");
+  };
+  /** The frame's page loaded (not a blank frame, not mid-navigation), or after `ms` anyway. */
+  async function loaded(ms = 8000) {
+    const t0 = Date.now();
+    for (;;) {
+      let d = null;
+      try { d = previewFrame.contentDocument; } catch {}
+      if (d && d.readyState === "complete" && d.URL !== "about:blank") return;
+      if (Date.now() - t0 > ms) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  const framePath = () => {
+    try {
+      const loc = previewFrame.contentWindow.location;
+      const base = new URL(current.base);
+      return loc.pathname.startsWith(base.pathname) ? "/" + loc.pathname.slice(base.pathname.length) + loc.search + loc.hash : loc.href;
+    } catch { return null; }
+  };
+  async function buildLine() {
+    try {
+      const r = await api.previewGet({ runtime: current.runtime, port: current.port, path: "/__build" });
+      return I.buildText(r?.status === 200 ? JSON.parse(r.body) : null, shownBuild);
+    } catch { return I.buildText(null); }
+  }
+  async function look({ maxChars, since, done, error } = {}) {
+    const s = inspector.read(previewFrame, { maxChars });
+    return { s, text: I.snapshotText(s, { build: await buildLine(), consoleInfo: inspector.consoleSince(since ?? inspector.loadAt),
+      path: `${current.runtime}:${current.port}${framePath() ?? ""}`, done, error }) };
+  }
+  // In the steps: looks one after another are one entry, counted
+  let lastLook = null;
+  function feedLook(source) {
+    if (lastLook && feed.entries[0] === lastLook && Date.now() - lastLook.at < 120000) {
+      lastLook.count++;
+      feed.update(lastLook, { text: `Looked at the preview (${lastLook.count} times)` });
+      return;
+    }
+    lastLook = feed.add({ kind: "preview", runtime: current?.runtime, source, text: "Looked at the preview", count: 1 });
+  }
+  api.previewSnapshot = async ({ maxChars } = {}, { source = "script" } = {}) => {
+    needPreview();
+    await ask();
+    await loaded();
+    const { s, text } = await look({ maxChars });
+    feedLook(source);
+    return { text, url: s.url, title: s.title, outline: s.outline, truncated: s.truncated, console: inspector.consoleSince().lines };
+  };
+  api.previewInteract = async ({ actions, maxChars = 6000 } = {}, { source = "script", signal } = {}) => {
+    needPreview();
+    await ask();
+    // The person sees it happen
+    if (tabs.find((t) => t.id === "tab-preview")?.getAttribute("aria-selected") !== "true") selectTab($("tab-preview"));
+    await loaded();
+    const t0 = Date.now();
+    const r = await I.run(inspector, previewFrame, actions, { signal, settle: (a, o) => I.settle(previewFrame, o) });
+    await loaded();
+    let text;
+    try {
+      text = (await look({ maxChars, since: t0, done: r.done, error: r.error })).text;
+    } catch (e) {
+      text = [...r.done.map((d) => `done: ${d}`), ...(r.error ? [`FAILED: ${r.error}`] : []), `(no snapshot after: ${e?.message ?? e})`].join("\n");
+    }
+    feed.add({ kind: "preview", runtime: current?.runtime, source, text: I.stepsTitle(r.done, r.error), ...(r.error ? { state: "failed", error: r.error } : {}) });
+    lastLook = null;
+    return { text, done: r.done, error: r.error ?? null };
+  };
 
   // The preview's width: the app as a desktop, a tablet or a phone sees it
   const device = $("device");
@@ -1022,37 +1099,6 @@
   }
   undoBtn.addEventListener("click", () => revert("previous"));
   revertBtn.addEventListener("click", () => revert("start"));
-
-  // ---------------------------------------------------------------- the walkthrough
-  // A few edits an agent would make, played through the same calls (builder.js)
-  const demoPlay = $("demo-play");
-  const demoStop = $("demo-stop");
-  let demo = null;
-  demoPlay.disabled = !previewable;
-  if (!machines.some((m) => m.name === "web") || !machines.some((m) => m.name === "supabase")) demoPlay.hidden = true;
-  demoPlay.addEventListener("click", async () => {
-    if (demo) return;
-    demo = new AbortController();
-    demoStop.hidden = false;
-    demoStop.focus();
-    const say = (text) => { sayBuilder(text); feed.add({ kind: "note", text }); };
-    try {
-      await ask();
-      selectTab($("tab-preview"));
-      await B.playDemo(api, { say, signal: demo.signal, waitBuild: async () => {
-        const b = await nextBuild(180000);
-        if (!b) say("No new build came within 3 minutes (is serve --watch running on web? Its log is /tmp/serve.log).");
-        else if (b.state === "error") throw new Error(`the build failed: ${String(b.error).split("\n")[0]}`);
-      } });
-    } catch (err) {
-      say(`The walkthrough stopped: ${err?.message ?? err}.`);
-    } finally {
-      demo = null;
-      demoStop.hidden = true;
-      undoBtn.focus();
-    }
-  });
-  demoStop.addEventListener("click", () => demo?.abort());
 
   // ---------------------------------------------------------------- WebMCP
   api._webmcp = { available: false, registered: [], reason: "looking for WebMCP (document.modelContext)" };

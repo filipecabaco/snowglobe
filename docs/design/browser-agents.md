@@ -83,11 +83,7 @@ preview and, beside it, what the agent changes (`internal/site/builder.js`).
   (no heredocs, no quoting), returning once written, with its changes.
 - The feed: every run, copy, write, build and preview event in every machine, newest first,
   filterable by machine; each changed file is a disclosure with its diff in the page's one dark
-  surface. "Watch an agent build" builds a todo list from the blank starter in three steps through
-  the same API an agent's tools use: a `todos` table with row level security and a policy a verb
-  (`runSql`), the app written whole with sign-in and the list, and its migration (`listFiles`,
-  `readFiles`, `writeFiles`), then a filter and "Clear completed" (read, edited, written). Each step
-  that wrote web's files waits for its rebuild; a replay writes the app over again.
+  surface.
 
 ## The studio: an agent changes all of the app
 
@@ -122,6 +118,36 @@ What an agent needed to change anything in the app, and what does it now:
   Zustand, clsx, TypeScript and React's types) are installed rather than cached: npm's cache keeps
   each package's whole metadata and its peers' (measured 6 to 130 MB a package), while installed
   they cost 44 MB of `node_modules`, read only when imported.
+- See and use what it built: `open_preview` only said the first request's status, and errors the
+  build doesn't catch (a component that throws, a 404 from the Data API) never reached the agent.
+  `preview_snapshot` reads the preview's page directly (the frame is the same origin): an outline
+  in the shape of an accessibility tree (landmarks, headings, controls with their labels, values
+  and states, live regions), the visible text, the build line (the server's `/__build` against
+  the build the frame last loaded), and the page's console. `preview_interact` runs click, type,
+  press, select, check, scroll and wait_for there (`inspect.js`), and returns a fresh snapshot.
+  - Console capture: the service worker already streams every preview response, so for a
+    navigation whose answer is HTML (after it undid any gzip; an encoding it can't undo is left
+    alone) it pipes the bytes through a transform that puts `<script src=".../preview-hook.js">`
+    just after `<head>` (or before the first element when there is none), matching on the bytes
+    as latin1 so UTF-8 passes untouched; the length changes, so no Content-Length is said. A
+    classic script there runs before the app's modules. The hook wraps `console.*`, listens for
+    `error` (capture: resources that failed to load too) and `unhandledrejection`, wraps `fetch`
+    and `XMLHttpRequest` for failed and 4xx/5xx answers, and posts each to `window.parent` with
+    the page's own origin as the target, at most 300 a load. The agent page keeps a ring of 200,
+    taking only messages from the frame's window and its own origin; a snapshot shows those since
+    the page last loaded, errors first when there are many. A tab opened on a preview address
+    (not framed) posts nothing.
+  - Refs are `e<n>`, kept per element (a WeakMap) for as long as the document lives: the same
+    element keeps its ref across snapshots, one removed by a re-render is refused as stale, and a
+    reload (a new document) forgets them all. Typing sets the value through the element's
+    prototype setter (React tracks the instance's) and dispatches `input` and `change`; a click is
+    pointer and mouse events, then `click()`; a synthetic Enter submits its form with
+    `requestSubmit()`, since browsers don't for untrusted events. After each action the page waits
+    for a load to finish and the DOM to be quiet for 150 ms (at most 1.5 s).
+  - Both need the preview open and the page's one consent; they run as the page itself in the
+    preview, as anything there already does. In the steps, looks in a row are one entry
+    ("Looked at the preview (3 times)"); a set of actions is one ("Typed "Buy milk", clicked
+    "Add"").
 
 ---
 
