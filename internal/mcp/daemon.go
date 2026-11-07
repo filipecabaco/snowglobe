@@ -297,7 +297,7 @@ func (d *Daemon) do(name string, a args) (string, error) {
 	case "stop_machine":
 		return "stopped " + a.str("name"), api.RemoveMachine(a.str("name"))
 	case "run_command":
-		req := control.JobRequest{Cmd: a.str("command"), Timeout: a.num("timeout_seconds"), Env: a.labels("env")}
+		req := control.JobRequest{Cmd: a.str("command"), Timeout: a.num("timeout_seconds"), Env: a.labels("env"), Home: true}
 		res, err := d.job(a, req)
 		if err != nil {
 			return "", err

@@ -58,6 +58,7 @@
                 <tr><td>bundle &lt;dir | url&gt;</td><td class="wrap-cell">make a site one executable (<code>-o</code>, <code>--target linux|darwin</code>, <code>--runtime</code>)</td></tr>
                 <tr><td>pack &lt;dir&gt;</td><td class="wrap-cell">pack a site into one tarball (<code>-o site.tar.gz</code> or <code>.tar.zst</code>)</td></tr>
                 <tr><td>pool &lt;dir&gt;</td><td class="wrap-cell">let every site under a directory share one blob store</td></tr>
+                <tr><td>agent-pages &lt;dir&gt;</td><td class="wrap-cell">put every one-CPU <code>--agent</code> site under a directory on the agent page, <code>&lt;dir&gt;/agent/</code> (its <code>runtimes.json</code> and scripts)</td></tr>
                 <tr><td>pwa &lt;dir&gt;</td><td class="wrap-cell">make a site an installable app (<code>--name</code>, <code>--short-name</code>)</td></tr>
                 <tr><td>warm &lt;dir&gt; &lt;reads.json…&gt;</td><td class="wrap-cell">add recorded reads to a site's warm pack</td></tr>
                 <tr><td>daemon</td><td class="wrap-cell">the orchestrator, on a Unix socket (<code>--listen ADDR --token-file F</code> for TCP; <code>--memory 8G</code>, <code>--wait 30s</code>; <code>--detach</code> to run it in the background)</td></tr>
@@ -97,7 +98,7 @@
                 <tr><td>--builder B</td><td></td><td class="wrap-cell"><code>docker</code> (default) or <code>native</code></td></tr>
                 <tr><td>--sandbox</td><td></td><td class="wrap-cell">snapshot for running natively (run, bundle) rather than in a page</td></tr>
                 <tr><td>--no-chunks</td><td></td><td class="wrap-cell">store every file in one blob, however large</td></tr>
-                <tr><td>--agent</td><td>snowglobe.agent</td><td class="wrap-cell">let an agent run commands in the page's machine (<a href="../agents/#in-the-page">in the page</a>); one-CPU sites only</td></tr>
+                <tr><td>--agent</td><td>snowglobe.agent</td><td class="wrap-cell">make the machine one of the agent page's (<a href="../agents/#in-the-page">in the page</a>); one-CPU sites only</td></tr>
                 <tr><td>--agent-exposed-to ORIGIN</td><td>snowglobe.agent-exposed-to</td><td class="wrap-cell">also share the page's WebMCP tools with this origin; repeatable (label: a JSON array)</td></tr>
               </tbody>
             </table>

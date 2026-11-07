@@ -17,6 +17,7 @@ type jobRequest struct {
 	Cmd     string            `json:"cmd"`
 	Timeout float64           `json:"timeout"`
 	Files   map[string][]byte `json:"files"`
+	Home    bool              `json:"home"`
 }
 
 // fakeInstance is a running native instance called name whose control socket answers every job
@@ -107,7 +108,8 @@ func TestRunCommand(t *testing.T) {
 		if text != tc.want || isError != tc.isError {
 			t.Errorf("%s: got %q (error %v), want %q (error %v)", tc.name, text, isError, tc.want, tc.isError)
 		}
-		if r := (*reqs)[0]; r.Cmd != "echo hi" || r.Timeout != 7 {
+		// In the home directory, as in the machine's terminal and the agent page
+		if r := (*reqs)[0]; r.Cmd != "echo hi" || r.Timeout != 7 || !r.Home {
 			t.Errorf("%s: sent %+v", tc.name, r)
 		}
 	}
@@ -120,6 +122,9 @@ func TestWriteFile(t *testing.T) {
 		t.Errorf("got %q, %v", text, isError)
 	}
 	r := (*reqs)[0]
+	if r.Home {
+		t.Error("write_file starts in the home directory, away from its payload")
+	}
 	if string(r.Files["payload"]) != "hello" || r.Cmd != `mkdir -p "$(dirname '/root/it'\''s here.txt')" && cp payload '/root/it'\''s here.txt'` {
 		t.Errorf("sent %+v", r)
 	}

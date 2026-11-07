@@ -22,6 +22,7 @@ type jobRequest struct {
 	Env     map[string]string `json:"env"`
 	Timeout float64           `json:"timeout"`
 	Files   map[string][]byte `json:"files"`
+	Home    bool              `json:"home"`
 }
 
 // fakeJobInstance is a running native instance called name whose control socket answers each job
@@ -159,7 +160,7 @@ func TestShellEndsWithTheCommandsExitStatus(t *testing.T) {
 		{"out of time", JobResult{Output: []byte("out\n"), TimedOut: true, Killed: true}, ExitMaxRuntime},
 		{"stopped", JobResult{Output: []byte("out\n"), Cancelled: true}, ExitStopped},
 	} {
-		fakeJobInstance(t, "web", func(jobRequest) any { return tc.result })
+		reqs := fakeJobInstance(t, "web", func(jobRequest) any { return tc.result })
 		var err error
 		out := captureStdout(t, func() { err = Shell("web", "cmd", false, 10) })
 		var exit ExitError
@@ -173,6 +174,10 @@ func TestShellEndsWithTheCommandsExitStatus(t *testing.T) {
 		}
 		if out != "out\n" {
 			t.Errorf("%s: printed %q", tc.name, out)
+		}
+		// A command typed for a person: in the home directory, as in the machine's terminal
+		if r := (*reqs)[0]; r.Cmd != "cmd" || !r.Home {
+			t.Errorf("%s: sent %+v", tc.name, r)
 		}
 	}
 }
@@ -249,6 +254,10 @@ func TestCopyAFileOut(t *testing.T) {
 	}
 	if cmd := (*reqs)[0].Cmd; !strings.Contains(cmd, "cp '/etc/motd' out/file") {
 		t.Errorf("cmd %s", cmd)
+	}
+	// In its workspace, where out/ is
+	if (*reqs)[0].Home {
+		t.Error("a copy out starts in the home directory")
 	}
 	// Into a directory, under the guest file's name
 	dir := t.TempDir()

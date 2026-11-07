@@ -9,7 +9,10 @@
 //!
 //! The job's files are written into the guest from the host (no console, no quoting) under
 //! /sgjob/<id>, a directory its kernel has never seen (it caches what it has, so new files appear
-//! only in a new directory), and `EXCLAVE_WORKSPACE` names it. Only `sh <launcher>` is typed. The
+//! only in a new directory), and `EXCLAVE_WORKSPACE` names it. The command starts there (its files
+//! in, `out/` back), or, asked to (`"home": true`: a command typed for a person or an agent, as
+//! `snowglobe sh` and run_command send), in the home directory, as the machine's terminal and the
+//! browser's agent page have it. Only `sh <launcher>` is typed. The
 //! launcher asks for a nonce, which the host then types (it is in no file, and the command hasn't
 //! started yet) with its own time, which the launcher sets the guest's wall clock to (a restored
 //! guest's clock otherwise starts at its snapshot's moment: as after a resume from suspend, the
@@ -49,6 +52,9 @@ pub struct Request {
     pub command: String,
     pub env: Vec<(String, String)>,
     pub timeout: Duration,
+    /// Start in the home directory rather than the workspace: a command typed by a person or an
+    /// agent (`snowglobe sh`, run_command), not a job that reads its files in and writes out/
+    pub home: bool,
 }
 
 #[derive(Default)]
@@ -119,8 +125,10 @@ fn quote(s: &str) -> String {
 }
 
 /// The two scripts of a job in workspace `ws`: the launcher (typed `sh <ws>/.sg/job.sh`) and the
-/// command with its environment (`.sg/cmd`).
-pub fn scripts(id: &str, ws: &str, env: &[(String, String)], command: &str) -> Result<(String, String), String> {
+/// command with its environment (`.sg/cmd`). The command starts in `ws`, or with `home` in the
+/// home directory (as in the machine's terminal, and as the browser's agent page runs jobs), `ws`
+/// still its own as `$EXCLAVE_WORKSPACE`.
+pub fn scripts(id: &str, ws: &str, env: &[(String, String)], command: &str, home: bool) -> Result<(String, String), String> {
     // The app's environment: a login PATH, /etc/profile, the image's ENV (from the file a build
     // writes; a site built before there was one has it only in its console script)
     let mut cmd = String::from(
@@ -129,13 +137,19 @@ pub fn scripts(id: &str, ws: &str, env: &[(String, String)], command: &str) -> R
          if [ -f /etc/snowglobe/env ]; then . /etc/snowglobe/env\n\
          elif [ -f /usr/local/bin/snowglobe-console ]; then eval \"$(grep '^export ' /usr/local/bin/snowglobe-console)\"; fi\n",
     );
-    cmd += &format!("cd {} || exit 1\n", quote(ws));
+    if !home {
+        cmd += &format!("cd {} || exit 1\n", quote(ws));
+    }
     cmd += &format!("export EXCLAVE_WORKSPACE={}\n", quote(ws));
     for (k, v) in env {
         if k.is_empty() || k.starts_with(|c: char| c.is_ascii_digit()) || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(format!("{k}: not a variable name"));
         }
         cmd += &format!("export {k}={}\n", quote(v));
+    }
+    if home {
+        // After the image's ENV and the job's, either of which may set HOME
+        cmd += "cd \"${HOME:-/root}\" 2>/dev/null || cd /\n";
     }
     cmd += command;
     cmd.push('\n');
@@ -246,7 +260,7 @@ pub fn run(board: &armless::Board, activity: &Arc<Activity>, req: &Request) -> R
     let id = token();
     let nonce = token();
     let ws = format!("/sgjob/{id}");
-    let (launcher, cmd) = scripts(&id, &ws, &req.env, &req.command)?;
+    let (launcher, cmd) = scripts(&id, &ws, &req.env, &req.command, req.home)?;
     let mut files = 0;
     for (rel, data, mode) in &req.files {
         // However it is spelled (`/out/x`, `./out/x`), nothing goes in the job's own directories
@@ -377,7 +391,7 @@ pub fn run_workspace(board: &armless::Board, activity: &Arc<Activity>, w: &Works
     let done = run(
         board,
         activity,
-        &Request { files: files(&w.dir)?, command: w.command.clone(), env: w.env.clone(), timeout: w.timeout },
+        &Request { files: files(&w.dir)?, command: w.command.clone(), env: w.env.clone(), timeout: w.timeout, home: false },
     )?;
     for (rel, data) in &done.out {
         let dest = w.dir.join("out").join(rel);
@@ -435,6 +449,7 @@ pub fn from_json(v: &serde_json::Value) -> Result<Request, String> {
             .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
             .collect(),
         timeout: timeout(v["timeout"].as_f64())?,
+        home: v["home"].as_bool().unwrap_or(false),
     })
 }
 
@@ -486,17 +501,58 @@ mod tests {
 
     #[test]
     fn variables_are_quoted_and_checked() {
-        let (_, cmd) = scripts("id", "/sgjob/id", &[("A".into(), "it's $HOME".into())], "echo \"$A\"").unwrap();
+        let (_, cmd) = scripts("id", "/sgjob/id", &[("A".into(), "it's $HOME".into())], "echo \"$A\"", false).unwrap();
         assert!(cmd.contains("export A='it'\\''s $HOME'\n"), "{cmd}");
         assert!(cmd.ends_with("echo \"$A\"\n"));
         for bad in ["", "1A", "A-B", "A B", "A;rm"] {
-            assert!(scripts("id", "/w", &[(bad.into(), "v".into())], "true").is_err(), "{bad:?}");
+            assert!(scripts("id", "/w", &[(bad.into(), "v".into())], "true", false).is_err(), "{bad:?}");
         }
     }
 
     #[test]
+    fn a_command_starts_in_its_workspace_or_the_home_directory() {
+        // A job with files (cp, a bundle's job runner): in its workspace, where in/ and out/ are
+        let (_, cmd) = scripts("id", "/sgjob/id", &[], "cat in/a", false).unwrap();
+        let lines: Vec<&str> = cmd.lines().collect();
+        assert!(lines.contains(&"cd '/sgjob/id' || exit 1"), "{cmd}");
+        assert!(!cmd.contains("${HOME"), "{cmd}");
+
+        // A command typed for a person or an agent (`snowglobe sh`, run_command): in the home
+        // directory, as the machine's terminal and the browser's agent page have it, the workspace
+        // still its own. After the image's ENV and the job's, which may set HOME
+        let (launcher, cmd) = scripts("id", "/sgjob/id", &[("HOME".into(), "/home/me".into())], "pwd", true).unwrap();
+        let lines: Vec<&str> = cmd.lines().collect();
+        let n = lines.len();
+        assert_eq!(lines[n - 1], "pwd");
+        assert_eq!(lines[n - 2], "cd \"${HOME:-/root}\" 2>/dev/null || cd /");
+        assert_eq!(lines[n - 3], "export HOME='/home/me'");
+        assert!(lines.contains(&"export EXCLAVE_WORKSPACE='/sgjob/id'"));
+        assert!(!cmd.contains("cd '/sgjob/id'"), "{cmd}");
+        // The launcher still keeps its files in the workspace
+        assert!(launcher.contains("cd '/sgjob/id' || exit 1"));
+
+        // Run as the launcher runs it: it starts where HOME is
+        let dir = std::env::temp_dir().join(format!("sgjob-cwd-{}", std::process::id()));
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let (_, cmd) =
+            scripts("id", dir.to_str().unwrap(), &[("HOME".into(), home.to_str().unwrap().into())], "pwd; echo \"$EXCLAVE_WORKSPACE\"", true)
+                .unwrap();
+        std::fs::write(dir.join("cmd"), cmd).unwrap();
+        let out = std::process::Command::new("sh").arg(dir.join("cmd")).current_dir(&dir).output().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{}\n{}\n", home.display(), dir.display()));
+    }
+
+    #[test]
+    fn a_request_starts_in_the_home_directory_only_when_asked() {
+        assert!(!from_json(&json!({"cmd": "true"})).unwrap().home);
+        assert!(from_json(&json!({"cmd": "true", "home": true})).unwrap().home);
+    }
+
+    #[test]
     fn the_launcher_traps_before_anything_else() {
-        let (launcher, _) = scripts("id", "/sgjob/id", &[], "true").unwrap();
+        let (launcher, _) = scripts("id", "/sgjob/id", &[], "true", false).unwrap();
         let first: Vec<&str> = launcher.lines().take(5).collect();
         assert_eq!(
             first,
@@ -703,7 +759,7 @@ mod tests {
         }
 
         fn request(files: Vec<File>, timeout: Duration) -> Request {
-            Request { files, command: "make".into(), env: vec![("K".into(), "v".into())], timeout }
+            Request { files, command: "make".into(), env: vec![("K".into(), "v".into())], timeout, home: false }
         }
 
         #[test]
@@ -900,13 +956,18 @@ mod tests {
         impl Run {
             /// `path`: the PATH the launcher gets (to leave setsid out of it)
             fn start(name: &str, env: &[(String, String)], command: &str, path: Option<&Path>) -> Run {
+                Run::start_in(name, env, command, path, false)
+            }
+
+            /// `home`: the command starts in the home directory, not the workspace
+            fn start_in(name: &str, env: &[(String, String)], command: &str, path: Option<&Path>, home: bool) -> Run {
                 let ws = std::env::temp_dir().join(format!("sgjob-{name}-{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&ws);
                 // As `run` makes them, from the host
                 for d in [".sg", "in", "out"] {
                     std::fs::create_dir_all(ws.join(d)).unwrap();
                 }
-                let (launcher, cmd) = scripts("t", ws.to_str().unwrap(), env, command).unwrap();
+                let (launcher, cmd) = scripts("t", ws.to_str().unwrap(), env, command, home).unwrap();
                 std::fs::write(ws.join(".sg/cmd"), cmd).unwrap();
                 std::fs::write(ws.join(".sg/job.sh"), launcher).unwrap();
 
@@ -987,6 +1048,24 @@ mod tests {
             let output = std::fs::read_to_string(ws.join(".sg/output")).unwrap();
             assert_eq!(output, format!("it's me in {}\n", ws.display()));
             assert_eq!(std::fs::read_to_string(ws.join("out/r")).unwrap(), "made\n");
+        }
+
+        #[test]
+        fn a_command_for_a_person_starts_in_the_home_directory() {
+            let home = std::env::temp_dir().join(format!("sgjob-homedir-{}", std::process::id()));
+            std::fs::create_dir_all(&home).unwrap();
+            let run = Run::start_in(
+                "home",
+                &[("HOME".into(), home.to_str().unwrap().into())],
+                "pwd; echo made > \"$EXCLAVE_WORKSPACE\"/out/r",
+                None,
+                true,
+            );
+            let (marker, ws) = run.finish();
+            assert_eq!(marker, Some((0, false)));
+            assert_eq!(std::fs::read_to_string(ws.join(".sg/output")).unwrap(), format!("{}\n", home.display()));
+            assert_eq!(std::fs::read_to_string(ws.join("out/r")).unwrap(), "made\n");
+            let _ = std::fs::remove_dir_all(&home);
         }
 
         #[test]

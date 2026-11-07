@@ -117,39 +117,12 @@
       #keys button[aria-pressed="true"] { background: #ff5a2e; border-color: #ff5a2e; color: #0b0b0c; }
     }
     {{- if .Agent}}
-    /* The agent panel: one line until opened (or the address ends #agent), then a command box
-       and the result beside it, above the terminal */
-    #agent-panel { position: relative; background: #161615; color: #e9e9e4; border-bottom: 1px solid #3b3b39; }
-    #agent-panel > summary { cursor: pointer; padding: 7px 12px; list-style: none; display: flex; gap: .75rem; align-items: baseline; }
-    #agent-panel > summary::-webkit-details-marker { display: none; }
-    #agent-panel > summary::after { content: "▾" / ""; color: #aaa; margin-left: auto; }
-    #agent-panel[open] > summary::after { content: "▴" / ""; }
-    #agent-panel > summary:hover { background: #1d1d1c; }
-    #agent-panel > summary:focus-visible, #agent-panel :focus-visible { outline: 2px solid #e9e9e4; outline-offset: 2px; }
-    #agent-panel .title { font-weight: 600; white-space: nowrap; }
-    #agent-panel .hint, #agent-panel .note { color: #aaa; }
-    #agent-panel .hint { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    #agent-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 16px; padding: 0 12px 10px; }
-    #agent-body .note { grid-column: 1 / -1; margin: 0; }
-    #agent-form { display: grid; gap: 6px; align-content: start; margin: 0; }
-    #agent-form label { color: #aaa; }
-    #agent-command { font: inherit; color: inherit; background: #0b0b0c; border: 1px solid #3b3b39; border-radius: 4px;
-      padding: 6px 8px; resize: vertical; min-height: 3.2em; box-sizing: border-box; width: 100%; }
-    #agent-form .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    #agent-form button { font: inherit; color: inherit; border: 1px solid #3b3b39; background: #222221; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
-    #agent-run { background: #e9e9e4 !important; color: #161615 !important; }
-    #agent-form button:disabled { opacity: .45; cursor: default; }
-    #agent-status { margin: 0; overflow-wrap: anywhere; }
-    #agent-out { display: grid; gap: 6px; align-content: start; min-width: 0; }
-    #agent-out h2 { font-size: inherit; margin: 0; color: #aaa; font-weight: 400; }
-    #agent-result { margin: 0; font-weight: 600; }
-    #agent-output { margin: 0; padding: 6px 8px; background: #0b0b0c; border: 1px solid #2b2b29; border-radius: 4px;
-      max-height: 22vh; min-height: 3.2em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-    @media (max-width: 640px) {
-      #agent-panel > summary { padding: 7px 8px; }
-      #agent-body { grid-template-columns: minmax(0, 1fr); padding: 0 8px 8px; }
-      #agent-output { max-height: 18vh; }
-    }
+    /* One of the agent page's machines: a small link in the strip points agents there */
+    #agent-link { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    #agent-link:hover { text-decoration-thickness: 2px; }
+    #agent-link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+    #strip .sep { color: #5a5a57; }
+    @media (prefers-color-scheme: dark) { #strip .sep { color: #a2a29c; } }
     {{- end}}
     /* ?embed: the page hosting this run already says what it is */
     .embed #strip { display: none; }
@@ -159,20 +132,317 @@
   <script src="armless/armless.js"></script>
   <script src="sessions.js"></script>
   <script src="session-ui.js"></script>
-  {{- if .Agent}}
-  <script src="agent.js"></script>
-  <script src="agent-webmcp.js"></script>
-  <script src="agent-panel.js"></script>
-  {{- end}}
+  <script src="machine-core.js"></script>
+  <script src="machine-host.js"></script>
 </head>
 <body>
   <header id="strip">
     <span class="name">{{.Title}}</span>
     <span class="facts">sandboxed in this tab · no server · {{if eq .Network "fetch"}}HTTP(S) through your browser{{else}}no network{{end}}</span>
     <span class="end">
+      {{- if .Agent}}
+      <a id="agent-link" href="../agent/?runtime={{.Name}}">For agents</a><span class="sep" aria-hidden="true">·</span>
+      {{- end}}
       <span id="status" role="status" data-state="loading">loading 0%</span>
     </span>
   </header>
+  {{- template "workspace" .}}
+  {{- template "terminal" .}}
+  <script>
+  // Milestones for benchmarks (bench/run.mjs reads them): snowglobe:start, :ready (the snapshot is
+  // in the machine), :running (the terminal is live) and :first-output (the guest's first output)
+  performance.mark("snowglobe:start");
+  (async () => {
+    {{- if .Agent}}
+    // One of the agent page's machines: agents use that page (/agent/, this machine preselected).
+    // An address ending #agent, as earlier instructions gave, goes there before this page starts
+    // its own machine: only as it loads, never away from a terminal already running (and its
+    // unsaved work) because the address changed
+    const agentLink = document.getElementById("agent-link");
+    agentLink.title = agentLink.href;
+    if (location.hash === "#agent") {
+      location.replace(agentLink.href);
+      return;
+    }
+    {{- end}}
+    const status = document.getElementById("status");
+    document.getElementById("reset").addEventListener("click", () => {
+      if (confirm("Reload this workspace? Changes since the last save may be lost. Your saved work is kept.")) forgetAndReload();
+    });
+
+    // Follow the visual viewport: on phones it shrinks when the keyboard opens, while the layout
+    // viewport (and 100%) stays put behind it
+    const viewport = window.visualViewport;
+    function trackViewport() {
+      if (!viewport) return;
+      document.documentElement.style.setProperty("--vvh", viewport.height + "px");
+      document.documentElement.style.setProperty("--vvt", viewport.offsetTop + "px");
+    }
+    viewport?.addEventListener("resize", trackViewport);
+    viewport?.addEventListener("scroll", trackViewport);
+    trackViewport();
+
+    // Several CPUs share memory between Web Workers, which needs a cross-origin isolated page:
+    // sw.js adds the headers for that, once it controls the page (one reload, the first time)
+    const cpus = {{.CPUs}};
+    const isolationKey = "snowglobe-isolate:" + new URL("./", location.href).pathname;
+    let isolationNeeded = cpus > 1 && !crossOriginIsolated;
+    if (isolationNeeded) {
+      let tried = false;
+      try { tried = sessionStorage.getItem(isolationKey) === "1"; } catch {}
+      if ("serviceWorker" in navigator && !tried) {
+        try { sessionStorage.setItem(isolationKey, "1"); } catch {}
+        navigator.serviceWorker.register("sw.js")
+          .then(() => navigator.serviceWorker.ready)
+          .then(() => location.reload(), () => {});
+      }
+    } else {
+      try { sessionStorage.removeItem(isolationKey); } catch {}
+    }
+
+    // Rendered by snowglobe. Everything below must match the snapshot (snowglobe-vm snapshot):
+    // the same RAM size, CPUs and devices
+    const sessions = new SnowglobeSessionUI({ build: {{.BuildID}}, memory: {{.MemoryMB}}, cpus, network: {{.Network}} });
+    if (!isolationNeeded && !await sessions.prepare()) {
+      status.textContent = "workspace needs attention";
+      status.dataset.state = "error";
+      document.getElementById("sessions").open = true;
+      return;
+    }
+    {{- if .TunnelToken}}
+    // Tunnel URLs with {token} get a fresh one from the token endpoint for each connection, so
+    // the credentials stay with the gateway behind the tunnel, not in this page or the guest
+    const tunnelToken = {{.TunnelToken}};
+    const withTokens = (tunnels) => tunnels.map((t) => !t.url.includes("{token}") ? t : { ...t, url: async () => {
+      const r = await fetch(tunnelToken, { cache: "no-store" });
+      if (!r.ok) throw new Error(`tunnel token: ${r.status}`);
+      return t.url.replaceAll("{token}", encodeURIComponent((await r.text()).trim()));
+    } });
+    {{- end}}
+    // The machine (machine-host.js), in this page's thread: the same factory the agent page makes
+    // its machines with. Its files are absolute URLs against the document's base
+    const host = SnowglobeHost.createMachine({ base: document.baseURI, transport: "inline", config: {
+      wasm: "armless/armless.wasm",
+      wasm_smp: "armless/armless-smp.wasm",
+      memory_mb: {{.MemoryMB}},
+      cpus,
+      filesystem: { json: "system/filesystem.json", baseurl: "system/filesystem/" },
+      initial_state: "system/state.bin.zst",
+      // The files the app is most likely to need, in one background download once it runs
+      warm: "system/warm.pack",
+      {{- if eq .Network "fetch"}}
+      // The guest's HTTP(S) and WebSockets end in the machine (HTTPS with a CA made for this
+      // site) and go out as this page's own fetch() and WebSocket; its TCP to the tunnels'
+      // destinations goes out as WebSockets too
+      network: { tls: "system/tls.json"{{if .Tunnels}}, tunnels: {{if .TunnelToken}}withTokens({{.Tunnels}}){{else}}{{.Tunnels}}{{end}}{{end}} },
+      {{- end}}
+    } });
+    // The terminal is set up (and the screen replayed) before the guest runs
+    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? "system/state.bin.zst");
+    const emulator = host.emulator;
+    // For tests and benchmarks: the machine (console_input, the console event)
+    window.snowglobe = { get emulator() { return host.emulator; } };
+
+    const embedded = new URLSearchParams(location.search).has("embed");
+    if (embedded) document.documentElement.classList.add("embed");
+
+    // Tell any snowglobe page on this origin (an index of several runs) what this window is doing
+    const run = {
+      embedded,
+      id: crypto.randomUUID?.() ?? String(Math.random()).slice(2),
+      title: document.title,
+      path: location.pathname,
+      state: "loading",
+      progress: 0,
+      openedAt: Date.now(),
+      readyAt: null,
+    };
+    const runs = "BroadcastChannel" in window ? new BroadcastChannel("snowglobe-runs") : null;
+    const announce = () => runs?.postMessage({ type: "run", run, at: Date.now() });
+    runs?.addEventListener("message", ({ data }) => {
+      if (data?.type === "hello") announce();
+      if (data?.type === "close" && data.id === run.id) window.close();
+    });
+    setInterval(announce, 2000);
+    addEventListener("pagehide", () => runs?.postMessage({ type: "run", run: { ...run, state: "closed" }, at: Date.now() }));
+    announce();
+
+    const setStatus = (state, text) => {
+      run.state = state;
+      status.dataset.state = state;
+      status.textContent = text;
+      announce();
+    };
+    // Keys typed into the terminal (and the key bar) go to the machine
+    const send = (data) => emulator?.console_input(data);
+
+    if (isolationNeeded) {
+      setStatus("loading", "isolating");
+      if (!("serviceWorker" in navigator)) setStatus("error", "needs a browser with service workers");
+    }
+
+    // What the machine says about itself. A failure starts the page over (once)
+    host.on("progress", (e) => {
+      if (e.file.endsWith("state.bin.zst") && e.total) {
+        run.progress = Math.round((e.loaded / e.total) * 100);
+        setStatus("loading", `loading ${run.progress}%`);
+      }
+    });
+    host.on("error", (error) => {
+      // A stale copy (an offline cache from an earlier build, served by an older service worker)
+      // doesn't match this page: start over from the network, once
+      let retried = false;
+      try { retried = sessionStorage.getItem("snowglobe-refreshed:" + sessions.scope) === "1"; } catch {}
+      if (!retried) {
+        try { sessionStorage.setItem("snowglobe-refreshed:" + sessions.scope, "1"); } catch {}
+        setStatus("loading", "refreshing");
+        forgetAndReload();
+        return;
+      }
+      sessions.blocked = true;
+      sessions.message("Workspace could not start", true, "Your saves are kept. Choose Backup file to download a saved copy, or open Saved workspaces to start fresh.", error.message);
+      sessions.controls();
+      setStatus("error", `failed: ${error.message || error}`);
+    });
+    host.on("stop", ({ reason }) => setStatus("stopped", reason === "poweroff" ? "powered off" : `stopped (${reason})`));
+
+    // The app's console output up to the snapshot, so the terminal shows what it printed
+    const screen = sessions.replay ? Promise.resolve(null) : fetch("system/console.bin")
+      .then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+
+    booted?.then(async () => {
+      try { sessionStorage.removeItem("snowglobe-refreshed:" + sessions.scope); } catch {}
+      performance.mark("snowglobe:ready");
+      run.readyAt = Date.now();
+      document.documentElement.classList.add("running");
+
+      const term = new Terminal({ cursorBlink: true, scrollback: 5000, allowProposedApi: false });
+      term.open(document.getElementById("terminal"));
+      // A terminal is not prose: no autocorrect, capitals or suggestions from touch keyboards
+      const field = term.textarea;
+      if (field) {
+        for (const [k, v] of Object.entries({ autocapitalize: "off", autocorrect: "off", autocomplete: "off", spellcheck: "false" })) field.setAttribute(k, v);
+        field.setAttribute("enterkeyhint", "send");
+      }
+      // Replay the app's screen at the size it was drawn at, so the terminal is exactly what the
+      // app (a full-screen UI, a line editor) last drew; then fit it to the window and tell the
+      // guest, and the app redraws for the new size as it would in any resized terminal
+      if (matchMedia("(max-width: 640px)").matches) term.options.fontSize = 13;
+      const fit = new FitAddon.FitAddon();
+      term.loadAddon(fit);
+      let pendingResize = false;
+      const resize = () => {
+        if (sessions.captureBusy) { pendingResize = true; return; }
+        pendingResize = false;
+        fit.fit();
+        sessions.resize(term.cols, term.rows);
+        emulator.console_resize(term.cols, term.rows);
+      };
+      {{- if .ConsoleCols}}
+      term.resize({{.ConsoleCols}}, {{.ConsoleRows}});
+      {{- else}}
+      fit.fit();
+      {{- end}}
+      if (sessions.replay) {
+        for (const event of sessions.replay) {
+          if (event.bytes) term.write(event.bytes);
+          else {
+            await new Promise(resolve => term.write("", resolve));
+            term.resize(event.cols, event.rows);
+          }
+        }
+        await new Promise(resolve => term.write("", resolve));
+      } else {
+        sessions.resize(term.cols, term.rows);
+        const replay = await screen;
+        if (replay) {
+          const bytes = new Uint8Array(replay);
+          sessions.record(bytes);
+          await new Promise(resolve => term.write(bytes, resolve));
+        }
+      }
+      host.on("console", (bytes) => {
+        if (!performance.getEntriesByName("snowglobe:first-output").length) performance.mark("snowglobe:first-output");
+        sessions.record(bytes);
+        term.write(bytes);
+      });
+      resize();
+      window.addEventListener("resize", () => resize());
+      viewport?.addEventListener("resize", () => resize());
+      // Keep the guest's terminal size in sync with viewport and layout changes.
+      const terminalSize = new ResizeObserver(() => resize());
+      terminalSize.observe(document.getElementById("terminal"));
+
+      // Input is queued in the machine until the guest takes it: nothing typed or pasted is lost
+      term.onData((data) => { if (sessions.input()) send(withCtrl(data)); });
+      keyBar(term);
+      // Running, and its warm pack filling the file cache in the background
+      await host.run();
+      performance.mark("snowglobe:running");
+      setStatus("ready", "running");
+      term.focus();
+      sessions.attach(emulator, term, () => { if (pendingResize) resize(); });
+      // Request eviction protection, but never assume it is granted.
+      navigator.storage?.persist?.().catch(() => {});
+    }).catch(error => {
+      sessions.blocked = true;
+      sessions.message("Workspace could not start", true, "Your saves are kept. Choose Backup file to download a saved copy, or open Saved workspaces to start fresh.", error.message);
+      sessions.controls();
+      setStatus("error", `failed: ${error.message || error}`);
+    });
+
+    // The touch key bar. ctrl is sticky: it applies to the next key typed on the keyboard
+    let ctrlArmed = false;
+    function keyBar(term) {
+      const ctrl = document.querySelector("#keys [data-ctrl]");
+      const arm = (on) => {
+        ctrlArmed = on;
+        ctrl.setAttribute("aria-pressed", String(on));
+      };
+      const arrow = (letter) => () => (term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[") + letter;
+      const keys = {
+        esc: () => "\x1b", tab: () => "\t", "ctrl-c": () => "\x03",
+        up: arrow("A"), down: arrow("B"), right: arrow("C"), left: arrow("D"),
+      };
+      document.getElementById("keys").addEventListener("pointerdown", (event) => {
+        const button = event.target.closest("button");
+        if (!button) return;
+        event.preventDefault(); // keep focus (and the keyboard) on the terminal
+        if (button.hasAttribute("data-ctrl")) return arm(!ctrlArmed);
+        if (sessions.input()) send(keys[button.dataset.send]());
+        arm(false);
+        term.focus();
+      });
+    }
+
+    // ctrl + a letter (or @[\]^_) is that character's control code
+    function withCtrl(data) {
+      if (!ctrlArmed || data.length !== 1) return data;
+      ctrlArmed = false;
+      document.querySelector("#keys [data-ctrl]")?.setAttribute("aria-pressed", "false");
+      const code = data.toUpperCase().charCodeAt(0);
+      return code >= 64 && code <= 95 ? String.fromCharCode(code - 64) : data;
+    }
+
+
+    // Runtime recovery is independent of session storage and other demos on this origin.
+    async function forgetAndReload() {
+      const scope = new URL("./", location.href).href;
+      try {
+        const registration = await navigator.serviceWorker?.getRegistration(scope);
+        if (registration?.scope === scope) await registration.unregister();
+        sessionStorage.removeItem(isolationKey);
+      } catch {}
+      location.reload();
+    }
+  })().catch(error => {
+    document.getElementById("status").textContent = `failed: ${error.message || error}`;
+    document.getElementById("status").dataset.state = "error";
+  });
+  </script>
+</body>
+</html>
+{{- define "workspace"}}
   <div id="workspace-bar">
     <div class="workspace-info">
       <div class="save-state"><span id="session-status" role="status">Opening workspace…</span><span id="session-changes" hidden>Unsaved changes</span></div>
@@ -230,28 +500,8 @@
       </details>
     </div>
   </div>
-  {{- if .Agent}}
-  <details id="agent-panel">
-    <summary><span class="title">Agent commands</span><span class="hint">Run a shell command in this machine and read its exit status</span></summary>
-    <div id="agent-body">
-      <p class="note">Agents: type a shell command here and press Run; the result and its exit status appear under Result. Commands run as root on the machine's own shell, never in the terminal, one at a time. The first run asks the person at this page.</p>
-      <form id="agent-form" aria-label="Run a command">
-        <label for="agent-command">Shell command</label>
-        <textarea id="agent-command" name="command" rows="2" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="python3 -c 'print(6*7)'"></textarea>
-        <div class="actions">
-          <button id="agent-run" type="submit" disabled>Run</button>
-          <button id="agent-cancel" type="button" disabled>Cancel</button>
-        </div>
-        <p id="agent-status" role="status" aria-live="polite">The machine is starting. Run is available once it is running.</p>
-      </form>
-      <section id="agent-out" aria-labelledby="agent-out-title">
-        <h2 id="agent-out-title">Result</h2>
-        <p id="agent-result">No command run yet</p>
-        <pre id="agent-output" tabindex="0" aria-label="Command output"></pre>
-      </section>
-    </div>
-  </details>
-  {{- end}}
+{{- end}}
+{{- define "terminal"}}
   <div id="terminal-wrap">
     <div id="terminal"></div>
     <div id="session-paused" role="status" hidden><div><strong>Copying workspace…</strong><p>Terminal briefly paused. Please wait.</p></div></div>
@@ -267,314 +517,4 @@
     <button type="button" data-send="down" aria-label="Down, next in history"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3.5 6 8 10.5 12.5 6"/></svg></button>
     <button type="button" data-send="right" aria-label="Right"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg></button>
   </div>
-  <script>
-  // Milestones for benchmarks (bench/run.mjs reads them): snowglobe:start, :ready (the snapshot is
-  // in the machine), :running (the terminal is live) and :first-output (the guest's first output)
-  performance.mark("snowglobe:start");
-  (async () => {
-    const status = document.getElementById("status");
-    document.getElementById("reset").addEventListener("click", () => {
-      if (confirm("Reload this workspace? Changes since the last save may be lost. Your saved work is kept.")) forgetAndReload();
-    });
-
-    // Follow the visual viewport: on phones it shrinks when the keyboard opens, while the layout
-    // viewport (and 100%) stays put behind it
-    const viewport = window.visualViewport;
-    function trackViewport() {
-      if (!viewport) return;
-      document.documentElement.style.setProperty("--vvh", viewport.height + "px");
-      document.documentElement.style.setProperty("--vvt", viewport.offsetTop + "px");
-    }
-    viewport?.addEventListener("resize", trackViewport);
-    viewport?.addEventListener("scroll", trackViewport);
-    trackViewport();
-
-    // Several CPUs share memory between Web Workers, which needs a cross-origin isolated page:
-    // sw.js adds the headers for that, once it controls the page (one reload, the first time)
-    const cpus = {{.CPUs}};
-    const isolationKey = "snowglobe-isolate:" + new URL("./", location.href).pathname;
-    let isolationNeeded = cpus > 1 && !crossOriginIsolated;
-    if (isolationNeeded) {
-      let tried = false;
-      try { tried = sessionStorage.getItem(isolationKey) === "1"; } catch {}
-      if ("serviceWorker" in navigator && !tried) {
-        try { sessionStorage.setItem(isolationKey, "1"); } catch {}
-        navigator.serviceWorker.register("sw.js")
-          .then(() => navigator.serviceWorker.ready)
-          .then(() => location.reload(), () => {});
-      }
-    } else {
-      try { sessionStorage.removeItem(isolationKey); } catch {}
-    }
-
-    // Rendered by snowglobe. Everything below must match the snapshot (snowglobe-vm snapshot):
-    // the same RAM size, CPUs and devices
-    const sessions = new SnowglobeSessionUI({ build: {{.BuildID}}, memory: {{.MemoryMB}}, cpus, network: {{.Network}} });
-    if (!isolationNeeded && !await sessions.prepare()) {
-      status.textContent = "workspace needs attention";
-      status.dataset.state = "error";
-      document.getElementById("sessions").open = true;
-      return;
-    }
-    {{- if .TunnelToken}}
-    // Tunnel URLs with {token} get a fresh one from the token endpoint for each connection, so
-    // the credentials stay with the gateway behind the tunnel, not in this page or the guest
-    const tunnelToken = {{.TunnelToken}};
-    const withTokens = (tunnels) => tunnels.map((t) => !t.url.includes("{token}") ? t : { ...t, url: async () => {
-      const r = await fetch(tunnelToken, { cache: "no-store" });
-      if (!r.ok) throw new Error(`tunnel token: ${r.status}`);
-      return t.url.replaceAll("{token}", encodeURIComponent((await r.text()).trim()));
-    } });
-    {{- end}}
-    const emulator = isolationNeeded ? null : new Armless({
-      wasm: "armless/armless.wasm",
-      wasm_smp: "armless/armless-smp.wasm",
-      memory_mb: {{.MemoryMB}},
-      cpus,
-      filesystem: { json: "system/filesystem.json", baseurl: "system/filesystem/" },
-      initial_state: sessions.initialState ?? "system/state.bin.zst",
-      {{- if eq .Network "fetch"}}
-      // The guest's HTTP(S) and WebSockets end in the machine (HTTPS with a CA made for this
-      // site) and go out as this page's own fetch() and WebSocket; its TCP to the tunnels'
-      // destinations goes out as WebSockets too
-      network: { tls: "system/tls.json"{{if .Tunnels}}, tunnels: {{if .TunnelToken}}withTokens({{.Tunnels}}){{else}}{{.Tunnels}}{{end}}{{end}} },
-      {{- end}}
-      // The terminal is set up (and the screen replayed) before the guest runs
-      autostart: false,
-    });
-    // For tests and benchmarks: the machine (console_input, the console event)
-    window.snowglobe = { emulator };
-
-    const embedded = new URLSearchParams(location.search).has("embed");
-    if (embedded) document.documentElement.classList.add("embed");
-
-    // Tell any snowglobe page on this origin (an index of several runs) what this window is doing
-    const run = {
-      embedded,
-      id: crypto.randomUUID?.() ?? String(Math.random()).slice(2),
-      title: document.title,
-      path: location.pathname,
-      state: "loading",
-      progress: 0,
-      openedAt: Date.now(),
-      readyAt: null,
-    };
-    const runs = "BroadcastChannel" in window ? new BroadcastChannel("snowglobe-runs") : null;
-    const announce = () => runs?.postMessage({ type: "run", run, at: Date.now() });
-    runs?.addEventListener("message", ({ data }) => {
-      if (data?.type === "hello") announce();
-      if (data?.type === "close" && data.id === run.id) window.close();
-    });
-    setInterval(announce, 2000);
-    addEventListener("pagehide", () => runs?.postMessage({ type: "run", run: { ...run, state: "closed" }, at: Date.now() }));
-    announce();
-
-    const setStatus = (state, text) => {
-      run.state = state;
-      status.dataset.state = state;
-      status.textContent = text;
-      announce();
-    };
-    {{- if .Agent}}
-
-    // Built with --agent: commands run in this machine for an agent, on its serial shell (never
-    // the terminal below), as window.snowglobeAgent and, where the browser has WebMCP, as tools
-    const agent = SnowglobeAgent.attach({ emulator, cpus, network: {{.Network}}, buildId: {{.BuildID}}, version: {{.Version}},
-      state: () => run.state, saving: () => sessions.captureBusy });
-    window.snowglobeAgent = agent;
-    // One question per page load, for the tools and the panel alike
-    const ask = SnowglobeWebMCP.consent({ doc: document });
-    SnowglobeAgentPanel.attach(agent, { ask, jobText: SnowglobeAgent.jobText });
-    // A model context an extension or a polyfill adds after the page starts is still used
-    agent._controller.webmcp = { available: false, registered: [], reason: "looking for WebMCP (document.modelContext)" };
-    SnowglobeWebMCP.register(agent, { jobText: SnowglobeAgent.jobText, exposedTo: {{.AgentExposedTo}} ?? [], ask, waitMs: 15000 })
-      .then((r) => { agent._controller.webmcp = r; }, (e) => { agent._controller.webmcp = { available: false, registered: [], reason: String(e?.message ?? e) }; });
-    {{- end}}
-
-    if (isolationNeeded) {
-      setStatus("loading", "isolating");
-      if (!("serviceWorker" in navigator)) setStatus("error", "needs a browser with service workers");
-    }
-
-    emulator?.on("progress", (e) => {
-      if (e.file.endsWith("state.bin.zst") && e.total) {
-        run.progress = Math.round((e.loaded / e.total) * 100);
-        setStatus("loading", `loading ${run.progress}%`);
-      }
-    });
-    emulator?.on("error", (error) => {
-      // A stale copy (an offline cache from an earlier build, served by an older service worker)
-      // doesn't match this page: start over from the network, once
-      let retried = false;
-      try { retried = sessionStorage.getItem("snowglobe-refreshed:" + sessions.scope) === "1"; } catch {}
-      if (!retried) {
-        try { sessionStorage.setItem("snowglobe-refreshed:" + sessions.scope, "1"); } catch {}
-        setStatus("loading", "refreshing");
-        forgetAndReload();
-        return;
-      }
-      sessions.blocked = true;
-      sessions.message("Workspace could not start", true, "Your saves are kept. Choose Backup file to download a saved copy, or open Saved workspaces to start fresh.", error.message);
-      sessions.controls();
-      setStatus("error", `failed: ${error.message || error}`);
-    });
-    emulator?.on("started", () => { try { sessionStorage.removeItem("snowglobe-refreshed:" + sessions.scope); } catch {} });
-    emulator?.on("stop", ({ reason }) => setStatus("stopped", reason === "poweroff" ? "powered off" : `stopped (${reason})`));
-
-    // The app's console output up to the snapshot, so the terminal shows what it printed
-    const screen = sessions.replay ? Promise.resolve(null) : fetch("system/console.bin")
-      .then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
-
-    emulator?.ready.then(async () => {
-      performance.mark("snowglobe:ready");
-      run.readyAt = Date.now();
-      document.documentElement.classList.add("running");
-
-      const term = new Terminal({ cursorBlink: true, scrollback: 5000, allowProposedApi: false });
-      term.open(document.getElementById("terminal"));
-      // A terminal is not prose: no autocorrect, capitals or suggestions from touch keyboards
-      const field = term.textarea;
-      if (field) {
-        for (const [k, v] of Object.entries({ autocapitalize: "off", autocorrect: "off", autocomplete: "off", spellcheck: "false" })) field.setAttribute(k, v);
-        field.setAttribute("enterkeyhint", "send");
-      }
-      // Replay the app's screen at the size it was drawn at, so the terminal is exactly what the
-      // app (a full-screen UI, a line editor) last drew; then fit it to the window and tell the
-      // guest, and the app redraws for the new size as it would in any resized terminal
-      if (matchMedia("(max-width: 640px)").matches) term.options.fontSize = 13;
-      const fit = new FitAddon.FitAddon();
-      term.loadAddon(fit);
-      let pendingResize = false;
-      const resize = () => {
-        if (sessions.captureBusy) { pendingResize = true; return; }
-        pendingResize = false;
-        fit.fit();
-        sessions.resize(term.cols, term.rows);
-        emulator.console_resize(term.cols, term.rows);
-      };
-      {{- if .ConsoleCols}}
-      term.resize({{.ConsoleCols}}, {{.ConsoleRows}});
-      {{- else}}
-      fit.fit();
-      {{- end}}
-      if (sessions.replay) {
-        for (const event of sessions.replay) {
-          if (event.bytes) term.write(event.bytes);
-          else {
-            await new Promise(resolve => term.write("", resolve));
-            term.resize(event.cols, event.rows);
-          }
-        }
-        await new Promise(resolve => term.write("", resolve));
-      } else {
-        sessions.resize(term.cols, term.rows);
-        const replay = await screen;
-        if (replay) {
-          const bytes = new Uint8Array(replay);
-          sessions.record(bytes);
-          await new Promise(resolve => term.write(bytes, resolve));
-        }
-      }
-      emulator.on("console", (bytes) => {
-        if (!performance.getEntriesByName("snowglobe:first-output").length) performance.mark("snowglobe:first-output");
-        sessions.record(bytes);
-        term.write(bytes);
-      });
-      window.addEventListener("resize", resize);
-      viewport?.addEventListener("resize", resize);
-      // Keep the guest's terminal size in sync with viewport and layout changes.
-      const terminalSize = new ResizeObserver(resize);
-      terminalSize.observe(document.getElementById("terminal"));
-      resize();
-
-      // Input is queued in the machine until the guest takes it: nothing typed or pasted is lost
-      term.onData((data) => { if (sessions.input()) emulator.console_input(withCtrl(data)); });
-      keyBar(term);
-      emulator.run();
-      performance.mark("snowglobe:running");
-      setStatus("ready", "running");
-      term.focus();
-      sessions.attach(emulator, term, () => { if (pendingResize) resize(); });
-      // Request eviction protection, but never assume it is granted.
-      navigator.storage?.persist?.().catch(() => {});
-
-      preloadWarmPack().catch(() => {});
-    }).catch(error => {
-      sessions.blocked = true;
-      sessions.message("Workspace could not start", true, "Your saves are kept. Choose Backup file to download a saved copy, or open Saved workspaces to start fresh.", error.message);
-      sessions.controls();
-      setStatus("error", `failed: ${error.message || error}`);
-    });
-
-    // The guest's files are fetched one blocking request at a time the first time each is read.
-    // warm.pack bundles the files the app is most likely to need so they arrive in a single
-    // background download and are in the machine before the guest asks for them.
-    async function preloadWarmPack() {
-      const response = await fetch("system/warm.pack");
-      if (!response.ok) return;
-      const pack = new Uint8Array(await response.arrayBuffer());
-      const indexSize = new DataView(pack.buffer).getUint32(0, true);
-      const index = JSON.parse(new TextDecoder().decode(pack.subarray(4, 4 + indexSize)));
-
-      let offset = 4 + indexSize;
-      for (const [name, , length] of index) {
-        const blob = pack.subarray(offset, offset + length);
-        offset += length;
-        if (emulator.has_blob(name)) continue; // the guest already loaded it
-        emulator.provide_blob(name, blob);
-        // Yield between files so typing stays responsive while the cache fills
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-    }
-
-    // The touch key bar. ctrl is sticky: it applies to the next key typed on the keyboard
-    let ctrlArmed = false;
-    function keyBar(term) {
-      const ctrl = document.querySelector("#keys [data-ctrl]");
-      const arm = (on) => {
-        ctrlArmed = on;
-        ctrl.setAttribute("aria-pressed", String(on));
-      };
-      const arrow = (letter) => () => (term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[") + letter;
-      const keys = {
-        esc: () => "\x1b", tab: () => "\t", "ctrl-c": () => "\x03",
-        up: arrow("A"), down: arrow("B"), right: arrow("C"), left: arrow("D"),
-      };
-      document.getElementById("keys").addEventListener("pointerdown", (event) => {
-        const button = event.target.closest("button");
-        if (!button) return;
-        event.preventDefault(); // keep focus (and the keyboard) on the terminal
-        if (button.hasAttribute("data-ctrl")) return arm(!ctrlArmed);
-        if (sessions.input()) emulator.console_input(keys[button.dataset.send]());
-        arm(false);
-        term.focus();
-      });
-    }
-
-    // ctrl + a letter (or @[\]^_) is that character's control code
-    function withCtrl(data) {
-      if (!ctrlArmed || data.length !== 1) return data;
-      ctrlArmed = false;
-      document.querySelector("#keys [data-ctrl]")?.setAttribute("aria-pressed", "false");
-      const code = data.toUpperCase().charCodeAt(0);
-      return code >= 64 && code <= 95 ? String.fromCharCode(code - 64) : data;
-    }
-
-
-    // Runtime recovery is independent of session storage and other demos on this origin.
-    async function forgetAndReload() {
-      const scope = new URL("./", location.href).href;
-      try {
-        const registration = await navigator.serviceWorker?.getRegistration(scope);
-        if (registration?.scope === scope) await registration.unregister();
-        sessionStorage.removeItem(isolationKey);
-      } catch {}
-      location.reload();
-    }
-  })().catch(error => {
-    document.getElementById("status").textContent = `failed: ${error.message || error}`;
-    document.getElementById("status").dataset.state = "error";
-  });
-  </script>
-</body>
-</html>
+{{- end}}

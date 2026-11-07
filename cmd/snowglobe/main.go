@@ -30,6 +30,7 @@ import (
 	"github.com/filipecabaco/snowglobe/internal/pwa"
 	"github.com/filipecabaco/snowglobe/internal/remote"
 	"github.com/filipecabaco/snowglobe/internal/serve"
+	"github.com/filipecabaco/snowglobe/internal/site"
 	"github.com/filipecabaco/snowglobe/internal/tools"
 )
 
@@ -54,6 +55,9 @@ Usage:
   snowglobe pwa <dir> [--name N] [--short-name N]     make a built site an installable app that works
                                                      offline once it has run (manifest, icons,
                                                      service worker)
+  snowglobe agent-pages <dir>                        put every one-CPU --agent site under dir on
+                                                     the agent page, dir/agent/ (runtimes.json and
+                                                     its scripts; after pool and pwa)
   snowglobe pack <dir> [-o site.tar.gz]              pack a built site into one tarball (.tar.gz,
                                                      .tar.zst) to publish on a CDN
   snowglobe bundle <dir | url> [-o FILE]             make the site one executable that runs it with
@@ -234,9 +238,13 @@ Build flags:
   --no-chunks     store every guest file in one blob, however large (default: files of 2 MiB
                   and more are split into content-defined chunks, so a read fetches only what it
                   covers and sites share identical chunks; the page then needs armless 0.3.0)
-  --agent         let an agent run commands in the page's machine: window.snowglobeAgent, and
-                  WebMCP tools (run_command, job_status, cancel_job) where the browser has
-                  WebMCP. One-CPU sites only; off by default
+  --agent         make the machine one of the agent page's (snowglobe agent-pages: /agent/,
+                  every runtime in one page, each machine in a Web Worker): agents run
+                  commands in it and copy files between machines, by its form,
+                  window.snowglobeAgent and WebMCP tools (list_runtimes, run_command,
+                  job_status, cancel_job, copy_file). Its page links there. Labels
+                  snowglobe.agent-purpose and snowglobe.agent-sample describe it there.
+                  One-CPU sites only; off by default
   --agent-exposed-to ORIGIN
                   also share the WebMCP tools with this origin (https://host); repeatable.
                   Default: none, only the page's own
@@ -282,6 +290,8 @@ func run(args []string) int {
 		err = runServe(args[1:])
 	case "pool":
 		err = runPool(args[1:])
+	case "agent-pages":
+		err = runAgentPages(args[1:])
 	case "pwa":
 		err = runPWA(args[1:])
 	case "run":
@@ -624,6 +634,23 @@ func runPool(args []string) error {
 	}
 	fmt.Printf("Pooled %d sites: %d files, %d unique, %.0f MB saved\n",
 		stats.Sites, stats.Files, stats.Unique, float64(stats.Saved)/(1<<20))
+	return nil
+}
+
+func runAgentPages(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("agent-pages takes one directory holding the sites")
+	}
+	runtimes, err := site.WriteAgentPage(args[0])
+	if err != nil {
+		return err
+	}
+	if len(runtimes) == 0 {
+		return fmt.Errorf("no one-CPU site built with --agent under %s", args[0])
+	}
+	for _, r := range runtimes {
+		fmt.Printf("%s/%s/ runs %s (%s)\n", args[0], site.AgentDir, r.Name, r.Title)
+	}
 	return nil
 }
 

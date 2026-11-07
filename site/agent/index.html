@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Machines for agents · snowglobe</title>
+  <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/agent/">
+  <link rel="alternate" type="text/plain" href="../llms.txt" title="snowglobe for agents">
+  <meta name="description" content="Linux machines for agents that need compute, all in one browser tab: Python with numpy and pandas, DuckDB and PostgreSQL. Run shell commands in any of them and copy files between them. No server.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="Machines for agents · snowglobe">
+  <meta property="og:description" content="Python with numpy and pandas, DuckDB and PostgreSQL in one page: run a shell command in any machine, copy files between them. The machines run in your browser tab.">
+  <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/agent/">
+  <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="../fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <style>
+    [hidden] { display: none !important; }
+    .intro { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px 48px; padding: 48px 0 36px; }
+    h1 { margin: 0 0 14px; font-size: clamp(2rem, 3.4vw, 3rem); line-height: 1; letter-spacing: -.03em; font-weight: 600; text-wrap: balance; }
+    .lede { margin: 0; max-width: 40em; font-size: 18px; line-height: 1.5; color: var(--ink-2); }
+    .awake { display: grid; justify-items: end; gap: 10px; }
+    .budget { margin: 0; text-align: right; }
+    .budget b { display: block; font-size: clamp(32px, 3.4vw, 48px); font-weight: 560; letter-spacing: -.035em; line-height: 1; }
+    .budget span { color: var(--ink-2); font-size: 13px; }
+    .limit-ctl { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
+    .limit-ctl input { font: 16px var(--sans); width: 4.5em; height: 44px; padding: 0 10px; color: var(--ink); background: var(--bg); border: 1px solid var(--ink-2); border-radius: 6px; }
+    .limit-ctl input:hover { border-color: var(--ink); }
+    .limit-note { margin: 0; max-width: 26em; text-align: right; color: var(--ink-2); font-size: 13px; }
+    .limit-note:empty { display: none; }
+
+    /* Two zones: the machines, a ruled list; the selected machine's work beside it */
+    .desk { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 0 48px; border-top: 1px solid var(--ink); }
+    .zone-h { margin: 0; padding: 12px 0 10px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
+
+    /* A machine: name, state, what it is for; a 2px ink bar marks the selected one */
+    .machines { list-style: none; margin: 0; padding: 0; }
+    .machine { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 12px 0 12px 14px; border-top: 1px solid var(--rule); }
+    .machine:last-child { border-bottom: 1px solid var(--rule); }
+    .machine[aria-current="true"]::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2px; background: var(--ink); }
+    .pick { grid-column: 1; font: inherit; font-size: 17px; font-weight: 600; letter-spacing: -.01em; color: inherit; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; justify-self: start; }
+    .pick:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+    .state { grid-column: 2; grid-row: 1; justify-self: end; font-size: 14px; white-space: nowrap; }
+    .state::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; vertical-align: .02em; box-sizing: border-box; border: 1.5px solid var(--ink-2); }
+    .machine[data-state="awake"] .state::before { background: var(--signal); border-color: var(--signal); }
+    .machine[data-state="busy"] .state::before { background: var(--signal); border-color: var(--signal); animation: live 2s ease-in-out infinite; }
+    .machine[data-state="waking"] .state::before, .machine[data-state="suspending"] .state::before { background: var(--restoring); border-color: var(--restoring); }
+    .machine[data-state="failed"] .state::before { border-color: var(--ink); }
+    @keyframes live { 50% { opacity: .35; } }
+    .purpose { grid-column: 1 / -1; margin: 0; color: var(--ink-2); font-size: 14.5px; line-height: 1.45; }
+    .facts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 4px; font-size: 13px; color: var(--ink-2); }
+    .facts:empty { display: none; }
+    .acts { display: inline-flex; gap: 14px; }
+    .link { font: inherit; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .link:hover { text-decoration-thickness: 2px; }
+    .link:disabled { color: var(--ink-2); text-decoration: none; cursor: default; }
+    .storage { margin: 14px 0 0; color: var(--ink-2); font-size: 13px; }
+
+    /* The work: the command, its result, the copy, the earlier runs, the terminal */
+    .work > section, .work > details { border-top: 1px solid var(--rule); }
+    .work > section:first-child { border-top: 0; }
+    form { display: grid; gap: 10px; padding-bottom: 28px; }
+    .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px 16px; }
+    label { display: grid; gap: 6px; align-content: start; font-size: 13px; color: var(--ink-2); }
+    select, input[type="text"], textarea { font: 15px/1.5 var(--mono); color: var(--ink); background: var(--bg); width: 100%; border: 1px solid var(--ink-2); border-radius: 6px; padding: 9px 12px; }
+    select { font-family: var(--sans); font-size: 16px; height: 44px; padding: 0 10px; }
+    textarea { min-height: 5.4em; resize: vertical; }
+    select:hover, input[type="text"]:hover, textarea:hover { border-color: var(--ink); }
+    ::placeholder { color: var(--ink-2); opacity: 1; }
+    .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
+    .actions button { font: 550 15px/1 var(--sans); height: 44px; padding: 0 20px; border-radius: 999px; cursor: pointer; border: 1px solid var(--ink); background: transparent; color: var(--ink);
+      transition: background-color .2s cubic-bezier(.2,.8,.2,1), color .2s cubic-bezier(.2,.8,.2,1), border-color .2s cubic-bezier(.2,.8,.2,1); }
+    .actions .go { background: var(--signal); border-color: var(--signal); color: var(--on-signal); min-width: 84px; }
+    .actions button:not(:disabled):hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+    .actions button:disabled { opacity: .38; cursor: default; }
+    .hint { margin: 0; color: var(--ink-2); font-size: 14px; }
+    #agent-status { margin: 0 0 28px; padding: 10px 0 0; border-top: 1px solid var(--ink); min-height: 2.6em; overflow-wrap: anywhere; font-size: 15px; }
+
+    .block-h { margin: 0; padding: 12px 0 0; font-size: 13px; font-weight: 500; color: var(--ink-2); }
+    .ap-empty { margin: 10px 0 24px; color: var(--ink-2); font-size: 15px; }
+    .run-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 20px; margin: 10px 0 12px; }
+    .run-cmd { flex: 1 1 24ch; min-width: 0; font: 15px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .run-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font-size: 14px; }
+    .run-time { color: var(--ink-2); white-space: nowrap; }
+    .tag { font: 13px var(--mono); color: var(--ink-2); }
+    .badge { font-weight: 550; }
+    .badge::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; vertical-align: .02em; box-sizing: border-box; }
+    .badge[data-tone="ok"]::before { background: var(--ink); }
+    .badge[data-tone="bad"]::before { border: 1.5px solid var(--ink); }
+    .badge[data-tone="live"]::before { background: var(--signal); animation: live 2s ease-in-out infinite; }
+    .run-out { margin: 0 0 24px; white-space: pre; max-height: min(55vh, 30em); overflow: auto; }
+    .run-out:empty::before { content: "No output yet"; color: var(--ink-2); font-family: var(--sans); }
+    #agent-runs { margin: 0; padding: 0; list-style: none; }
+    #agent-runs .run { padding: 4px 0 16px; border-bottom: 1px solid var(--rule); }
+    #agent-runs .run-out { margin: 0; max-height: 18em; }
+    .run-fold > summary { cursor: pointer; width: max-content; color: var(--ink-2); font-size: 14px; padding: 2px 0 8px; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+    #agent-history { padding-bottom: 24px; }
+
+    #copy-form { padding-top: 14px; }
+    #copy-form .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px 16px; }
+    .limit { color: var(--ink-2); font-size: 14px; margin: 0; }
+
+    /* The terminal, behind a disclosure: the page's one dark surface */
+    #terminal-box > summary { display: flex; align-items: center; gap: 8px; width: max-content; max-width: 100%; cursor: pointer; padding: 14px 0; font-weight: 600; font-size: 15px; list-style: none; }
+    #terminal-box > summary::-webkit-details-marker { display: none; }
+    #terminal-box > summary svg { width: 14px; height: 14px; flex: none; transition: transform .2s cubic-bezier(.2,.8,.2,1); }
+    #terminal-box[open] > summary svg { transform: rotate(90deg); }
+    #terminal-panel { position: relative; height: min(60vh, 460px); min-height: 300px; padding: 10px; background: var(--panel); box-shadow: 0 0 0 1px var(--panel-edge); border-radius: 6px; overflow: hidden; }
+    #terminal { height: 100%; }
+    #terminal-note { position: absolute; right: 12px; bottom: 10px; z-index: 1; margin: 0; max-width: calc(100% - 24px); font: 12px var(--mono); color: #8d8d88; pointer-events: none; }
+
+    /* The question before anything runs, and the one before a start fresh */
+    .sg-ask { max-width: 30rem; padding: 22px 24px 20px; border: 1px solid var(--ink); border-radius: 6px; background: var(--bg); color: var(--ink); font: 16px/1.5 var(--sans); }
+    .sg-ask::backdrop { background: rgb(0 0 0 / .45); }
+    .sg-ask h2 { margin: 0 0 8px; font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
+    .sg-ask p { margin: 0 0 18px; color: var(--ink-2); }
+    .sg-ask-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+    .sg-ask button { font: 550 15px/1 var(--sans); height: 44px; padding: 0 20px; border-radius: 999px; cursor: pointer; border: 1px solid var(--ink); background: transparent; color: var(--ink); }
+    .sg-ask .sg-ask-yes { background: var(--ink); color: var(--bg); }
+    .sg-ask button:hover { background: var(--ink); color: var(--bg); }
+
+    .note { margin-top: 64px; padding-top: 16px; border-top: 1px solid var(--ink); display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 16px 48px; }
+    .note p { margin: 0; color: var(--ink-2); font-size: 16px; max-width: 40em; }
+
+    @media (max-width: 1080px) {
+      .desk { grid-template-columns: minmax(0, 1fr); }
+      .machines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; }
+      .machine:nth-last-child(2) { border-bottom: 1px solid var(--rule); }
+      .work { margin-top: 28px; border-top: 1px solid var(--ink); }
+      .note { grid-template-columns: minmax(0, 1fr); }
+    }
+    @media (max-width: 720px) {
+      .top nav a:not([href^="https"]):not([aria-current]) { display: none; }
+      .intro { padding: 32px 0 24px; }
+      .budget, .limit-note { text-align: left; }
+      .awake { justify-items: start; }
+      .machines { grid-template-columns: minmax(0, 1fr); }
+      .machine:nth-last-child(2) { border-bottom: 0; }
+      .row, #copy-form .pair { grid-template-columns: minmax(0, 1fr); }
+      body { font-size: 16px; }
+    }
+    @media (pointer: coarse) { .link { padding-block: 12px; margin-block: -12px; } }
+    @media (prefers-reduced-motion: reduce) {
+      .machine[data-state="busy"] .state::before, .badge[data-tone="live"]::before { animation: none; }
+      #terminal-box > summary svg, .actions button { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="../">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Site">
+        <a href="../#runs">Runs</a>
+        <a href="./" aria-current="page">Agents</a>
+        <a href="../docs/">Docs</a>
+        <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
+        <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
+      </nav>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="title">
+        <div>
+          <h1 id="title">Machines for agents</h1>
+          <p class="lede">Linux machines for work that needs compute, in this browser tab: Python with numpy and pandas,
+            DuckDB for analytics, PostgreSQL for databases. Run a shell command in any of them, and copy files from one to
+            another. A machine starts on its first command; only a few stay awake at once, and the rest sleep with their
+            files saved.</p>
+        </div>
+        <div class="awake">
+          <p class="budget" id="budget"><b>0 of 2 awake</b><span>on this page</span></p>
+          <label class="limit-ctl" for="awake-limit">Machines awake at once<input id="awake-limit" name="awakeLimit" type="number" min="1" max="8" step="1" value="2" inputmode="numeric"></label>
+          <p class="limit-note" id="limit-note" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <div class="desk">
+        <section aria-labelledby="machines-title">
+          <h2 class="zone-h" id="machines-title">Machines</h2>
+          <ul class="machines" id="machines" aria-label="Machines">
+            <!-- Until the page has read runtimes.json (or without JavaScript): what it runs -->
+            <li class="machine"><span class="pick">Python + Rich</span><p class="purpose">Run Python: scripts, numpy and pandas for data work.</p></li>
+            <li class="machine"><span class="pick">DuckDB</span><p class="purpose">DuckDB for analytics: SQL over CSV, Parquet and JSON files.</p></li>
+            <li class="machine"><span class="pick">PostgreSQL</span><p class="purpose">PostgreSQL for database work: load CSV files and query them with psql.</p></li>
+          </ul>
+          <p class="storage" id="storage">A machine's files are saved in this browser when it is suspended. What an awake machine did since then is lost on reload.</p>
+        </section>
+
+        <div class="work">
+          <section id="command" aria-labelledby="command-title">
+            <h2 class="zone-h" id="command-title">Run a command</h2>
+            <form id="agent-form" data-part="form" aria-label="Run a command">
+              <div class="row">
+                <label>Runtime<select id="agent-runtime" name="runtime"></select></label>
+                <label>Shell command<textarea id="agent-command" data-part="command" name="command" rows="3" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="uname -m"></textarea></label>
+              </div>
+              <p class="hint" id="agent-sample">Runs as root, from /root, one at a time per machine. Ctrl+Enter runs it.</p>
+              <div class="actions">
+                <button id="agent-run" class="go" data-part="run" type="submit" disabled>Run</button>
+                <button id="agent-cancel" data-part="cancel" type="button" disabled>Cancel</button>
+              </div>
+            </form>
+            <p id="agent-status" data-part="status" role="status" aria-live="polite">Loading the machines…</p>
+
+            <section id="agent-out" aria-labelledby="agent-out-title">
+              <h3 class="block-h" id="agent-out-title">Result</h3>
+              <p class="ap-empty" data-part="empty">No command has run yet.</p>
+              <div class="run-head" data-part="latest-head" hidden>
+                <code class="run-cmd" data-part="latest-command"></code>
+                <span class="run-meta"><span class="tag" data-part="latest-runtime"></span><span id="agent-result" class="badge" data-part="result"></span><time class="run-time" data-part="latest-time"></time></span>
+              </div>
+              <pre id="agent-output" class="run-out" data-part="output" tabindex="0" aria-label="Command output" hidden></pre>
+            </section>
+          </section>
+
+          <section id="copy" aria-labelledby="copy-title">
+            <form id="copy-form" aria-labelledby="copy-title">
+              <h2 class="zone-h" id="copy-title">Copy a file between machines</h2>
+              <div class="pair">
+                <label>From runtime<select id="copy-from" name="from"></select></label>
+                <label>From path<input id="copy-from-path" name="fromPath" type="text" value="/root/data.csv" autocomplete="off" spellcheck="false"></label>
+                <label>To runtime<select id="copy-to" name="to"></select></label>
+                <label>To path<input id="copy-to-path" name="toPath" type="text" value="/root/data.csv" autocomplete="off" spellcheck="false"></label>
+              </div>
+              <p class="limit">Any file up to 8 MiB, checked by sha256 on both ends. It goes over the machines' serial lines: expect tens of KiB a second.</p>
+              <div class="actions">
+                <button id="copy-go" type="submit" disabled>Copy</button>
+                <button id="copy-cancel" type="button" disabled>Cancel copy</button>
+              </div>
+            </form>
+          </section>
+
+          <section id="agent-history" aria-labelledby="agent-history-title" data-part="history" hidden>
+            <h2 class="block-h" id="agent-history-title">Earlier runs</h2>
+            <ol id="agent-runs" data-part="runs"></ol>
+          </section>
+
+          <details id="terminal-box">
+            <summary><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg><span id="terminal-label">Show terminal</span></summary>
+            <div id="terminal-panel">
+              <div id="terminal"></div>
+              <p id="terminal-note" hidden></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <section class="note" aria-label="About this page">
+        <p>Each machine runs in a Web Worker of its own, in this tab; nothing runs on a server. A machine left idle for
+          5 minutes, or hidden for a minute, is suspended: its state saved in this browser and its memory freed. The
+          next command wakes it with its files as they were. Only a suspended machine's state is kept: reloading the
+          page loses what an awake one did since its last suspend, and the browser asks first. Start fresh goes back to
+          the machine as built. The page needs the network: it doesn't work offline.</p>
+        <p>Browsers with WebMCP get the tools <code>list_runtimes</code>, <code>run_command</code>, <code>job_status</code>,
+          <code>cancel_job</code>, <code>copy_file</code> and <code>set_awake_limit</code>; scripts in the page get
+          <code>window.snowglobeAgent</code>. Every run and copy asks the person at this page first, once per page load,
+          and the page refuses to run inside another page's frame.
+          More in <a href="../docs/agents/#in-the-page">For agents and programs</a> and <a href="../llms.txt">llms.txt</a>.</p>
+      </section>
+    </main>
+
+    <footer>
+      <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="../llms.txt">llms.txt</a></span>
+      <span><a href="../">Back to the runs</a></span>
+    </footer>
+  </div>
+
+  <script src="../theme.js"></script>
+  <script src="sessions.js"></script>
+  <script src="agent.js"></script>
+  <script src="agent-webmcp.js"></script>
+  <script src="agent-panel.js"></script>
+  <script src="machine.js"></script>
+  <script src="transfer.js"></script>
+  <script src="machine-core.js"></script>
+  <script src="machine-host.js"></script>
+  <script src="scheduler.js"></script>
+  <script src="orchestrator.js"></script>
+  <script src="agent-page.js"></script>
+</body>
+</html>

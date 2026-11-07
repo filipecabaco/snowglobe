@@ -50,8 +50,9 @@ snowglobe sh box 'python3 -c "print(6*7)"'      <span class="dim"># its output, 
 snowglobe sh box --json 'ls /nope'
 snowglobe cp ./project box:/root/project        <span class="dim"># files and directories, either way</span>
 snowglobe cp box:/root/project/out ./out</pre>
-          <p>Each command runs with the app's environment in a fresh working directory; files elsewhere persist for
-            the instance's life. Out of time (300 s, or <code>--timeout S</code>), the command and everything it
+          <p>Each command runs with the app's environment, starting in the home directory as it would in the machine's
+            terminal, so relative paths work; files persist for the instance's life, and
+            <code>$EXCLAVE_WORKSPACE</code> names a fresh scratch directory of the command's own. Out of time (300 s, or <code>--timeout S</code>), the command and everything it
             started are killed (exit 124). What the guest sends back through <code>cp</code> can't write outside the
             destination.</p>
 
@@ -75,43 +76,79 @@ snowglobe stop tpl</pre>
             lists and checks ports, diffs and applies fleet files, and reads the daemon's status and events. <code>SNOWGLOBE_DAEMON</code> points it at a daemon on another host.</p>
           <pre>claude mcp add snowglobe -- snowglobe mcp --daemon</pre>
 
-          <h2 class="h3" id="in-the-page">In the page: --agent and WebMCP</h2>
-          <p>A site built with <code>--agent</code> (or the label <code>snowglobe.agent="true"</code>) lets an agent
-            run commands in the machine in the visitor's own tab. Nothing runs on a server. It is off unless asked
-            for, and only for one-CPU sites: on more CPUs nothing is offered and the status says why.</p>
-          <pre>snowglobe build examples/curl --agent</pre>
-          <p>Any agent that can click and type in a page can use it: open <strong>Agent commands</strong> above the
-            terminal (a link ending <code>#agent</code> opens it), type into <strong>Shell command</strong>, press
-            <strong>Run</strong>, and read the <strong>Result</strong>: the exit status and the command's output.
-            <strong>Cancel</strong> stops it. That is how ChatGPT's agent uses it today; its WebMCP (site tools) works
-            only in the ChatGPT desktop app's built-in browser.</p>
-          <pre>Open https://filipecabaco.github.io/snowglobe/python/#agent, wait until the status says Ready, then type
+          <h2 class="h3" id="in-the-page">In the page: --agent, /agent/ and WebMCP</h2>
+          <p>A site built with <code>--agent</code> (or the label <code>snowglobe.agent="true"</code>) is one of the
+            machines of an agent page: one page with every such runtime in it, where an agent runs commands in any of
+            them and copies files between them, in the visitor's own tab. Nothing runs on a server, and the page is
+            static files. It is off unless asked for, and only for one-CPU sites. The labels
+            <code>snowglobe.agent-purpose</code> (what the machine is good for, in a line) and
+            <code>snowglobe.agent-sample</code> (a command to try) describe it on the page.</p>
+          <pre>snowglobe build examples/duckdb --agent --out dist/duckdb
+snowglobe pool dist; snowglobe pwa dist/duckdb
+snowglobe agent-pages dist      # dist/agent/runtimes.json and the page's scripts</pre>
+          <p><code>snowglobe agent-pages</code> lists the agent sites under a directory in
+            <code>agent/runtimes.json</code> (from each site's <code>run.json</code>, read when the site is
+            assembled) and writes the page's scripts beside it; this site's page is
+            <a href="../../agent/">/agent/</a>. Each site's own page links there (<strong>For agents</strong>, in its
+            title strip, with <code>?runtime=&lt;site&gt;</code>, which only preselects); an address ending
+            <code>#agent</code> goes there too. ChatGPT's agent uses it today; its WebMCP (site tools) works only in
+            the ChatGPT desktop app's built-in browser.</p>
+          <pre>Open https://filipecabaco.github.io/snowglobe/agent/, choose python under Runtime, type
 python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the exit status and output.</pre>
-          <p>Where the browser has WebMCP (<code>document.modelContext</code>), the page registers three tools, named
-            as <code>snowglobe mcp</code> names its own. Any WebMCP client can use them: a browser's built-in agent,
-            an extension, a chat page. One added after the page starts, by an extension or a polyfill such as
-            MCP-B's <code>@mcp-b/global</code>, is still found for 15 seconds, and the first drafts'
-            <code>provideContext</code> works too.</p>
+          <p>Each machine runs in a Web Worker of its own, so several run on several cores and the page stays
+            responsive. The page is for agent work that needs compute: Python with numpy and pandas, DuckDB for analytics
+            and PostgreSQL for databases; the other runs are on the landing page, for people. A machine starts lazily,
+            on its first command. Each one awake holds 650 to 720 MB, so only a few are awake at once: two unless the
+            field <strong>Machines awake at once</strong>, the tool <code>set_awake_limit</code> or
+            <code>setAwakeLimit(count)</code> changes it (1 to 8, for the page load; it runs nothing, so it asks no
+            one). Waking another suspends the least recently used idle one first, one capture or boot at a time; a
+            busy machine, with a job or a copy in it, is never suspended, and a wake waits for one to finish and says
+            so. A lower limit suspends idle machines, least recently used first, and busy ones as they finish.
+            Suspended, a machine's state is saved in this browser (IndexedDB, a scope per runtime). Only a suspended
+            machine's state is kept: a reload loses what an awake one did since its last suspend, and the browser
+            asks before leaving. <strong>Start fresh…</strong> goes back to the machine as built, always after asking.
+            A machine that fails (it powered off, its worker crashed, a capture hung) is ended at once, and its job
+            fails; <strong>Retry</strong> starts it again. When its files can't be fetched, the page says so. The page
+            needs the network: it has no service worker, so it doesn't work offline.</p>
+          <p>Where the browser has WebMCP (<code>document.modelContext</code>), the page registers one set of tools.
+            Any WebMCP client can use them: a browser's built-in agent, an extension, a chat page. One added after the
+            page starts, by an extension or a polyfill such as MCP-B's <code>@mcp-b/global</code>, is still found for
+            15 seconds, and the first drafts' <code>provideContext</code> works too.</p>
           <div class="table-wrap">
             <table>
               <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th></tr></thead>
               <tbody>
-                <tr><td><code>run_command</code></td><td>starts <code>command</code> and returns its job id at once; <code>timeout_seconds</code> (default 300, at most 3600) and <code>request_id</code> (a retry returns the same job) are optional</td></tr>
+                <tr><td><code>list_runtimes</code></td><td>each machine: its runtime name, what it is for, its state (asleep, waking, awake, busy, suspending, failed) and a sample command</td></tr>
+                <tr><td><code>run_command</code></td><td>starts <code>command</code> in <code>runtime</code> and returns its job id at once; <code>timeout_seconds</code> (default 300, at most 3600) and <code>request_id</code> (a retry returns the same job) are optional</td></tr>
                 <tr><td><code>job_status</code></td><td>the job's output so far, ending <code>[running]</code>, or as <code>snowglobe mcp</code>'s ends: <code>[exit N]</code>, <code>[timed out]</code>, <code>[stopped]</code></td></tr>
                 <tr><td><code>cancel_job</code></td><td>stops the job: its command and everything it started are killed</td></tr>
+                <tr><td><code>copy_file</code></td><td>copies <code>from_path</code> in <code>from_runtime</code> to <code>to_path</code> in <code>to_runtime</code>: any file up to 8 MiB, checked by sha256 on both ends; a client's cancel signal stops it</td></tr>
+                <tr><td><code>set_awake_limit</code></td><td>how many machines may be awake at once, <code>count</code> 1 to 8 (2 by default), for the page load; <code>list_runtimes</code> reports it as <code>awake_limit</code></td></tr>
               </tbody>
             </table>
           </div>
-          <p>One job runs at a time; starting another while one runs is refused. The first run, from the panel or a
-            tool, asks the person at the page to allow it, once per page load. The tools are the page's own: <code>--agent-exposed-to https://host</code> (repeatable)
-            shares them with other origins too.</p>
-          <p>Scripts and tests can use the same thing directly as <code>window.snowglobeAgent</code>:
-            <code>capabilities()</code>, <code>status()</code> (booting, ready, busy, saving or failed),
-            <code>runCommand({command, timeoutSeconds, requestId})</code>, <code>readJob(jobId)</code> and
-            <code>cancelJob(jobId)</code>. A job's output keeps its most recent 1 MiB and says when it dropped some.</p>
+          <p>One job runs at a time in each machine, and a machine's operations go in the order asked: a run asked
+            during a copy waits for it. The first run or copy, from the form, a tool or a script, asks the person at
+            the page to allow it, once per page load; what agents run and copy shows under <strong>Earlier
+            runs</strong> too. In another page's frame, the page refuses to run and registers no tools. The tools are
+            the page's own: <code>--agent-exposed-to https://host</code> (repeatable) shares them with other origins
+            too, when every machine of the page shares with that origin.</p>
+          <p>Scripts on the page can use the same thing as <code>window.snowglobeAgent</code>:
+            <code>listRuntimes()</code>, <code>status(runtime)</code>, <code>runCommand({runtime, command,
+            timeoutSeconds, requestId})</code>, <code>readJob(jobId)</code>, <code>cancelJob(jobId)</code>,
+            <code>copyFile({fromRuntime, fromPath, toRuntime, toPath})</code>, <code>suspend(runtime)</code>,
+            <code>wake(runtime)</code>, <code>startFresh(runtime)</code>, <code>setAwakeLimit(count)</code> and
+            <code>unsaved()</code>. Runs and copies ask the person first, as the form does. A job's output
+            keeps its most recent 1 MiB and says when it dropped some. Jobs run with <code>NO_COLOR=1</code> and
+            <code>TERM=dumb</code>, and their output reads as plain text.</p>
           <p>Jobs run as root on the guest's serial shell, beside the app, as <code>snowglobe sh</code>'s do: the
-            terminal on the page never shows them. Each starts in a fresh <code>/sgjob/&lt;id&gt;</code>; files elsewhere
-            persist. There is no file transfer in the page yet.</p>
+            terminal never shows them. Each starts in <code>/root</code>, so relative paths work and files persist
+            between jobs. Copies travel over the same serial line, as base64 in slices of a job each, so they are slow
+            (tens of KiB a second); the target is replaced only once its sha256 checks out.</p>
+          <p id="suspend">An idle machine doesn't stay in memory: with no job for 5 minutes, or with its tab hidden
+            for a minute, it is suspended, its state saved and its worker ended, so the browser takes back its memory.
+            The next command, or a key typed into its terminal, wakes it, files and all, and then runs. The terminal
+            pages keep their machine running.</p>
 
           <h2 class="h3" id="limits">Limits, stopping and logs</h2>
           <div class="table-wrap">

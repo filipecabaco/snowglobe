@@ -2,6 +2,7 @@
 package site
 
 import (
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -26,20 +27,22 @@ var sessionsJS []byte
 //go:embed session-ui.js
 var sessionUIJS []byte
 
-//go:embed agent.js
-var agentJS []byte
+// The machine itself, in a page or a worker (createMachine): every site's page uses it
+//
+//go:embed machine-core.js
+var machineCoreJS []byte
 
-//go:embed agent-webmcp.js
-var agentWebMCPJS []byte
-
-//go:embed agent-panel.js
-var agentPanelJS []byte
+//go:embed machine-host.js
+var machineHostJS []byte
 
 var tmpl = template.Must(template.New("index").Parse(page))
 
 // Page holds what varies between sites.
 type Page struct {
-	Title    string
+	Title string
+	// Name is the site's directory name (default: the output directory's): the agent page (/agent/)
+	// knows the site's machine by it
+	Name     string
 	BuildID  string // fingerprint of runtime, base filesystem and initial snapshot
 	MemoryMB int    // must match the snapshot
 	Network  string // "none" or "fetch"; must match the snapshot
@@ -50,12 +53,13 @@ type Page struct {
 	TunnelToken string
 	// The console size the snapshot was taken at: its screen is replayed at this size
 	ConsoleCols, ConsoleRows int
-	// Agent puts window.snowglobeAgent in the page, and offers it as WebMCP tools where the
-	// browser has WebMCP: commands run in the machine for an agent (one-CPU sites only)
+	// Agent: the site is one of the agent page's machines (snowglobe agent-pages puts every
+	// one-CPU --agent site of a directory on DIR/agent/). Its page links there ("For agents",
+	// ../agent/?runtime=<name>), and an address ending #agent goes there as it loads
 	Agent bool
 	// AgentExposedTo is the origins, other than the page's own, its WebMCP tools are shared with
 	AgentExposedTo []string
-	// Version is snowglobe's, which the agent controller reports
+	// Version is snowglobe's
 	Version string
 }
 
@@ -92,7 +96,7 @@ func Fingerprint(out string, p Page) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Render writes the page and session scripts and marks the site for GitHub Pages.
+// Render writes the page and its scripts and marks the site for GitHub Pages.
 func Render(out string, p Page) error {
 	if p.BuildID == "" {
 		var err error
@@ -101,23 +105,21 @@ func Render(out string, p Page) error {
 			return err
 		}
 	}
-	scripts := map[string][]byte{"sessions.js": sessionsJS, "session-ui.js": sessionUIJS}
-	if p.Agent {
-		scripts["agent.js"] = agentJS
-		scripts["agent-webmcp.js"] = agentWebMCPJS
-		scripts["agent-panel.js"] = agentPanelJS
+	if p.Name == "" {
+		p.Name = filepath.Base(out)
 	}
+	scripts := map[string][]byte{"sessions.js": sessionsJS, "session-ui.js": sessionUIJS,
+		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS}
 	for name, source := range scripts {
 		if err := os.WriteFile(filepath.Join(out, name), source, 0o644); err != nil {
 			return err
 		}
 	}
-	f, err := os.Create(filepath.Join(out, "index.html"))
-	if err != nil {
+	var b bytes.Buffer
+	if err := tmpl.Execute(&b, p); err != nil {
 		return err
 	}
-	defer f.Close()
-	if err := tmpl.Execute(f, p); err != nil {
+	if err := os.WriteFile(filepath.Join(out, "index.html"), b.Bytes(), 0o644); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(out, ".nojekyll"), nil, 0o644); err != nil {
@@ -129,5 +131,5 @@ func Render(out string, p Page) error {
 			return err
 		}
 	}
-	return f.Close()
+	return nil
 }

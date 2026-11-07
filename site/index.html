@@ -10,7 +10,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="snowglobe: real programs, sandboxed in your browser">
-  <meta property="og:description" content="Docker images as static sites: Linux on a 64-bit ARM CPU emulated in WebAssembly, restored from a snapshot. Ten live runs, from the Supabase stack to curl + jq. No server.">
+  <meta property="og:description" content="Docker images as static sites: Linux on a 64-bit ARM CPU emulated in WebAssembly, restored from a snapshot. Eleven live runs, from the Supabase stack to curl + jq. No server.">
   <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/">
   <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
   <meta property="og:image:width" content="1200">
@@ -18,10 +18,10 @@
   <meta property="og:image:alt" content="snowglobe: real programs, sandboxed in your browser, with a terminal showing Postgres, curl and jq output recorded at build">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="snowglobe: real programs, sandboxed in your browser">
-  <meta name="twitter:description" content="Docker images as static sites: Linux on an emulated ARM CPU in WebAssembly. Ten live runs. No server.">
+  <meta name="twitter:description" content="Docker images as static sites: Linux on an emulated ARM CPU in WebAssembly. Eleven live runs. No server.">
   <meta name="twitter:image" content="https://filipecabaco.github.io/snowglobe/og.png">
   <meta name="twitter:image:alt" content="snowglobe: real programs, sandboxed in your browser">
-  <meta name="description" content="Ten sandboxed runs in your browser: real programs on Linux, emulated in WebAssembly, packaged from Dockerfiles by snowglobe.">
+  <meta name="description" content="Eleven sandboxed runs in your browser: real programs on Linux, emulated in WebAssembly, packaged from Dockerfiles by snowglobe.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
   <link rel="preload" href="fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="xterm/xterm.css">
@@ -218,6 +218,7 @@
         <a href="#runs">Runs</a>
         <a href="#make-your-own">Make your own</a>
         <a href="#fleets">Fleets</a>
+        <a href="agent/">Agents</a>
         <a href="docs/">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -550,6 +551,7 @@ $ claude mcp add snowglobe -- \
       { dir: "go", tag: "Game of Life with Bubble Tea", name: "Go + Bubble Tea", stack: "An interactive Game of Life built with Bubble Tea and Lip Gloss.", show: "screen" },
       { dir: "rust", tag: "jtab: JSON as tables, with clap", name: "Rust + clap", stack: "jtab, a CLI rendering JSON as tables: clap, serde_json, comfy-table.", show: [1, 2], command: "sh, with jtab on the PATH and sample data in ./data" },
       { dir: "java", tag: "jshell with Gson", name: "Java + Gson", stack: "jshell on OpenJDK 11 with Gson on the classpath.", show: [0, 1, 2, 3] },
+      { dir: "duckdb", tag: "Analytical SQL over CSV, Parquet and JSON", name: "DuckDB", stack: "The DuckDB CLI, querying CSV, JSON and Parquet files in the tab: group-bys, aggregates and a Parquet export, offline.", show: [0, 1, 2, 3], command: "sh, with duckdb on the PATH and sample files in ./data" },
       { dir: "curl", tag: "A shell online through your browser", name: "curl + jq", stack: "Plain Alpine packages in a shell, online through your browser: curl against live APIs, piped into jq.", show: [0, 1, 2, 3], command: "sh, with curl and jq from Alpine's packages" },
     ];
 

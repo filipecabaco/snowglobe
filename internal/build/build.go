@@ -91,6 +91,9 @@ type Settings struct {
 	// Agent and AgentExposedTo: as in Options
 	Agent          bool
 	AgentExposedTo []string
+	// AgentPurpose and AgentSample (labels snowglobe.agent-purpose and snowglobe.agent-sample): what the
+	// machine is good for, in a line, and a command to try in it, as the agent page lists them
+	AgentPurpose, AgentSample string
 }
 
 // The guest is 64-bit ARM: the armless machine
@@ -341,6 +344,15 @@ type RunInfo struct {
 	BuiltAt       time.Time       `json:"built_at"`
 	Snowglobe     string          `json:"snowglobe"`
 	HasTranscript bool            `json:"has_transcript"`
+	// Agent: the site is one of the agent page's machines (built with --agent)
+	Agent *AgentInfo `json:"agent,omitempty"`
+}
+
+// AgentInfo is what the agent page (snowglobe agent-pages) lists a machine with
+type AgentInfo struct {
+	Purpose   string   `json:"purpose,omitempty"`
+	Sample    string   `json:"sample,omitempty"`
+	ExposedTo []string `json:"exposed_to,omitempty"`
 }
 
 // writeRunInfo writes run.json and moves the exercise transcript next to it
@@ -364,6 +376,9 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 		BootSeconds: meta.BootSeconds, SnapshotBytes: meta.SnapshotBytes, StateBytes: meta.StateBytes,
 		WarmPackFiles: packFiles, WarmPackBytes: packBytes, Files: len(fs.Files),
 		BuiltAt: time.Now().UTC().Truncate(time.Second), Snowglobe: version,
+	}
+	if s.Agent {
+		info.Agent = &AgentInfo{Purpose: s.AgentPurpose, Sample: s.AgentSample, ExposedTo: s.AgentExposedTo}
 	}
 	for _, path := range fs.Blobs {
 		if st, err := os.Stat(path); err == nil {
@@ -555,6 +570,7 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	if len(s.AgentExposedTo) > 0 && !s.Agent {
 		return nil, errors.New("agent-exposed-to needs --agent")
 	}
+	s.AgentPurpose, s.AgentSample = label("agent-purpose"), label("agent-sample")
 
 	s.Console = boot.Console{Env: img.Config.Env, Workdir: img.Config.WorkingDir, Command: s.Command}
 	return s, nil
