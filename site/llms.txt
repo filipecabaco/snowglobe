@@ -285,11 +285,7 @@ runs because of the address.
   files", "Ran npm install zustand", "Ran SQL on supabase", "Read 2 files", "Built version 7 in
   3.0 s", "Build 8 failed" (with the error), each tagged with its runtime and who asked, its exit
   status, and the changed files, each a disclosure whose diff is a `pre` labelled "Changes to
-  <path>". "Undo last change" and "Revert to starter…" (asks first) take web's app back. "Watch an
-  agent build" plays a short walkthrough through the same calls, building a todo list from the
-  blank starter (a `todos` table with row level security, by `runSql`; the app, sign-in and the
-  list, by `writeFiles`; an All / Active / Done filter and "Clear completed"); "Stop the
-  walkthrough" stops it between steps.
+  <path>". "Undo last change" and "Revert to starter…" (asks first) take web's app back.
 - `window.snowglobeAgent` (promises): `listRuntimes()` (name, purpose, state, sample, saved),
   `capabilities()`, `status(runtime)`, `runCommand({runtime, command, timeoutSeconds, requestId})`
   → `{jobId, runtime}` at once (wakes or boots the machine first), `readJob(jobId)`,
@@ -302,7 +298,9 @@ runs because of the address.
   toRuntime, toPath})` → `{bytes, sha256, readSeconds, writeSeconds}`, `cancelCopy()`,
   `suspend(runtime)`, `wake(runtime)`, `startFresh(runtime)` (asks the person), `setAwakeLimit(count)`
   → `{awakeLimit, awake, overLimit}`, `openPreview({runtime, port, path})` → `{url, base, status |
-  error}`, `closePreview()`, `preview()`, `unsaved()`, `metrics()`.
+  error}`, `closePreview()`, `preview()`, `previewSnapshot({maxChars})` → `{text, url, title,
+  outline, console}`, `previewInteract({actions, maxChars})` → `{text, done, error}`, `unsaved()`,
+  `metrics()`.
 - WebMCP tools, registered once where the browser has `document.modelContext` (or a polyfill such
   as MCP-B's `@mcp-b/global`, even one added up to 15 s after the page starts; the first drafts'
   `provideContext` works too): `list_runtimes`; `run_command {runtime, command, timeout_seconds,
@@ -325,7 +323,17 @@ runs because of the address.
   file of the job's: no quoting), then `notify pgrst, 'reload schema'`; `copy_file {from_runtime,
   from_path, to_runtime, to_path}` returns the bytes copied and their sha256 (a client's cancel
   signal stops it); `open_preview {runtime, port, path}` opens the page's preview on a server in a
-  machine and returns its address and what its first request got; `close_preview`;
+  machine and returns its address and what its first request got; `preview_snapshot {maxChars}`
+  reads the open preview's page: its address and title, an outline of landmarks, headings and
+  controls (labels, values, checked state), each control with a ref like `e3`, its visible text,
+  what it logged since it loaded (console errors and warnings, uncaught errors, rejected promises,
+  failed requests: the service worker puts `preview-hook.js` first in each HTML page it shows) and
+  whether what it shows is web's latest build; `preview_interact {actions: [{type, ref | selector |
+  text, value, key, gone, timeoutMs}], maxChars}` runs `click`, `type`, `press`, `select`, `check`,
+  `scroll` and `wait_for` in that page with real DOM events (typing through the input's own value
+  setter, so React sees it), waits for the page to settle after each, stops at the first that fails
+  (a ref from before a re-render or reload is refused: snapshot again) and returns a fresh snapshot;
+  `close_preview`;
   `set_awake_limit {count}` (1 to 8); `list_runtimes` reports `awake_limit`, `preview_base` and
   the open `preview`. The first run, copy or preview asks the person at the page.
 - Jobs: one at a time in each machine, as root on its serial shell (never the visible terminal),
@@ -440,7 +448,11 @@ logging in don't work through it.
 
    The app sees it on its next request (supabase-js asks the Data API each time).
 
-5. On `supabase`: `psql "$DB_URL" -c "select t.id, t.title, u.email from todos t join auth.users u
+5. Check it as a person would: `preview_snapshot {}` shows the page as built (with any runtime
+   error the build didn't catch, and the requests that failed), then `preview_interact {actions:
+   [{type: "type", ref: "e2", value: "Buy milk"}, {type: "click", ref: "e3"}, {type: "wait_for",
+   text: "Buy milk"}]}` uses it and returns it as it is after.
+6. On `supabase`: `psql "$DB_URL" -c "select t.id, t.title, u.email from todos t join auth.users u
    on u.id = t.user_id"` shows what the person added in the preview, with their user. Local Auth
    confirms sign-ups at once: `supabase.auth.signUp` returns a session.
 

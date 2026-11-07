@@ -11,7 +11,9 @@
 //    MessageChannel of its own; the page sends it to the machine's port and streams the answer back
 //    (preview.js). Nothing is answered from the address alone: the page answers only while a preview
 //    is open and the person at it has allowed its machines, and a page opened in the preview from
-//    anywhere but the agent page (another site, a typed address) is refused.
+//    anywhere but the agent page (another site, a typed address) is refused. Each HTML page the
+//    preview shows gets one <script> first in it (preview-hook.js), which tells the agent page what
+//    it logs, for preview_snapshot.
 "use strict";
 
 importScripts("preview.js");
@@ -245,6 +247,14 @@ async function preview(event, route) {
               try {
                 body = body.pipeThrough(new DecompressionStream(format));
                 headers.delete("Content-Encoding");
+              } catch {}
+            }
+            // A page the preview shows gets the hook first in its HTML: what it logs reaches the
+            // agent page (preview-hook.js). Its length changes, so none is said
+            if (typeof TransformStream === "function" && P.wantsHook({ navigate: request.mode === "navigate", method: request.method, status: data.status, headers: [...headers] })) {
+              try {
+                body = body.pipeThrough(P.hookStream(scope.pathname + P.HOOK_FILE));
+                headers.delete("Content-Length");
               } catch {}
             }
           } else {

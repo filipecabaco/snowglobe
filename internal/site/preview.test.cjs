@@ -168,7 +168,7 @@ function loadWorker({ clients = [] } = {}) {
     skipWaiting() {},
     clients: { claim: async () => {}, matchAll: async () => clients.map((c) => ({ ...c, postMessage: (msg, transfer) => { posted.push({ msg, transfer }); c.onmessage?.(msg, transfer); } })) },
     URL, Headers, Response, ReadableStream, MessageChannel, Uint8Array, setTimeout, clearTimeout, Promise, TextEncoder, TextDecoder, console,
-    DecompressionStream, DOMException, AbortController, Date,
+    DecompressionStream, TransformStream, DOMException, AbortController, Date,
     importScripts: (name) => vm.runInContext(fs.readFileSync(path.join(__dirname, name), 'utf8'), ctx),
     fetch: async (req) => { fetched.push(req); return new Response('page', { status: 200, headers: { 'Content-Type': 'text/html' } }); },
   });
@@ -373,4 +373,56 @@ test('service worker: a request its page gave up on tells the agent page to stop
   assert.equal(r.status, 504);
   await new Promise((res) => setTimeout(res, 10));
   assert.equal(t.cancelled, true);
+});
+
+test('the hook: where it goes in a page, and only in one', () => {
+  const tag = P.hookTag('/a/preview-hook.js');
+  assert.equal(tag, '<script src="/a/preview-hook.js"></script>');
+  assert.equal(P.hookAt('<!doctype html><html lang="en"><head><meta charset="utf-8">'), '<!doctype html><html lang="en"><head>'.length);
+  assert.equal(P.hookAt('<!DOCTYPE html>\n<HTML>\n<Head data-x="1">'), '<!DOCTYPE html>\n<HTML>\n<Head data-x="1">'.length);
+  assert.equal(P.hookAt('<!doctype html><header>'), 15, 'no <head>: before the first element (<header> is not <head>)');
+  assert.equal(P.hookAt('<!doctype html><html><title>x</title>'), 21);
+  assert.equal(P.hookAt('<!doctype html><html><head '), -1, 'a <head> tag not finished yet');
+  assert.equal(P.hookAt('<!doctype html><html><he'), -1, 'more is needed');
+  assert.equal(P.hookAt('<!doctype html><html>', true), 21, 'the whole of it: after <html>');
+  assert.equal(P.hookAt('hello', true), 0);
+  const want = (o) => P.wantsHook({ navigate: true, method: 'GET', status: 200, headers: [['content-type', 'text/html; charset=utf-8']], ...o });
+  assert.equal(want({}), true);
+  assert.equal(want({ navigate: false }), false, 'a fetch of HTML is the page\'s business');
+  assert.equal(want({ headers: [['content-type', 'application/json']] }), false);
+  assert.equal(want({ headers: [['content-type', 'text/html'], ['content-encoding', 'br']] }), false, 'bytes it can\'t read are left alone');
+  assert.equal(want({ method: 'HEAD' }), false);
+  assert.equal(want({ status: 204 }), false);
+});
+
+test('service worker: a page the preview shows gets the hook first in its head; nothing else is touched', async () => {
+  const html = (chunks, headers = [['Content-Type', 'text/html; charset=utf-8'], ['Content-Length', '999']]) => tab('t', { focused: true, answer: (port) => {
+    port.postMessage({ type: 'head', status: 200, statusText: 'OK', headers });
+    for (const c of chunks) port.postMessage({ type: 'data', bytes: typeof c === 'string' ? enc(c) : c });
+    port.postMessage({ type: 'end' });
+  } });
+  const tagText = '<script src="/snowglobe/agent/preview-hook.js"></script>';
+  const nav = (t) => loadWorker({ clients: [t] }).dispatch(req(scope + 'preview/web/4173/', { mode: 'navigate', destination: 'iframe' }));
+  // Split anywhere, even inside the <head> tag, and UTF-8 after it kept byte for byte
+  let r = await nav(html(['<!doctype html><html><he', 'ad><title>Café ☕</title></head><body>hi</body></html>']));
+  assert.equal(await r.text(), `<!doctype html><html><head>${tagText}<title>Café ☕</title></head><body>hi</body></html>`);
+  assert.equal(r.headers.get('Content-Length'), null, 'its length changed: none is said');
+  // Compressed: undone, then the hook
+  const zipped = require('node:zlib').gzipSync(Buffer.from('<html><head></head></html>'));
+  r = await nav(html([new Uint8Array(zipped)], [['Content-Type', 'text/html'], ['Content-Encoding', 'gzip']]));
+  assert.equal(await r.text(), `<html><head>${tagText}</head></html>`);
+  // Not a navigation (the app fetching HTML), not HTML, an encoding it can't undo, UTF-16: as they were
+  const t = html(['<html><head></head></html>']);
+  r = await loadWorker({ clients: [t] }).dispatch(req(scope + 'preview/web/4173/partial.html'));
+  assert.equal(await r.text(), '<html><head></head></html>');
+  r = await nav(html(['{"a":1}'], [['Content-Type', 'application/json']]));
+  assert.equal(await r.text(), '{"a":1}');
+  r = await nav(html(['<html><head>'], [['Content-Type', 'text/html'], ['Content-Encoding', 'br']]));
+  assert.equal(await r.text(), '<html><head>');
+  const utf16 = new Uint8Array([0xff, 0xfe, 0x3c, 0, 0x68, 0]);
+  r = await nav(html([utf16]));
+  assert.deepEqual([...new Uint8Array(await r.arrayBuffer())], [...utf16]);
+  // A short page with no head at all: at its start, after the doctype
+  r = await nav(html(['<!doctype html>hello']));
+  assert.equal(await r.text(), `<!doctype html>${tagText}hello`);
 });

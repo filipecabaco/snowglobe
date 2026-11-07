@@ -164,7 +164,7 @@ func TestWriteAgentPage(t *testing.T) {
 	}
 
 	// The page's service worker and the preview's shared part are among its files
-	for _, f := range []string{"sw.js", "preview.js"} {
+	for _, f := range []string{"sw.js", "preview.js", "preview-hook.js", "inspect.js"} {
 		if _, err := os.Stat(filepath.Join(root, AgentDir, f)); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}

@@ -45,6 +45,12 @@ var (
 	agentPageJS []byte
 	//go:embed preview.js
 	previewJS []byte
+	// What an agent sees of the preview and does in it (preview_snapshot, preview_interact), and
+	// the hook the service worker puts first in each of the preview's pages
+	//go:embed inspect.js
+	inspectJS []byte
+	//go:embed preview-hook.js
+	previewHookJS []byte
 	//go:embed builder.js
 	builderJS []byte
 	//go:embed studio.js
@@ -60,7 +66,7 @@ func AgentScripts() map[string][]byte {
 		"agent.js": agentJS, "agent-webmcp.js": agentWebMCPJS, "agent-panel.js": agentPanelJS, "machine.js": machineJS,
 		"machine-worker.js": machineWorkerJS, "transfer.js": transferJS, "scheduler.js": schedulerJS,
 		"orchestrator.js": orchestratorJS, "agent-page.js": agentPageJS, "sessions.js": sessionsJS,
-		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "builder.js": builderJS, "studio.js": studioJS, "sw.js": agentSW,
+		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "inspect.js": inspectJS, "preview-hook.js": previewHookJS, "builder.js": builderJS, "studio.js": studioJS, "sw.js": agentSW,
 	}
 }
 
