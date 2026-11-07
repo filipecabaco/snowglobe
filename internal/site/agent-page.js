@@ -379,7 +379,7 @@
   const previewNote = $("preview-note");
   const studio = $("studio");
   // Where each machine's servers usually are: web's built pages on 4173, an app on 3000 elsewhere
-  const PORTS = { web: 4173 };
+  const PORTS = { conduit: 4173, web: 4173 };
   const lastPort = new Map();
   const portFor = (rt) => lastPort.get(rt) ?? PORTS[rt] ?? 3000;
   previewRuntime.replaceChildren(...machines.filter((m) => m.network).map((m) => new Option(m.title.replace(/ in the browser$/, ""), m.name)));
@@ -803,13 +803,15 @@
   // "Open the app": web's built app on port 4173, the studio's usual preview
   const hasWeb = machines.some((m) => m.name === "web");
   const openApp = $("open-app");
-  openApp.disabled = !previewable || !hasWeb;
-  if (!hasWeb) openApp.hidden = true;
+  const hasConduit = machines.some((m) => m.name === "conduit");
+  openApp.disabled = !previewable || !(hasWeb || hasConduit);
+  if (!hasWeb && !hasConduit) openApp.hidden = true;
   openApp.addEventListener("click", async () => {
     openApp.disabled = true;
-    openApp.textContent = "Starting web…";
+    const appRuntime = runtimeSelect.value === "conduit" && hasConduit ? "conduit" : hasWeb ? "web" : "conduit";
+    openApp.textContent = `Starting ${appRuntime}…`;
     try {
-      const r = await api.openPreview({ runtime: "web", port: 4173, path: "/" }, { source: "form" });
+      const r = await api.openPreview({ runtime: appRuntime, port: 4173, path: "/" }, { source: "form" });
       if (r.error) previewNote.textContent = `It opened; its first request failed: ${r.error}`;
     } catch (err) {
       previewNote.textContent = `${err?.message ?? err}`.replace(/^(.)/, (c) => c.toUpperCase()) + ".";
