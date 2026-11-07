@@ -739,7 +739,7 @@
         changed();
         // A trim waits its turn behind wakes under way: not for ever
         let timer;
-        await Promise.race([trimmed, new Promise((r) => { timer = setTimeout(r, 20000); timer?.unref?.(); })]);
+        await Promise.race([trimmed, new Promise((r) => { timer = setTimeout(r, 20000); })]);
         clearTimeout(timer);
         changed();
         return { awakeLimit: scheduler.budget, awake: scheduler.awake().length, overLimit: scheduler.over };

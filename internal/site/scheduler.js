@@ -196,7 +196,6 @@
           expired = true;
           this.notify();
         }, waitMs);
-        deadline?.unref?.();
       }
       try {
         for (;;) {

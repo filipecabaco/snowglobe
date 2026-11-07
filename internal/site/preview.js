@@ -367,12 +367,11 @@
       let connected = false;
       let conn = null;
       let timer = null;
-      // One timer at a time: to connect, to start answering, then between a body's bytes. Unref'd
-      // where timers can be (Node), so a test never waits on one
+      // One timer at a time: to connect, to start answering, then between a body's bytes. Not
+      // unref'd: the request is waiting on it, and it is cleared when the request ends
       const arm = (ms, fn) => {
         if (timer !== null) timers.clearTimeout(timer);
         timer = timers.setTimeout(fn, ms);
-        timer?.unref?.();
       };
       const idle = () => arm(idleMs, () => fail(504, "No answer", `${what} stopped sending its answer: nothing for ${idleMs / 1000} s`));
       const parser = new ResponseParser({ method: req.method });
