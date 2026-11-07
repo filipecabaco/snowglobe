@@ -95,6 +95,10 @@ type Settings struct {
 	// AgentPurpose and AgentSample (labels snowglobe.agent-purpose and snowglobe.agent-sample): what the
 	// machine is good for, in a line, and a command to try in it, as the agent page lists them
 	AgentPurpose, AgentSample string
+	// AgentName (label snowglobe.agent-name): the machine's name on the agent page, when it isn't the
+	// site's directory name: a site built for the agent page alone (with a network its image's own
+	// page doesn't have) is still the page's "python"
+	AgentName string
 	// AgentWatch (label snowglobe.agent-watch): a project directory in the machine; the agent page
 	// shows which files in it each command changed, with their diffs
 	AgentWatch string
@@ -354,6 +358,7 @@ type RunInfo struct {
 
 // AgentInfo is what the agent page (snowglobe agent-pages) lists a machine with
 type AgentInfo struct {
+	Name      string   `json:"name,omitempty"`
 	Purpose   string   `json:"purpose,omitempty"`
 	Sample    string   `json:"sample,omitempty"`
 	Watch     string   `json:"watch,omitempty"`
@@ -383,7 +388,7 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 		BuiltAt: time.Now().UTC().Truncate(time.Second), Snowglobe: version,
 	}
 	if s.Agent {
-		info.Agent = &AgentInfo{Purpose: s.AgentPurpose, Sample: s.AgentSample, Watch: s.AgentWatch, ExposedTo: s.AgentExposedTo}
+		info.Agent = &AgentInfo{Name: s.AgentName, Purpose: s.AgentPurpose, Sample: s.AgentSample, Watch: s.AgentWatch, ExposedTo: s.AgentExposedTo}
 	}
 	for _, path := range fs.Blobs {
 		if st, err := os.Stat(path); err == nil {
@@ -577,6 +582,14 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		return nil, errors.New("agent-exposed-to needs --agent")
 	}
 	s.AgentPurpose, s.AgentSample = label("agent-purpose"), label("agent-sample")
+	if s.AgentName = label("agent-name"); s.AgentName != "" {
+		if !s.Agent {
+			return nil, errors.New("agent-name needs --agent")
+		}
+		if !agentName.MatchString(s.AgentName) {
+			return nil, fmt.Errorf("label %sagent-name %q: lowercase letters, digits, . _ or -", labelPrefix, s.AgentName)
+		}
+	}
 	if s.AgentWatch = label("agent-watch"); s.AgentWatch != "" && (!strings.HasPrefix(s.AgentWatch, "/") || strings.ContainsAny(s.AgentWatch, "\x00\n\r")) {
 		return nil, fmt.Errorf("label %sagent-watch must be an absolute directory in the machine, on one line", labelPrefix)
 	}
@@ -584,6 +597,8 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	s.Console = boot.Console{Env: img.Config.Env, Workdir: img.Config.WorkingDir, Command: s.Command}
 	return s, nil
 }
+
+var agentName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 func isDockerfileDir(source string) bool {
 	_, err := os.Stat(filepath.Join(source, "Dockerfile"))

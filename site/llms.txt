@@ -209,7 +209,8 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
 - `--builder docker|native`: build with Docker (default) or with none.
 - `--sandbox`: keep the guest's file cache in the snapshot, for bundles and native runs.
 - `--no-chunks`: don't split large files into content-defined chunks.
-- `--agent` / `snowglobe.agent="true"`: make the machine one of the agent page's, `/agent/` (below). Off by default. With `snowglobe.agent-purpose` (one line: what it is good for) and `snowglobe.agent-sample` (a command to try), the page lists it.
+- `--agent` / `snowglobe.agent="true"`: make the machine one of the agent page's, `/agent/` (below). Off by default. With `snowglobe.agent-purpose` (one line: what it is good for) and `snowglobe.agent-sample` (a command to try), the page lists it. `snowglobe.agent-name` names the machine on the page when its site's directory is called something else (the page's `python` is built from `examples/python-agent`, which has a network for `pip install`; `examples/python`, the page at `/python/`, has none).
+- `snowglobe.agent-name`: the machine's name on the agent page, when its site's directory has another (see `python` below).
 - `--agent-exposed-to ORIGIN` (repeatable) / `snowglobe.agent-exposed-to` (JSON array): also share the agent page's WebMCP tools with these https origins (default: none). The page shares its one set of tools with an origin only if every one of its machines does.
 
 Example Dockerfile labels:
@@ -391,9 +392,13 @@ it there with Bun (`BUN_BE_BUN=1 supabase run serve.ts`, `Bun.serve({hostname: "
 
 - runtime `supabase`: Supabase for web app building: Postgres, Auth and the Data API, with a preview (2 CPUs; the API on port 54321; `$DB_URL`, `$API_URL`, `$ANON_KEY` in every shell; try `psql "$DB_URL" -c "select now()"`)
 - runtime `web`: build web apps: a React app on Supabase, rebuilt and served on port 4173 as it changes (Vite, Node) (the app in `/root/app`, watched: each command's changes are reported; try `cd /root/app && sed -i 's/<h1>Notes/<h1>My notes/' src/App.jsx`)
-- runtime `python`: run Python: scripts, numpy and pandas for data work (try `python3 -c 'import numpy, pandas; print(numpy.__version__, pandas.__version__)'`)
+- runtime `python`: run Python: scripts, numpy and pandas for data work; pip install adds packages from PyPI (try `python3 -c 'import numpy, pandas; print(numpy.__version__, pandas.__version__)'`)
 - runtime `duckdb`: DuckDB for analytics: SQL over CSV, Parquet and JSON files (try `duckdb -c 'select 6 * 7'`)
 - runtime `postgres`: PostgreSQL for database work: load CSV files and query them with psql (try `psql -h /run/postgresql -U postgres -tAc 'select count(*) from planets'`)
+
+`python` can `pip install <package>`: wheels from PyPI, fetched through the visitor's browser (numpy and pandas are already in
+the image). A package with no wheel for 64-bit ARM musl Linux fails with pip's "No matching distribution" error.
+Only this machine has a network; the Python page at `/python/` has none.
 
 For example: write `/root/data.csv` in `python`, `copy_file` it to `duckdb`, query it with
 `duckdb -csv -c "select count(*) from 'data.csv'"`, export a CSV, and load it into `postgres` with

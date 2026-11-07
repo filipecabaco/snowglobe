@@ -42,6 +42,48 @@ func agentRun(purpose string, cpus int, exposed ...string) map[string]any {
 		"agent": map[string]any{"purpose": purpose, "sample": "echo " + purpose, "exposed_to": exposed}}
 }
 
+// A site built for the agent page alone (a network its image's own page lacks) is listed under the
+// name its agent-name says, with its own site's files
+func TestWriteAgentPageNamedMachine(t *testing.T) {
+	root := t.TempDir()
+	run := agentRun("Python", 1)
+	run["network"] = "fetch"
+	run["agent"].(map[string]any)["name"] = "python"
+	fakeSite(t, root, "python-agent", run, "armless")
+	fakeSite(t, root, "python", map[string]any{"title": "Python", "memory_mb": 512, "network": "none", "cpus": 1}, "armless") // the page for people: no agent
+	runtimes, err := WriteAgentPage(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimes) != 1 || runtimes[0].Name != "python" || runtimes[0].Base != "../python-agent/" || runtimes[0].Network != "fetch" {
+		t.Fatalf("runtimes: %+v", runtimes)
+	}
+	if _, err := os.Stat(filepath.Join(root, AgentDir, "python", "index.html")); err != nil {
+		t.Errorf("no stub at agent/python/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, AgentDir, "python-agent")); err == nil {
+		t.Errorf("a stub under the directory name")
+	}
+	page, _ := os.ReadFile(filepath.Join(root, "python-agent", "index.html"))
+	if !strings.Contains(string(page), "runtime=python\"") {
+		t.Errorf("its link doesn't preselect python: %s", page)
+	}
+	// Two sites with the same name on the page, or a name that isn't one, are refused
+	run2 := agentRun("Other", 1)
+	run2["agent"].(map[string]any)["name"] = "python"
+	fakeSite(t, root, "other", run2, "armless")
+	if _, err := WriteAgentPage(root); err == nil || !strings.Contains(err.Error(), `"python"`) {
+		t.Errorf("a duplicate name: %v", err)
+	}
+	os.RemoveAll(filepath.Join(root, "other"))
+	run["agent"].(map[string]any)["name"] = "Py/x"
+	data, _ := json.Marshal(run)
+	os.WriteFile(filepath.Join(root, "python-agent", "run.json"), data, 0o644)
+	if _, err := WriteAgentPage(root); err == nil {
+		t.Errorf("a bad agent name accepted")
+	}
+}
+
 func TestWriteAgentPage(t *testing.T) {
 	root := t.TempDir()
 	pyRun := agentRun("Python", 1, "https://chatgpt.com")
@@ -299,11 +341,16 @@ func TestTheDemoSiteHasEveryAgentRuntimeOnTheAgentPage(t *testing.T) {
 		if label(df, "agent") != "true" {
 			continue
 		}
-		name := filepath.Base(filepath.Dir(f))
+		dir := filepath.Base(filepath.Dir(f))
+		// The machine's name on the page: its directory's, or snowglobe.agent-name
+		name := dir
+		if n := label(df, "agent-name"); n != "" {
+			name = n
+		}
 		found++
 		labelled[name] = true
-		if !inDemos[name] {
-			t.Errorf("%s is labelled for agents but is not one of the site's demos", name)
+		if !inDemos[dir] {
+			t.Errorf("%s is labelled for agents but is not one of the site's demos", dir)
 		}
 		// Several CPUs: the page is made cross-origin isolated for it (its service worker)
 		if c := label(df, "cpus"); c != "" && c != "1" && !strings.Contains(string(page), `register("sw.js"`) && !strings.Contains(agentPageSource, `register("sw.js"`) {
@@ -330,6 +377,23 @@ func TestTheDemoSiteHasEveryAgentRuntimeOnTheAgentPage(t *testing.T) {
 	for _, name := range []string{"python", "postgres", "duckdb"} {
 		if !labelled[name] {
 			t.Errorf("%s is one of the agent page's machines, and isn't labelled for agents", name)
+		}
+	}
+	// Python: the page for people has no network and isn't an agent site; the agent page's python is its
+	// own site (python-agent) with a network, for pip install, and the name python
+	for dir, want := range map[string]struct{ network, agent string }{"python": {"", ""}, "python-agent": {"fetch", "true"}} {
+		data, err := os.ReadFile(filepath.Join(repo, "examples", dir, "Dockerfile"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := label(string(data), "network"); got != want.network {
+			t.Errorf("examples/%s: network %q, want %q", dir, got, want.network)
+		}
+		if got := label(string(data), "agent"); got != want.agent {
+			t.Errorf("examples/%s: agent %q, want %q", dir, got, want.agent)
+		}
+		if n := label(string(data), "agent-name"); (dir == "python-agent") != (n == "python") {
+			t.Errorf("examples/%s: agent-name %q", dir, n)
 		}
 	}
 	// The web app machines: a preview connects to their servers, so they have a network device;

@@ -490,3 +490,17 @@ test('panel: Ctrl+Enter runs only when Run would', async () => {
   await settle();
   assert.match(emulators[0].typed[0], /^echo SGSYNC_/);
 });
+
+test('the guest network drops cache-hint headers (pip sends them, and they would force a CORS preflight)', async () => {
+  const { guestFetch } = require('./machine-core.js');
+  const seen = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { seen.push([url, init]); return {}; };
+  try {
+    await guestFetch('https://pypi.org/simple/rich/', { method: 'GET', headers: new Headers([['Accept', 'text/html'], ['Cache-Control', 'max-age=0'], ['Pragma', 'no-cache'], ['Authorization', 'x']]) });
+    await guestFetch('https://pypi.org/x');
+  } finally { globalThis.fetch = real; }
+  assert.deepEqual([...seen[0][1].headers.keys()].sort(), ['accept', 'authorization']);
+  assert.equal(seen[0][1].method, 'GET');
+  assert.equal(seen[1][1], undefined);
+});

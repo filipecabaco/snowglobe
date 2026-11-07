@@ -26,6 +26,22 @@
     return r;
   }
 
+  // Request headers that only hint at caching (pip sends `Cache-Control: max-age=0` with every index
+  // request). They are not CORS-safelisted, so the browser would preflight the request and most
+  // servers (PyPI's index and files among them) refuse the preflight; with them gone the request is
+  // simple and goes through. Dropping a cache hint changes no answer.
+  const CACHE_HINTS = /^(cache-control|pragma)$/i;
+
+  /** The page's fetch() as the guest's network uses it: without the headers in CACHE_HINTS. */
+  function guestFetch(url, init) {
+    if (init?.headers) {
+      const headers = new Headers(init.headers);
+      for (const name of [...headers.keys()]) if (CACHE_HINTS.test(name)) headers.delete(name);
+      init = { ...init, headers };
+    }
+    return fetch(url, init);
+  }
+
   class Core {
     /**
      * `config` is armless's options with absolute URLs (located()), plus `warm` (the warm pack's
@@ -69,7 +85,8 @@
         // The guest's files through fetchBlob, so a blob store that can't be reached is said
         // (the guest only sees an I/O error)
         const filesystem = this.config.filesystem ? { ...this.config.filesystem, fetch_blob: (name) => this.fetchBlob(name) } : undefined;
-        vm = new this.Armless({ ...this.config, filesystem, warm: undefined, initial_state: url, autostart: false });
+        const network = this.config.network ? { ...this.config.network, fetch: guestFetch } : undefined;
+        vm = new this.Armless({ ...this.config, filesystem, network, warm: undefined, initial_state: url, autostart: false });
         this.vm = vm;
         vm.on("progress", (e) => this.emit("progress", { file: e.file, loaded: e.loaded, total: e.total }));
         vm.on("console", (bytes) => { if (vm === this.vm) this.emit("console", bytes); });
@@ -314,7 +331,7 @@
     }
   }
 
-  const SnowglobeMachineCore = { Core, located, errorOf };
+  const SnowglobeMachineCore = { Core, located, errorOf, guestFetch };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeMachineCore;
   else root.SnowglobeMachineCore = SnowglobeMachineCore;
 })(typeof window !== "undefined" ? window : globalThis);
