@@ -3,14 +3,21 @@
 //
 // A job runs on the guest's serial root shell (ttyS0), which every snowglobe guest has beside its
 // app; the app's terminal (hvc0) is the only thing the page shows, so nothing a job prints or types
-// reaches it. This is the native job protocol (internal/tools/runtime/src/job.rs) with one change:
-// a page can't write into the guest's filesystem, so the launcher and the command are typed in,
-// base64 in short lines, each acknowledged before the next. Then, as natively: `sh <launcher>` is
-// typed; the launcher asks for a nonce, which the page types with its own time; the command runs
-// in a session of its own; the launcher prints a marker line with the nonce and its status, and
-// only that whole line ends the job. Out of time, or cancelled, the page types ctrl-c and the
-// launcher kills the command's session, TERM then KILL. The command's output goes straight to the
-// serial line (natively it goes to a file the host reads), between a start line and the marker.
+// reaches it. This is the native job protocol (internal/tools/runtime/src/job.rs), as its
+// interactive jobs (`snowglobe sh`, run_command) have it: the command starts in the home directory,
+// with its own scratch directory as $EXCLAVE_WORKSPACE. What differs, because a page can't reach
+// into the guest's filesystem:
+//  - the launcher and the command are typed in, base64 in short lines, each acknowledged before
+//    the next (natively the host writes them as files);
+//  - the command's output goes straight to the serial line, between a start line and the marker,
+//    with the terminal's echo and newline translation off (natively it goes to a file the host
+//    reads);
+//  - it runs with NO_COLOR=1 and TERM=dumb, and what it reads back has escape sequences stripped,
+//    as the output is shown on a page and read by an agent, never painted on a terminal.
+// Then, as natively: `sh <launcher>` is typed; the launcher asks for a nonce, which the page types
+// with its own time; the command runs in a session of its own; the launcher prints a marker line
+// with the nonce and its status, and only that whole line ends the job. Out of time, or
+// cancelled, the page types ctrl-c and the launcher kills the command's session, TERM then KILL.
 //
 // What this can't stop, as natively: a job runs as root in the guest, so it can read the nonce out
 // of the launcher's memory and forge its own result. It can only forge its own: the page keeps the
@@ -41,14 +48,24 @@
     return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
   }
 
-  function base64(text) {
-    const bytes = new TextEncoder().encode(text);
+  function base64Bytes(bytes) {
     let s = "";
     for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
     return btoa(s);
   }
 
-  /** The two scripts of a job in workspace `ws`: the launcher and the command with its environment. */
+  function base64(text) {
+    return base64Bytes(new TextEncoder().encode(text));
+  }
+
+  // A job's files (its workspace's in/): short plain names
+  const FILE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;
+  // A job's files together, in bytes: they are typed in, as base64, line by line
+  const MAX_FILES_BYTES = 4 << 20;
+
+  /** The two scripts of a job in workspace `ws`: the launcher and the command with its environment.
+   *  The command starts in the home directory, so relative paths mean what they do in the
+   *  machine's terminal; `ws` stays the job's own scratch directory, as $EXCLAVE_WORKSPACE. */
   function scripts(id, ws, command) {
     // The app's environment: a login PATH, /etc/profile, the image's ENV
     const cmd =
@@ -56,8 +73,11 @@
       "[ -f /etc/profile ] && . /etc/profile >/dev/null 2>&1\n" +
       "if [ -f /etc/snowglobe/env ]; then . /etc/snowglobe/env\n" +
       "elif [ -f /usr/local/bin/snowglobe-console ]; then eval \"$(grep '^export ' /usr/local/bin/snowglobe-console)\"; fi\n" +
-      `cd ${quote(ws)} || exit 1\n` +
       `export EXCLAVE_WORKSPACE=${quote(ws)}\n` +
+      // Output for a page and an agent to read, not a terminal to paint: no colours, no cursor
+      // movement (what still comes, as `ls --color=always` sends, is stripped from what jobs read)
+      "export NO_COLOR=1 TERM=dumb\n" +
+      "cd \"${HOME:-/root}\" 2>/dev/null || cd /\n" +
       command + "\n";
     // The trap first, as natively. The terminal stops echoing (the nonce isn't printed back) and
     // translating newlines (the output arrives as written) until the marker; the command's output
@@ -110,16 +130,37 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
     return { launcher, cmd };
   }
 
-  /** The lines typed into the serial shell to put a job's two scripts in its workspace. Each ends
-   *  by printing an acknowledgement the shell computes (its echo can't contain it). */
-  function uploadLines(ws, launcher, cmd, ack) {
-    const lines = [`mkdir -p ${ws}/.sg ${ws}/in ${ws}/out && : >${ws}/.sg/job.b64 && : >${ws}/.sg/cmd.b64`];
-    for (const [file, text] of [["job.b64", launcher], ["cmd.b64", cmd]]) {
-      const b = base64(text);
-      for (let i = 0; i < b.length; i += CHUNK) lines.push(`printf %s ${b.slice(i, i + CHUNK)} >>${ws}/.sg/${file}`);
+  /** The lines typed into the serial shell to put a job's two scripts in its workspace, and its
+   *  files (name: Uint8Array) in its in/, as the native protocol's files are. Each line ends by
+   *  printing an acknowledgement the shell computes (its echo can't contain it). */
+  function uploadLines(ws, launcher, cmd, ack, files = {}) {
+    const names = Object.keys(files);
+    const lines = [`mkdir -p ${ws}/.sg ${ws}/in ${ws}/out && : >${ws}/.sg/job.b64 && : >${ws}/.sg/cmd.b64` +
+      names.map((n) => ` && : >${ws}/in/${n}.b64`).join("")];
+    const parts = [["job.b64", base64(launcher), ".sg"], ["cmd.b64", base64(cmd), ".sg"],
+      ...names.map((n) => [`${n}.b64`, base64Bytes(files[n]), "in"])];
+    for (const [file, b, dir] of parts) {
+      for (let i = 0; i < b.length; i += CHUNK) lines.push(`printf %s ${b.slice(i, i + CHUNK)} >>${ws}/${dir}/${file}`);
     }
-    lines.push(`base64 -d ${ws}/.sg/job.b64 >${ws}/.sg/job.sh && base64 -d ${ws}/.sg/cmd.b64 >${ws}/.sg/cmd`);
+    lines.push(`base64 -d ${ws}/.sg/job.b64 >${ws}/.sg/job.sh && base64 -d ${ws}/.sg/cmd.b64 >${ws}/.sg/cmd` +
+      names.map((n) => ` && base64 -d ${ws}/in/${n}.b64 >${ws}/in/${n} && rm ${ws}/in/${n}.b64`).join(""));
     return lines.map((line, i) => `${line}; echo SGACK_${ack}_${i}_$?_$((6*7))\n`);
+  }
+
+  /** A job's files, checked: { name: Uint8Array }, plain names, MAX_FILES_BYTES in all. */
+  function checkFiles(files) {
+    if (files === undefined || files === null) return {};
+    if (typeof files !== "object") throw new Error("files: { name: bytes }");
+    let total = 0;
+    const out = {};
+    for (const [name, bytes] of Object.entries(files)) {
+      if (!FILE_NAME.test(name)) throw new Error(`files: ${JSON.stringify(name)} is not a plain file name`);
+      if (!(bytes instanceof Uint8Array)) throw new Error(`files: ${name} is not a Uint8Array`);
+      total += bytes.length;
+      out[name] = bytes;
+    }
+    if (total > MAX_FILES_BYTES) throw new Error(`files: at most ${MAX_FILES_BYTES} bytes in all`);
+    return out;
   }
 
   /** The launcher's marker: its status and whether it killed the command. Only a whole line
@@ -145,6 +186,25 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
     return false;
   }
 
+  // Terminal escape sequences, 7- and 8-bit: CSI (colours, cursor movement), OSC (titles,
+  // hyperlinks; ended by BEL or ST, or taken as ended at a newline when it never is), the
+  // DCS/SOS/PM/APC strings, charset designations and the two-character ones (ESC =, ESC 7,
+  // ESC M...). Then one cut short at the end of the text so far, held back until it is whole
+  const ESCAPES = new RegExp([
+    "(?:\\x1b\\[|\\x9b)[\\x30-\\x3f]*[\\x20-\\x2f]*[\\x40-\\x7e]",
+    "(?:\\x1b\\]|\\x9d)[^\\x07\\x1b\\x9c\\n]*(?:\\x07|\\x1b\\\\|\\x9c|(?=\\n))",
+    "(?:\\x1b[PX^_]|[\\x90\\x98\\x9e\\x9f])[^\\x1b\\x9c]*(?:\\x1b\\\\|\\x9c)",
+    "\\x1b[\\x20-\\x2f]+[\\x30-\\x7e]",
+    "\\x1b(?![[\\]PX^_])[\\x30-\\x7e]",
+  ].join("|"), "g");
+  const CUT_SHORT = /(?:(?:\x1b\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*|(?:\x1b[\]PX^_]|[\x9d\x90\x98\x9e\x9f])[^\x07\x1b\x9c\n]*\x1b?|\x1b[\x20-\x2f]*)$/;
+
+  /** `text` without terminal escape sequences: what a person reads off the screen, less colour. */
+  function plain(text) {
+    if (!/[\x1b\x90-\x9f]/.test(text)) return text;
+    return text.replace(ESCAPES, "").replace(CUT_SHORT, "");
+  }
+
   /** A job's seconds: a number, 0 to MAX_TIMEOUT_S (default DEFAULT_TIMEOUT_S). */
   function timeoutSeconds(v) {
     if (v === undefined || v === null) return DEFAULT_TIMEOUT_S;
@@ -159,7 +219,7 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
    * (ctrl-c typed), check (no marker after the kill: does the shell answer?), done.
    */
   class Job {
-    constructor({ id, nonce, ack, command, timeoutS, now, clock, maxOutput = MAX_OUTPUT }) {
+    constructor({ id, nonce, ack, command, timeoutS, now, clock, maxOutput = MAX_OUTPUT, files, window = 1 }) {
       this.id = id;
       this.nonce = nonce;
       this.ack = ack;
@@ -169,8 +229,13 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
       this.clock = clock ?? (() => Math.floor(Date.now() / 1000));
       this.maxOutput = maxOutput;
       const { launcher, cmd } = scripts(id, this.ws, command);
-      this.lines = uploadLines(this.ws, launcher, cmd, ack);
-      this.next = 0;
+      this.lines = uploadLines(this.ws, launcher, cmd, ack, files);
+      // Upload lines typed ahead of their acknowledgement: 1 types each after the one before is
+      // acknowledged. More keeps the line busier, but what is typed ahead waits in the guest's
+      // terminal buffer (4 KiB), so a few at most
+      this.window = Math.max(1, Math.min(4, window | 0));
+      this.next = 0; // the next line whose acknowledgement is awaited
+      this.sent = 0; // lines typed
       this.startedAt = now;
       this.endedAt = null;
       this.state = "running"; // running, exited, timed_out, cancelled, failed
@@ -238,23 +303,30 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
               return [];
             }
             this._step("upload", now + SYNC_WAIT_MS);
-            return [this.lines[0]];
+            this.sent = Math.min(this.window, this.lines.length);
+            return this.lines.slice(0, this.sent);
           }
           return [];
         case "upload": {
-          const m = new RegExp(`SGACK_${this.ack}_${this.next}_(\\d+)_42`).exec(this.scan);
-          if (!m) return [];
-          if (m[1] !== "0") {
-            this._fail(`the job could not be written into the guest (step ${this.next}, status ${m[1]})`, now, false);
-            return [];
+          const out = [];
+          // Acknowledgements come in order; several may have arrived together
+          for (;;) {
+            const m = new RegExp(`SGACK_${this.ack}_${this.next}_(\\d+)_42`).exec(this.scan);
+            if (!m) return out;
+            if (m[1] !== "0") {
+              this._fail(`the job could not be written into the guest (step ${this.next}, status ${m[1]})`, now, false);
+              return [];
+            }
+            this.next++;
+            this.scan = this.scan.slice(m.index + m[0].length);
+            this.deadline = now + SYNC_WAIT_MS;
+            if (this.next >= this.lines.length) {
+              this._step("launch", this.startedAt + this.timeoutS * 1000);
+              out.push(`sh ${this.ws}/.sg/job.sh\n`);
+              return out;
+            }
+            if (this.sent < this.lines.length) out.push(this.lines[this.sent++]);
           }
-          this.next++;
-          if (this.next < this.lines.length) {
-            this._step("upload", now + SYNC_WAIT_MS);
-            return [this.lines[this.next]];
-          }
-          this._step("launch", this.startedAt + this.timeoutS * 1000);
-          return [`sh ${this.ws}/.sg/job.sh\n`];
         }
         case "launch":
           if (hasLine(this.scan, `SGNONCE_${this.id}`)) {
@@ -366,7 +438,9 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
         exitStatus: this.exitStatus,
         killed: this.killed,
         error: this.error,
-        output: out.text,
+        // Escape sequences stripped (colours, cursor movement): the text, as a page shows it and an
+        // agent reads it. droppedChars counts what was dropped as printed
+        output: plain(out.text),
         truncated: out.dropped > 0,
         droppedChars: out.dropped,
         startedAt: this.startedAt,
@@ -412,16 +486,24 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
       this.decoder = new TextDecoder();
       this.sessionId = token();
       this.webmcp = { available: false, registered: [], reason: "not attempted" };
-      if (machine.emulator && this.supported()) {
-        machine.emulator.on("serial", (bytes) => this._serial(bytes));
-        machine.emulator.on("stop", () => {
-          const job = this.current;
-          if (job && job.phase !== "done") {
-            job._fail("the machine stopped", this.now(), true);
-            this._finished();
-          }
-        });
-      }
+      this.finishedListeners = [];
+      if (machine.emulator) this.bind(machine.emulator);
+    }
+
+    /** Listen to an emulator: the page's first, and each one a wake makes. */
+    bind(emulator) {
+      if (!emulator || !this.supported()) return;
+      this.decoder = new TextDecoder();
+      emulator.on("serial", (bytes) => {
+        if (emulator === this.m.emulator) this._serial(bytes);
+      });
+      emulator.on("stop", () => {
+        const job = this.current;
+        if (emulator === this.m.emulator && job && job.phase !== "done") {
+          job._fail("the machine stopped", this.now(), true);
+          this._finished();
+        }
+      });
     }
 
     supported() {
@@ -449,8 +531,10 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
         maxTimeoutSeconds: MAX_TIMEOUT_S,
         maxOutputChars: MAX_OUTPUT,
         maxCommandChars: MAX_COMMAND,
-        features: this.supported() ? ["runCommand", "readJob", "cancelJob"] : [],
+        features: this.supported() ? ["runCommand", "readJob", "cancelJob", ...(this.m.lifecycle ? ["suspend"] : [])] : [],
         notYet: ["readFile", "writeFile", "cwd", "env", "separate stderr"],
+        workingDirectory: "home",
+        machine: this.m.lifecycle?.describe() ?? null,
         webmcp: this.webmcp,
       };
     }
@@ -459,6 +543,13 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
       if (!this.supported()) return { state: "failed", reason: this._unsupportedReason() };
       const s = this.m.state();
       if (s === "error" || s === "stopped") return { state: "failed", reason: `the machine is ${s === "error" ? "in error" : "stopped"}` };
+      // Put away to free memory: the next command wakes it first
+      if (s === "suspended" || s === "suspending" || s === "waking") {
+        const d = this.m.lifecycle?.describe();
+        const r = { state: s, wakeSeconds: d?.wakeSeconds ?? null, note: s === "waking" ? "waking from its saved state" : "the next command wakes it first" };
+        if (d?.lastWakeError) r.lastWakeError = d.lastWakeError;
+        return r;
+      }
       if (s !== "ready") return { state: "booting" };
       if (this.m.saving?.()) return { state: "saving" };
       if (this.current) return { state: "busy", jobId: this.current.id };
@@ -467,8 +558,9 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
       return { state: "ready" };
     }
 
-    /** Start a command; its job id comes back at once. */
-    runCommand(input) {
+    /** A runCommand input, checked: { command, timeoutS, requestId, repeat } (repeat: the job a
+     *  retry with the same requestId returns). Throws on a bad one. */
+    parse(input) {
       if (!input || typeof input !== "object") throw new Error("runCommand: { command, timeoutSeconds?, requestId? }");
       const { command, requestId } = input;
       if (typeof command !== "string" || !command.trim()) throw new Error("command: a non-empty string");
@@ -478,17 +570,28 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
       if (requestId !== undefined && (typeof requestId !== "string" || !/^[\w.:-]{1,128}$/.test(requestId))) {
         throw new Error("requestId: 1 to 128 letters, digits, or _ . : -");
       }
+      let repeat = null;
       if (requestId !== undefined && this.requests.has(requestId)) {
         const seen = this.requests.get(requestId);
         if (seen.command !== command || seen.timeoutS !== timeoutS) throw new Error(`requestId ${requestId} was used for a different command`);
-        if (this.jobs.has(seen.jobId)) return { jobId: seen.jobId, repeated: true };
+        if (this.jobs.has(seen.jobId)) repeat = seen.jobId;
       }
+      const files = checkFiles(input.files);
+      return { command, timeoutS, requestId, repeat, files };
+    }
+
+    /** Start a command; its job id comes back at once. `files` ({ name: Uint8Array }) are put in
+     *  its workspace's in/ first ($EXCLAVE_WORKSPACE/in/name). */
+    runCommand(input) {
+      const { command, timeoutS, requestId, repeat, files } = this.parse(input);
+      if (repeat) return { jobId: repeat, repeated: true };
       const st = this.status();
       if (st.state === "busy") throw new Error(`busy: job ${st.jobId} is running; one job at a time (cancel it, or wait)`);
       if (st.state !== "ready") throw new Error(`not ready: the machine is ${st.state}${st.reason ? ` (${st.reason})` : ""}`);
 
       const now = this.now();
-      const job = new Job({ id: token(), nonce: token(), ack: token(), command, timeoutS, now });
+      const job = new Job({ id: token(), nonce: token(), ack: token(), command, timeoutS, now, files,
+        window: input.uploadWindow ?? this.uploadWindow ?? 1 });
       this._keep(job);
       if (requestId !== undefined) this.requests.set(requestId, { jobId: job.id, command, timeoutS });
       this.current = job;
@@ -553,25 +656,45 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
         this.timer = null;
       }
       this.onchange?.(job);
+      // A copy: a listener may remove itself
+      for (const fn of [...this.finishedListeners]) fn(job);
     }
   }
 
-  /** The controller for this page, as window.snowglobeAgent. */
-  function attach(machine) {
-    const c = new Controller(machine);
+  /**
+   * The controller for a machine, as window.snowglobeAgent. With `machine.lifecycle` (a
+   * SnowglobeMachine.Machine), a command wakes a suspended machine first, and the API can
+   * suspend it. Each machine gets its own, so a page of several can keep only some awake.
+   */
+  function attach(machine, opts) {
+    const c = new Controller(machine, opts);
+    const life = machine.lifecycle;
+    // A finished job is activity: the idle clock starts again from its end
+    if (life) c.finishedListeners.push(() => life.touch());
+    const asleep = () => ["suspended", "suspending", "waking"].includes(life?.state);
     const api = {
       capabilities: async () => c.capabilities(),
       status: async () => c.status(),
-      runCommand: async (input) => c.runCommand(input),
+      runCommand: async (input) => {
+        // A bad command is refused without waking anything; a retry of a job returns it as is
+        if (!c.parse(input).repeat && asleep()) await life.wake();
+        const r = c.runCommand(input);
+        life?.touch();
+        return r;
+      },
       readJob: async (input) => c.readJob(input),
       cancelJob: async (input) => c.cancelJob(input),
+      // Free the machine's memory now (never while a job runs); the next command wakes it
+      suspend: async () => (life ? life.suspend("asked") : false),
+      wake: async () => life?.wake(),
     };
     Object.defineProperty(api, "_controller", { value: c });
     return api;
   }
 
-  const SnowglobeAgent = { attach, Controller, Job, scripts, uploadLines, parseMarker, hasLine, jobText, timeoutSeconds,
-    limits: { DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S, MAX_OUTPUT, MAX_COMMAND, KILL_GRACE_MS, SYNC_WAIT_MS } };
+  const SnowglobeAgent = { attach, Controller, Job, scripts, uploadLines, checkFiles, parseMarker, hasLine, jobText, timeoutSeconds, plain,
+    base64Bytes, quote, token,
+    limits: { DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S, MAX_OUTPUT, MAX_COMMAND, MAX_FILES_BYTES, KILL_GRACE_MS, SYNC_WAIT_MS } };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeAgent;
   else root.SnowglobeAgent = SnowglobeAgent;
 })(typeof window !== "undefined" ? window : globalThis);

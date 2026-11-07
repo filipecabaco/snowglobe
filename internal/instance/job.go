@@ -68,7 +68,7 @@ func job(name string, req JobRequest, fresh bool) (*JobResult, error) {
 // Shell runs a command on a native instance's shell and prints its output, ending with its exit
 // status; as JSON ({"exit", "output"}) when asked.
 func Shell(name, command string, asJSON bool, timeout float64) error {
-	res, err := job(name, JobRequest{Cmd: command, Timeout: timeout}, true)
+	res, err := job(name, JobRequest{Cmd: command, Timeout: timeout, Home: true}, true)
 	if err != nil {
 		return err
 	}

@@ -101,7 +101,7 @@ func TestOneCPUOffline(t *testing.T) {
 
 func TestSessionControlsAndSafeReload(t *testing.T) {
 	page, dir := render(t, Page{Title: "Session demo", MemoryMB: 256, Network: "none", CPUs: 1})
-	for _, want := range []string{`src="sessions.js"`, `src="session-ui.js"`, `id="sessions"`, `id="session-save"`, `id="session-export"`, `id="session-import"`, `id="session-folder"`, `id="session-delete"`, `SnowglobeSessionUI`, `await sessions.prepare()`, `sessions.initialState`, `sessions.attach(emulator, term`, `new ResizeObserver(resize)`, `sessions.message("Workspace could not start"`} {
+	for _, want := range []string{`src="sessions.js"`, `src="session-ui.js"`, `id="sessions"`, `id="session-save"`, `id="session-export"`, `id="session-import"`, `id="session-folder"`, `id="session-delete"`, `SnowglobeSessionUI`, `await sessions.prepare()`, `sessions.initialState`, `sessions.attach(emulator, term`, `new ResizeObserver(() => resize())`, `sessions.message("Workspace could not start"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks persistence integration %q", want)
 		}
@@ -193,48 +193,66 @@ func TestTunnelToken(t *testing.T) {
 	}
 }
 
+func flat(t *testing.T, file string) string {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(strings.Fields(string(data)), " ")
+}
+
+func lacks(t *testing.T, what, page string, wants ...string) {
+	t.Helper()
+	for _, s := range wants {
+		if !strings.Contains(page, s) {
+			t.Errorf("%s lacks %s", what, s)
+		}
+	}
+}
+
+// The machine is made by the same factory the agent page uses (machine-host.js), in the page
+func TestThePageMakesItsMachineWithTheFactory(t *testing.T) {
+	page, dir := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none"})
+	lacks(t, "the page", page, `<script src="machine-core.js">`, `<script src="machine-host.js">`,
+		`SnowglobeHost.createMachine({ base: document.baseURI, transport: "inline"`, `baseurl: "system/filesystem/"`,
+		`warm: "system/warm.pack"`, `host.boot(sessions.initialState ?? "system/state.bin.zst")`, `await host.run()`)
+	for _, f := range []string{"machine-core.js", "machine-host.js"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("the site lacks %s", f)
+		}
+	}
+}
+
 func TestAgentOnlyWhenBuiltWithIt(t *testing.T) {
 	page, dir := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none"})
-	for _, s := range []string{"agent.js", "agent-webmcp.js", "agent-panel", "snowglobeAgent", "SnowglobeWebMCP", "Agent commands"} {
+	for _, s := range []string{"agent-link", "snowglobeAgent", "SnowglobeWebMCP", "agent.js"} {
 		if strings.Contains(page, s) {
-			t.Errorf("a page without --agent mentions %s", s)
+			t.Errorf("a site built without --agent has %q", s)
 		}
 	}
-	for _, f := range []string{"agent.js", "agent-webmcp.js", "agent-panel.js"} {
+	// The agent page's own files are not the site's: snowglobe agent-pages writes them, once
+	for _, f := range []string{"agent.js", "agent-webmcp.js", "agent-panel.js", "machine.js", "agent.html"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
-			t.Errorf("%s written without --agent", f)
+			t.Errorf("a site has %s", f)
 		}
 	}
+}
 
-	page, dir = render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "fetch", Agent: true, Version: "v9.9.9",
-		AgentExposedTo: []string{"https://agent.example"}})
-	for _, s := range []string{
-		`<script src="agent.js"></script>`, `<script src="agent-webmcp.js"></script>`,
-		"window.snowglobeAgent = agent", `version: "v9.9.9"`, `buildId: "test-build"`, `network: "fetch"`,
-		`exposedTo: ["https://agent.example"]`, "state: () => run.state",
-		// The panel a UI-driving agent finds by name, on the same job runner and consent
-		`<script src="agent-panel.js"></script>`, `<details id="agent-panel">`, `<summary><span class="title">Agent commands</span>`,
-		`<label for="agent-command">Shell command</label>`, `<button id="agent-run" type="submit" disabled>Run</button>`,
-		`<button id="agent-cancel" type="button" disabled>Cancel</button>`, `id="agent-status" role="status" aria-live="polite"`,
-		`aria-label="Command output"`, "Agents: type a shell command here and press Run; the result and its exit status appear under Result.",
-		"const ask = SnowglobeWebMCP.consent({ doc: document })",
-		"SnowglobeAgentPanel.attach(agent, { ask, jobText: SnowglobeAgent.jobText })", "ask, waitMs: 15000",
-	} {
-		if !strings.Contains(page, s) {
-			i := strings.Index(page, "SnowglobeAgent.attach")
-			t.Errorf("page lacks %s\ngot: %s", s, page[max(i, 0):min(max(i, 0)+600, len(page))])
+// Built with --agent: the page links to the agent page with its machine preselected, and an
+// address ending #agent goes there as it loads; the page itself runs no agent
+func TestAgentSiteLinksToTheAgentPage(t *testing.T) {
+	page, dir := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "fetch", Agent: true, Version: "v9.9.9"})
+	name := filepath.Base(dir)
+	lacks(t, "the terminal page", page,
+		`<a id="agent-link" href="../agent/?runtime=`+name+`">For agents</a>`,
+		`if (location.hash === "#agent") { location.replace(agentLink.href); return; }`)
+	for _, s := range []string{"snowglobeAgent", "SnowglobeWebMCP", "SnowglobeAgentPanel", "agent.js"} {
+		if strings.Contains(page, s) {
+			t.Errorf("the terminal page has %q", s)
 		}
 	}
-	for f, want := range map[string]string{"agent.js": "SGDONE_", "agent-webmcp.js": "provideContext", "agent-panel.js": "SnowglobeAgentPanel"} {
-		data, err := os.ReadFile(filepath.Join(dir, f))
-		if err != nil || !strings.Contains(string(data), want) {
-			t.Errorf("%s: %v", f, err)
-		}
-	}
-	// No origins: an empty list, not a broken script
-	page, _ = render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none", Agent: true})
-	if !strings.Contains(page, "exposedTo: null ?? []") {
-		i := strings.Index(page, "exposedTo")
-		t.Errorf("no origins: %s", page[i:min(i+40, len(page))])
+	if _, err := os.Stat(filepath.Join(dir, "agent.html")); err == nil {
+		t.Error("there is no per-site agent page any more: /agent/ is the one")
 	}
 }

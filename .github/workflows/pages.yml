@@ -242,6 +242,7 @@ jobs:
             iex|elixir) commands='IO.puts("snowglobe-#{6 * 7}")'; expect=snowglobe-42 ;;
             python)     commands='print(f"snowglobe-{6 * 7}")'; expect=snowglobe-42 ;;
             typescript) commands='console.log("snowglobe-" + 6 * 7)'; expect=snowglobe-42 ;;
+            duckdb)     commands='select '"'"'snowglobe-'"'"' || 6 * 7;'; expect=snowglobe-42 ;;
             java)       commands='System.out.println("snowglobe-" + 6 * 7)'; expect=snowglobe-42 ;;
             postgres)   commands="SELECT 'snowglobe-' || 6 * 7;"; expect=snowglobe-42 ;;
             rust)       commands='echo snowglobe-$((6 * 7))'; expect=snowglobe-42 ;;
@@ -515,8 +516,10 @@ jobs:
           done
           rm -rf dist/blobs
 
-          # The rest of `mise run assemble`: every demo an installable app, and the index page
+          # The rest of `mise run assemble`: every demo an installable app, the agent page's machines
+          # (/agent/runtimes.json, read from the pages just pointed at the blob store), and the index page
           for demo in $DEMOS; do ./snowglobe pwa "dist/$demo"; done
+          ./snowglobe agent-pages dist
           cp -R site/. dist/
           cp -R dist/elixir/xterm dist/xterm
           du -sh dist

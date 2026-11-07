@@ -14,7 +14,9 @@
   class SnowglobeSessionUI {
     constructor(config) {
       this.config = config;
-      this.scope = new URL("./", location.href).pathname;
+      // Saves, the one-tab lock and the folder name are per scope: the page's directory, unless the
+      // page names its own (the agent page keeps its saves apart from the terminal page's)
+      this.scope = config.scope ?? new URL("./", location.href).pathname;
       this.records = [];
       this.revision = 0;
       this.settings = {};
@@ -292,8 +294,10 @@
       if (this.store && !this.blocked) this.savedMessage();
       this.schedule();
     }
-    record(bytes) { this.records.push(S.consoleRecord(bytes)); this.revision++; this.changed(); }
-    resize(cols, rows) { this.records.push(S.resizeRecord(cols, rows)); }
+    // Suspended (from its capture to the wake), nothing goes on the tape: the woken machine records
+    // its own size as it starts
+    record(bytes) { if (this.asleep) return; this.records.push(S.consoleRecord(bytes)); this.revision++; this.changed(); }
+    resize(cols, rows) { if (!this.asleep) this.records.push(S.resizeRecord(cols, rows)); }
     changed() {
       this.activity();
       if (this.vm && this.store && !this.busy && !this.blocked && this.status.dataset.error !== "true" && this.status.textContent !== "Unsaved changes") this.savedMessage();
@@ -338,7 +342,7 @@
         this.schedule(Math.max(this.settings.autosaveInterval, (performance.now() - started) * 10));
       }, delay);
     }
-    async checkpoint(label = "Saving") {
+    async checkpoint(label = "Saving", captured) {
       this.progress(`${label}… Copying workspace`, "Terminal briefly paused while a consistent copy is captured.");
       let console, revision, bytes;
       this.pauseInput(true);
@@ -348,6 +352,7 @@
         bytes = await S.capture(this.vm, () => {
           console = new Blob(this.records); revision = this.revision;
           this.records = [console]; // compact the tape's record list without dropping bytes
+          captured?.();
         });
       }
       finally { this.pauseInput(false); this.applyResize?.(); }
@@ -372,6 +377,61 @@
       catch (e) { this.message("Saved with a warning", true, "Your work is saved, but workspace settings could not be updated.", e.message); }
       try { await this.refreshList(); }
       catch (e) { this.message("Saved with a warning", true, "Your work is saved, but other saved workspaces could not be listed.", e.message); }
+    }
+    /**
+     * Suspend: capture the stopped machine, save it as the workspace where saves go (so a reload
+     * restores it too), and let go of the machine. Returns the checkpoint a wake restores, read
+     * back from storage when it was saved there, so this page holds no copy of its own.
+     */
+    async suspend() {
+      if (this.busy || this.closed || !this.vm) throw new Error("the workspace is busy");
+      this.busy = true;
+      this.controls();
+      try {
+        // From the moment it is captured, what the old machine prints or the terminal does is
+        // not on the tape: the state saved has none of it
+        let c = await this.checkpoint("Suspending", () => { this.asleep = true; });
+        let stored = false;
+        if (this.store && !this.blocked) {
+          try {
+            this.progress(this.settings.folderHandle ? "Suspending… Writing to folder" : "Suspending… Writing to browser", "");
+            await this.store.put(c);
+            this.savedRevision = c.revision;
+            delete this.settings.pendingName;
+            stored = true;
+            // The copy in storage, read back: the one just captured (its state in this page's
+            // memory) is let go, kept neither here nor as this.active
+            try { c = (await this.store.get(c.id)) ?? c; } catch {}
+            this.active = c;
+            this.showLastSave();
+            try { await this.browser.settings(this.settings); } catch {}
+          } catch {
+            // Kept in this page instead: the wake still has it
+          }
+        }
+        clearTimeout(this.timer);
+        this.timer = null;
+        this.vm = null;
+        this.message("Suspended", false, stored
+          ? "Saved, and the machine's memory freed. The next command wakes it."
+          : "The machine's memory is freed; its state is kept in this tab only. The next command wakes it.");
+        return c;
+      } catch (e) {
+        // Not suspended: the machine runs on, and its tape with it
+        this.asleep = false;
+        throw e;
+      } finally {
+        this.busy = false;
+        this.controls();
+      }
+    }
+    /** Woken: the new machine takes the old one's place. */
+    resume(vm) {
+      this.asleep = false;
+      this.vm = vm;
+      this.controls();
+      if (this.store && !this.blocked) this.savedMessage();
+      this.schedule();
     }
     startFresh() { return this.newSession(`Workspace ${new Date().toLocaleString()}`); }
     async newSession(name) {

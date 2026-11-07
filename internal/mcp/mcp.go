@@ -81,7 +81,7 @@ func (s *Server) call(name string, args map[string]any) (string, bool) {
 	switch name {
 	case "run_command":
 		timeout, _ := args["timeout_seconds"].(float64)
-		res, err := instance.Job(s.Name, instance.JobRequest{Cmd: str("command"), Timeout: timeout})
+		res, err := instance.Job(s.Name, instance.JobRequest{Cmd: str("command"), Timeout: timeout, Home: true})
 		if err != nil {
 			return err.Error(), true
 		}

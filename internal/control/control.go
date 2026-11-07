@@ -14,12 +14,16 @@ import (
 	"time"
 )
 
-// JobRequest is a job: files written into its workspace, the command, its environment.
+// JobRequest is a job: files written into its workspace, the command, its environment. The
+// command starts in the workspace (where its files are, and out/ is), or with Home in the home
+// directory, as a command typed into the machine's terminal does: for a person or an agent
+// (snowglobe sh, run_command), the workspace still its own as $EXCLAVE_WORKSPACE.
 type JobRequest struct {
 	Files   map[string][]byte `json:"files,omitempty"`
 	Cmd     string            `json:"cmd"`
 	Env     map[string]string `json:"env,omitempty"`
 	Timeout float64           `json:"timeout"`
+	Home    bool              `json:"home,omitempty"`
 }
 
 // JobResult is what a job left: its exit status (nil: out of time, or the machine stopped), output
@@ -52,6 +56,9 @@ func Job(sock, name string, req JobRequest) (*JobResult, error) {
 	}
 	defer conn.Close()
 	body := map[string]any{"mode": "job", "cmd": req.Cmd, "env": req.Env, "timeout": req.Timeout, "files": req.Files}
+	if req.Home {
+		body["home"] = true
+	}
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, err

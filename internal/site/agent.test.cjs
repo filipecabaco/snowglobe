@@ -252,40 +252,72 @@ test('commands are refused until the machine is ready, and on several CPUs', () 
   }
 });
 
-test('WebMCP: three tools registered with the standard API, asking once before the first run', async () => {
+// The page's API over one machine, as the agent page has it over several: by runtime
+const ALL = ['list_runtimes', 'run_command', 'job_status', 'cancel_job', 'copy_file', 'set_awake_limit'];
+function pageApi(c, copies = [], calls = []) {
+  const rt = (i) => { if (i.runtime !== 'py') throw new Error(`no runtime ${i.runtime}`); };
+  let limit = 2;
+  return { capabilities: async () => ({ ...c.capabilities(), awake: 1, awakeLimit: limit }), listRuntimes: async () => [{ name: 'py', state: 'awake' }],
+    runCommand: async (i, o) => { rt(i); calls.push(['run', o]); return c.runCommand(i); }, readJob: async (i) => c.readJob(i), cancelJob: async (i) => c.cancelJob(i),
+    copyFile: async (i, o) => { copies.push(i); calls.push(['copy', o]); return { bytes: 2048, sha256: 'ab'.repeat(32), readSeconds: 1, writeSeconds: 0.5 }; },
+    setAwakeLimit: async (n) => { limit = n; return { awakeLimit: n, awake: 1, overLimit: null }; } };
+}
+
+test('WebMCP: one tool set registered with the standard API, through one dispatcher, asking once before the first run', async () => {
   const { c } = machine();
-  const api = { capabilities: async () => c.capabilities(), runCommand: async (i) => c.runCommand(i),
-    readJob: async (i) => c.readJob(i), cancelJob: async (i) => c.cancelJob(i) };
+  const copies = [];
+  const calls = [];
+  const api = pageApi(c, copies, calls);
   const registered = [];
   const doc = { modelContext: { registerTool: async (tool, opts) => registered.push({ tool, opts }) } };
   let asked = 0;
   const r = await W.register(api, { jobText: A.jobText, doc, nav: {}, confirm: async () => { asked++; return true; } });
-  assert.deepEqual(r.registered, ['run_command', 'job_status', 'cancel_job']);
+  assert.deepEqual(r.registered, ALL);
   assert.ok(registered.every(({ opts }) => opts.signal instanceof AbortSignal && !('exposedTo' in opts)));
   const tool = (name) => registered.find((t) => t.tool.name === name).tool;
 
-  const bad = await tool('run_command').execute({ command: 42 });
-  assert.ok(bad.isError);
+  for (const bad of [{ runtime: 'py', command: 42 }, { command: 'x' }, { runtime: 'py' }]) assert.ok((await tool('run_command').execute(bad)).isError);
   assert.equal(asked, 0, 'invalid input is refused before asking');
-  const started = await tool('run_command').execute({ command: 'echo hi' }, { signal: new AbortController().signal });
+  assert.match((await tool('list_runtimes').execute({})).content[0].text, /"name": "py"/);
+  assert.match((await tool('list_runtimes').execute({})).content[0].text, /"awake_limit": 2/);
+  assert.equal(asked, 0, 'listing asks nothing');
+  // The awake limit: an integer 1 to 8, reported back by list_runtimes; it runs nothing, so asks nothing
+  for (const bad of [{}, { count: 0 }, { count: 9 }, { count: 2.5 }, { count: '3' }]) assert.ok((await tool('set_awake_limit').execute(bad)).isError);
+  assert.match((await tool('set_awake_limit').execute({ count: 3 })).content[0].text, /^up to 3 machines awake at once; 1 awake now$/);
+  assert.match((await tool('list_runtimes').execute({})).content[0].text, /"awake_limit": 3/);
+  assert.equal(asked, 0, 'setting the limit asks nothing');
+  const started = await tool('run_command').execute({ runtime: 'py', command: 'echo hi' }, { signal: new AbortController().signal });
+  assert.match(started.content[0].text, /started in py/);
   const id = /job ([0-9a-f]{16})/.exec(started.content[0].text)[1];
   assert.equal(asked, 1);
   assert.match((await tool('job_status').execute({ job_id: id })).content[0].text, /\[running\]$/);
   assert.match((await tool('cancel_job').execute({ job_id: id })).content[0].text, /\[stopped\]$/);
-  await tool('run_command').execute({ command: 'true' });
-  assert.equal(asked, 1, 'asked once');
+  await tool('run_command').execute({ runtime: 'py', command: 'true' });
+  const copied = await tool('copy_file').execute({ from_runtime: 'py', from_path: '/root/a', to_runtime: 'db', to_path: 'b' });
+  assert.match(copied.content[0].text, /copied 2048 bytes from py:\/root\/a to db:b; sha256 (ab){32}.*Read 2 KiB\/s, wrote 4 KiB\/s/);
+  assert.deepEqual(copies, [{ fromRuntime: 'py', fromPath: '/root/a', toRuntime: 'db', toPath: 'b' }]);
+  // The client's cancel signal reaches the copy; runs and copies say they came from WebMCP
+  const sig = new AbortController().signal;
+  await tool('copy_file').execute({ from_runtime: 'py', from_path: '/a', to_runtime: 'db', to_path: 'b' }, { signal: sig });
+  assert.equal(calls.at(-1)[1].signal, sig);
+  assert.ok(calls.every(([, o]) => o.source === 'webmcp'));
+  assert.ok((await tool('copy_file').execute({ from_runtime: 'py' })).isError);
+  assert.equal(asked, 1, 'asked once, for runs and copies alike');
   assert.ok((await tool('job_status').execute({ job_id: 'nope' })).isError);
+  // One dispatcher: an unknown tool is an error result, not a throw
+  const dispatch = W.dispatcher(W.definitions(api, { jobText: A.jobText, ask: async () => {} }));
+  assert.match((await dispatch('rm_rf', {})).content[0].text, /no tool rm_rf/);
 });
 
 test('WebMCP: a client with requestUserInteraction is asked through it; a refusal runs nothing', async () => {
   const { c } = machine();
-  const api = { capabilities: async () => c.capabilities(), runCommand: async (i) => c.runCommand(i) };
+  const api = pageApi(c);
   const registered = [];
   const doc = { modelContext: { registerTool: async (tool) => registered.push(tool) } };
   await W.register(api, { jobText: A.jobText, doc, confirm: async () => false, exposedTo: ['https://agent.example'] });
   let through = 0;
   const client = { requestUserInteraction: async (cb) => { through++; return cb(); } };
-  const r = await registered[0].execute({ command: 'true' }, client);
+  const r = await registered.find((t) => t.name === 'run_command').execute({ runtime: 'py', command: 'true' }, client);
   assert.equal(through, 1);
   assert.ok(r.isError);
   assert.match(r.content[0].text, /did not allow/);
@@ -304,7 +336,7 @@ test('WebMCP: nothing registered without a model context, or on several CPUs', a
   // navigator.modelContext, as earlier drafts had it
   const seen = [];
   await W.register({ capabilities: async () => ({ supported: true }) }, { doc: {}, nav: { modelContext: { registerTool: async (t) => seen.push(t.name) } } });
-  assert.deepEqual(seen, ['run_command', 'job_status', 'cancel_job']);
+  assert.deepEqual(seen, ALL);
 });
 
 // Timers the test steps by hand
@@ -328,13 +360,13 @@ function manualTimers() {
 }
 const ok = { capabilities: async () => ({ supported: true }) };
 
-test('WebMCP: the first drafts\' provideContext({tools}) gets all three, and unregister clears them', async () => {
+test('WebMCP: the first drafts\' provideContext({tools}) gets them all, and unregister clears them', async () => {
   const given = [];
   let cleared = 0;
   const nav = { modelContext: { provideContext: async (ctx) => given.push(...ctx.tools), clearContext: () => { cleared++; } } };
   const r = await W.register(ok, { jobText: A.jobText, doc: {}, nav, exposedTo: ['https://agent.example'] });
   assert.equal(r.api, 'provideContext');
-  assert.deepEqual(r.registered, ['run_command', 'job_status', 'cancel_job']);
+  assert.deepEqual(r.registered, ALL);
   assert.deepEqual(given.map((t) => t.name), r.registered);
   assert.ok(given.every((t) => typeof t.execute === 'function' && t.inputSchema.type === 'object'));
   assert.deepEqual(r.exposedTo, [], 'no per-origin sharing in that shape');
@@ -355,7 +387,7 @@ test('WebMCP: a model context added after the page starts is still found', async
   const seen = [];
   doc.modelContext = { registerTool: async (t) => seen.push(t.name) };
   await timers.step();
-  assert.deepEqual(settled?.registered, ['run_command', 'job_status', 'cancel_job']);
+  assert.deepEqual(settled?.registered, ALL);
   assert.deepEqual(seen, settled.registered);
   assert.equal(timers.pending.size, 0, 'stops looking once found');
 });
@@ -379,7 +411,7 @@ test('WebMCP: a browser that refuses exposedTo still gets the tools, for this or
   const calls = [];
   const doc = { modelContext: { registerTool: async (t, o) => { calls.push(o); if (o.exposedTo) throw new TypeError('exposedTo'); } } };
   const r = await W.register(ok, { jobText: A.jobText, doc, exposedTo: ['https://agent.example'] });
-  assert.deepEqual(r.registered, ['run_command', 'job_status', 'cancel_job']);
+  assert.deepEqual(r.registered, ALL);
   assert.deepEqual(r.exposedTo, []);
   assert.match(r.reason, /exposedTo was refused/);
   assert.equal(calls.filter((o) => o.exposedTo).length, 1, 'tried with it once');
@@ -425,7 +457,7 @@ test('panel: the status line follows the machine, and Run is only offered when i
   assert.ok(els.cancel.disabled);
   m.setState('ready');
   await p.refresh();
-  assert.equal(els.status.textContent, 'Ready. Type a command and press Run.');
+  assert.equal(els.status.textContent, 'Ready.');
   assert.equal(els.run.disabled, false);
 });
 
@@ -500,7 +532,7 @@ test('panel: Cancel stops the job and says so; a refusal runs nothing', async ()
   assert.match(els.status.textContent, /^Cancelling job/);
   emulator.print(`\nSGDONE_${job.id}_${job.nonce}_130_1\n`);
   await timers.step();
-  assert.equal(els.result.textContent, 'Cancelled: the command and everything it started were stopped');
+  assert.equal(els.result.textContent, 'Cancelled');
   assert.match(els.output.textContent, /\[stopped; everything it started was killed\]$/);
 
   const denied = panelEls();
@@ -514,4 +546,83 @@ test('panel: Cancel stops the job and says so; a refusal runs nothing', async ()
   assert.equal(denied.status.textContent, 'Not run: the person at the page did not allow it. Ready for the next command.', 'kept');
   assert.equal(denied.run.disabled, false);
   assert.equal(c.status().state, 'ready');
+});
+
+test('escape sequences are stripped: colours, cursor movement, titles and hyperlinks', () => {
+  const E = '\x1b';
+  // printf '\033[31mred\033[0m\n'
+  assert.equal(A.plain(`${E}[31mred${E}[0m\n`), 'red\n');
+  // ls --color=always: bold, 256 and true colour, with the reset forms ls uses
+  assert.equal(A.plain(`${E}[0m${E}[01;34mbin${E}[0m  ${E}[38;5;208metc${E}[0m  ${E}[38;2;1;2;3mroot${E}[m\n`), 'bin  etc  root\n');
+  // Cursor movement and erasing, private modes (a cursor hidden and shown), keypad mode
+  assert.equal(A.plain(`${E}[?25l${E}[2K${E}[1Gdone${E}[?25h${E}=${E}>\n`), 'done\n');
+  // OSC: a title (ended by BEL) and a hyperlink (ended by ST)
+  assert.equal(A.plain(`${E}]0;my title\x07${E}]8;;https://x.example/${E}\\link${E}]8;;${E}\\\n`), 'link\n');
+  // A charset designation, as box-drawing programs send; DCS strings
+  assert.equal(A.plain(`${E}(0lqk${E}(B ${E}P1$r0m${E}\\ok`), 'lqk ok');
+  // Box drawing is text, and stays: duckdb -c 'select 42 as x'
+  const box = '┌───────┐\n│   x   │\n│ int32 │\n├───────┤\n│    42 │\n└───────┘\n';
+  assert.equal(A.plain(box), box);
+  assert.equal(A.plain(`${E}[1m${box}${E}[0m`), box);
+  // Plain text, tabs, carriage returns and Unicode untouched
+  assert.equal(A.plain('a\tb\r\nc é 字\n'), 'a\tb\r\nc é 字\n');
+  // 8-bit CSI, as a C1 character
+  assert.equal(A.plain('\u009b31mred\u009b0m'), 'red');
+  // One cut short at the end of the output so far is held back, not shown half-made
+  assert.equal(A.plain(`ok${E}[3`), 'ok');
+  assert.equal(A.plain(`ok${E}`), 'ok');
+  assert.equal(A.plain(`ok${E}]0;tit`), 'ok');
+  // An OSC never ended doesn't take the lines after it with it
+  assert.equal(A.plain(`${E}]0;title\nnext line\n`), '\nnext line\n');
+});
+
+test('a job reads back without escape sequences; its environment asks for none', () => {
+  const { cmd } = A.scripts('id', '/sgjob/id', 'ls --color=always /');
+  assert.ok(cmd.includes('export NO_COLOR=1 TERM=dumb\n'));
+  // After the image's ENV, which may set TERM
+  assert.ok(cmd.indexOf('NO_COLOR') > cmd.indexOf('/etc/snowglobe/env'));
+  const job = newJob({ command: "printf '\\033[31mred\\033[0m\\n'" });
+  const g = guest(job);
+  g.launch();
+  g.feed('\x1b[31mred\x1b[0m\n\x1b[01;34mbin\x1b[0m\x1b[3');
+  assert.equal(job.view().output, 'red\nbin', 'running: half a sequence held back');
+  g.feed('2m\n');
+  g.done(0, false);
+  const v = job.view();
+  assert.equal(v.output, 'red\nbin\n');
+  assert.equal(A.jobText(v), 'red\nbin\n[exit 0]');
+});
+
+test('a job\'s files go into its in/, typed as base64 and decoded by the guest', () => {
+  const bytes = Uint8Array.from({ length: 1000 }, (_, i) => i % 256);
+  const lines = A.uploadLines('/sgjob/x', 'L', 'C', 'k', { c: bytes });
+  assert.match(lines[0], /^mkdir -p \/sgjob\/x\/\.sg \/sgjob\/x\/in \/sgjob\/x\/out && .* && : >\/sgjob\/x\/in\/c\.b64;/);
+  const typed = lines.filter((l) => l.includes('>>/sgjob/x/in/c.b64')).map((l) => /^printf %s (\S+) >>/.exec(l)[1]).join('');
+  assert.deepEqual(Buffer.from(typed, 'base64'), Buffer.from(bytes));
+  assert.match(lines.at(-1), /base64 -d \/sgjob\/x\/in\/c\.b64 >\/sgjob\/x\/in\/c && rm \/sgjob\/x\/in\/c\.b64; echo SGACK_k_\d+_/);
+  assert.ok(lines.every((l) => l.length < 1024), 'every line under the line editor\'s limit');
+  assert.throws(() => A.checkFiles({ '../x': bytes }), /not a plain file name/);
+  assert.throws(() => A.checkFiles({ c: 'text' }), /not a Uint8Array/);
+  assert.throws(() => A.checkFiles({ c: new Uint8Array(A.limits.MAX_FILES_BYTES + 1) }), /at most/);
+});
+
+test('upload lines typed ahead: a window of them in flight, acknowledgements taken in order, several at once', () => {
+  const job = new A.Job({ id: 'i', nonce: 'n', ack: 'k', command: 'echo hi', timeoutS: 10, now: 0, window: 3,
+    files: { c: new Uint8Array(3000) } });
+  const total = job.lines.length;
+  assert.ok(total > 6);
+  job.feed(`SGSYNC_${job.syncTok}_42\n`, 1);
+  assert.equal(job.sent, 3);
+  // Two acknowledgements in one read: two more lines go
+  const more = job.feed('SGACK_k_0_0_42\nSGACK_k_1_0_42\n', 2);
+  assert.deepEqual(more, [job.lines[3], job.lines[4]]);
+  let typed = [];
+  for (let i = 2; i < total; i++) typed = job.feed(`SGACK_k_${i}_0_42\n`, 3);
+  assert.deepEqual(typed, ['sh /sgjob/i/.sg/job.sh\n']);
+  assert.equal(job.phase, 'launch');
+  // A failed line fails the job
+  const bad = new A.Job({ id: 'j', nonce: 'n', ack: 'k', command: 'x', timeoutS: 10, now: 0, window: 4 });
+  bad.feed(`SGSYNC_${bad.syncTok}_42\n`, 1);
+  bad.feed('SGACK_k_0_1_42\n', 2);
+  assert.equal(bad.state, 'failed');
 });

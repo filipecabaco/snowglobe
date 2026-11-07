@@ -37,5 +37,9 @@ WORKDIR /root
 CMD ["/usr/local/bin/start-postgres"]
 
 LABEL snowglobe.title="PostgreSQL in the browser" \
+      snowglobe.agent="true" \
+      snowglobe.agent-purpose="PostgreSQL for database work: load CSV files and query them with psql." \
+      snowglobe.agent-sample="psql -h /run/postgresql -U postgres -tAc 'select count(*) from planets'" \
+      snowglobe.agent-exposed-to='["https://chatgpt.com"]' \
       snowglobe.ready="postgres=# " \
       snowglobe.exercise='["SELECT * FROM planets ORDER BY moons DESC LIMIT 3;", "SELECT kind, count(*), sum(moons) FROM planets GROUP BY kind;", "SELECT n, n * n AS square FROM generate_series(1, 5) AS n;", "SELECT name, moons, rank() OVER (ORDER BY moons DESC) FROM planets LIMIT 5;", "\\dt+"]'

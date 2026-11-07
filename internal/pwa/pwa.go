@@ -41,8 +41,7 @@ const (
 var shell = []string{"./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png",
 	"armless/armless.js", "armless/armless.wasm", "armless/armless-smp.wasm",
 	"xterm/xterm.js", "xterm/xterm.css", "xterm/addon-fit.js", "sessions.js", "session-ui.js",
-	// Only in a site built with --agent
-	"agent.js", "agent-webmcp.js", "agent-panel.js"}
+	"machine-core.js", "machine-host.js"}
 
 // Run writes the PWA files into the site and ties them into index.html. Running it again
 // replaces what an earlier run wrote.
