@@ -53,7 +53,6 @@
        down the left, as a builder's conversation does; the machines are below. */
     .studio-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 32px; padding: 16px 0 14px; }
     h1 { margin: 0; font-size: 26px; line-height: 1.1; letter-spacing: -.025em; font-weight: 620; }
-    .studio-sub { margin: 0; color: var(--ink-2); font-size: 15px; max-width: 64em; }
     .studio { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); height: clamp(600px, calc(100dvh - 132px), 1180px);
       border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
 
@@ -72,11 +71,13 @@
     .connect { padding: 16px 0 8px; }
     .connect h3 { margin: 0 0 6px; font-size: 20px; font-weight: 600; letter-spacing: -.02em; line-height: 1.2; }
     .connect p { margin: 0 0 12px; font-size: 15px; color: var(--ink-2); }
-    .connect ol { margin: 0 0 14px; padding-left: 1.3em; font-size: 15px; display: grid; gap: 6px; }
-    .connect ol li::marker { color: var(--ink-2); font-variant-numeric: tabular-nums; }
     .connect .row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-    .prompt { position: relative; margin: 0 0 10px; }
-    .prompt pre { max-height: 9.5em; overflow: auto; white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; padding: 12px 14px; }
+    .prompt { margin: 0 0 12px; }
+    .prompt > summary { display: flex; align-items: center; gap: 8px; width: max-content; cursor: pointer; padding: 4px 0; font-size: 14px; font-weight: 550; list-style: none; }
+    .prompt > summary::-webkit-details-marker { display: none; }
+    .prompt > summary svg { width: 12px; height: 12px; flex: none; transition: transform .2s var(--ease); }
+    .prompt[open] > summary svg { transform: rotate(90deg); }
+    .prompt pre { margin: 8px 0 0; max-height: 9.5em; overflow: auto; white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; padding: 12px 14px; }
     #connect-note { margin: 0; font-size: 13px; }
 
     /* The steps: a conversation's shape, the newest at the bottom. The list is newest first in
@@ -128,7 +129,6 @@
 
     .pane-foot { display: grid; gap: 10px; padding: 12px 16px 14px 0; border-top: 1px solid var(--rule); }
     .pane-foot .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-    .honest { margin: 0; font-size: 12.5px; color: var(--ink-2); }
 
     /* The stage: Preview | Code | Database, and the preview's own tools */
     .stage { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
@@ -164,10 +164,11 @@
     .build-fail h3 { margin: 0 0 6px; font: 600 14px var(--sans); display: flex; justify-content: space-between; gap: 12px; }
     .build-fail h3 button { font: 13px var(--sans); color: var(--panel-ink); background: none; border: 0; text-decoration: underline; cursor: pointer; }
     .build-fail pre { margin: 0; padding: 0; background: none; color: #ff8a70; font-size: 12.5px; white-space: pre-wrap; }
-    .stage-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: start; gap: 14px; padding: 32px; max-width: 46rem; margin: 0 auto; }
-    .stage-empty h2 { margin: 0; font-size: clamp(28px, 2.6vw, 40px); line-height: 1.05; letter-spacing: -.03em; font-weight: 620; text-wrap: balance; }
-    .stage-empty p { margin: 0; color: var(--ink-2); font-size: 16px; max-width: 38em; }
-    .stage-empty .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .stage-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 32px; text-align: center; }
+    .stage-empty h2 { margin: 0; font-size: 15px; font-weight: 550; color: var(--ink-2); }
+    .stage-empty .row { display: grid; justify-items: center; gap: 10px; }
+    #preview-note { max-width: 36em; color: var(--ink-2); font-size: 14px; }
+    #preview-note:empty, #builder-status:empty, #storage:empty { display: none; }
     #preview-note { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
 
     /* Code: the project's files, read from the machine; the open one, highlighted, on the panel */
@@ -216,16 +217,17 @@
 
     /* ================================================================ the machines */
     .machines-sec { margin-top: clamp(56px, 6vw, 88px); }
-    .intro { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px 48px; padding: 0 0 24px; }
-    .intro h2 { margin: 0 0 10px; font-size: clamp(2rem, 3.4vw, 3rem); line-height: 1; letter-spacing: -.03em; font-weight: 600; }
-    .lede { margin: 0; max-width: 40em; font-size: 17px; line-height: 1.5; color: var(--ink-2); }
-    .awake { display: grid; justify-items: end; gap: 10px; }
+    .intro { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 48px; padding: 0 0 16px; }
+    .intro h2 { margin: 0 0 4px; font-size: 22px; line-height: 1.15; letter-spacing: -.02em; font-weight: 600; }
+    .lede { margin: 0; max-width: 40em; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+    .awake { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
     .budget { margin: 0; text-align: right; }
-    .budget b { display: block; font-size: clamp(32px, 3.4vw, 48px); font-weight: 560; letter-spacing: -.035em; line-height: 1; }
-    .budget span { color: var(--ink-2); font-size: 13px; }
-    .limit-ctl { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); }
+    .budget b { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .budget span { margin-left: 6px; color: var(--ink-2); font-size: 14px; }
+    .limit-ctl { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); white-space: nowrap; }
     .limit-ctl input { font: 16px var(--sans); width: 4.5em; height: 44px; padding: 0 10px; color: var(--ink); background: var(--bg); border: 1px solid var(--ink-2); border-radius: 6px; }
-    .limit-note { margin: 0; max-width: 26em; text-align: right; color: var(--ink-2); font-size: 13px; }
+    .limit-note { margin: 0; flex-basis: 100%; max-width: 26em; color: var(--ink-2); font-size: 13px; }
+    .limit-note:empty { display: none; }
     .limit-note:empty { display: none; }
     .desk { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 0 48px; border-top: 1px solid var(--ink); }
     .zone-h { margin: 0; padding: 12px 0 10px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
@@ -294,8 +296,6 @@
     .sg-ask .sg-ask-yes { background: var(--ink); color: var(--bg); }
     .sg-ask button:hover { background: var(--ink); color: var(--bg); }
 
-    .note { margin-top: 64px; padding-top: 16px; border-top: 1px solid var(--ink); display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 16px 48px; }
-    .note p { margin: 0; color: var(--ink-2); font-size: 16px; max-width: 40em; }
 
     /* ================================================================ narrower */
     @media (max-width: 1180px) {
@@ -310,11 +310,9 @@
       .machines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; }
       .machine:nth-last-child(2) { border-bottom: 1px solid var(--rule); }
       .work { margin-top: 28px; border-top: 1px solid var(--ink); }
-      .note { grid-template-columns: minmax(0, 1fr); }
     }
     @media (max-width: 720px) {
       .top nav a:not([href^="https"]):not([aria-current]) { display: none; }
-      .studio-sub { font-size: 14px; }
       .ptools { flex-basis: 100%; justify-content: flex-start; }
       .devices { display: none; }
       #code-panel { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
@@ -332,7 +330,7 @@
     @media (prefers-reduced-motion: reduce) {
       .machine[data-state="busy"] .state::before, .badge[data-tone="live"]::before, .ev[data-state="running"]::before { animation: none; }
       .building { animation: none; background: var(--signal); opacity: .6; }
-      #terminal-box > summary svg, .btn, .device, #preview-frame { transition: none; }
+      #terminal-box > summary svg, .prompt > summary svg, .btn, .device, #preview-frame { transition: none; }
       #preview-frame.reloading { filter: none; }
     }
   </style>
@@ -353,8 +351,6 @@
     <main>
       <div class="studio-head">
         <h1 id="title">App studio</h1>
-        <p class="studio-sub">Your agent builds a React app on Supabase here, and you watch it: the app live, its code, and every change it made.
-          Everything runs in this tab. The AI is the agent you connect; this page has none of its own.</p>
       </div>
 
       <div class="studio" id="studio">
@@ -372,33 +368,27 @@
           <div class="stream" id="stream">
             <div class="connect" id="connect">
               <h3>Connect an agent</h3>
-              <p>An agent with WebMCP gets this tab's tools (<code>write_files</code>, <code>read_file</code>, <code>run_sql</code>, <code>open_preview</code>…); one that clicks and types uses the Machines section below.</p>
-              <ol>
-                <li>Open this page in the agent's browser, or in a browser your agent controls.</li>
-                <li>Give it the prompt below, with what to build at its end.</li>
-                <li>Allow it when this page asks, once. Every step it takes shows here.</li>
-              </ol>
-              <div class="prompt">
+              <p>Open this page in your agent's browser and give it the prompt. This page has no AI of its own.</p>
+              <details class="prompt">
+                <summary><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg>The prompt</summary>
                 <pre id="agent-prompt" tabindex="0" aria-label="Prompt for your agent"></pre>
-              </div>
+              </details>
               <div class="row">
                 <button class="btn sm" id="copy-prompt" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.25" y="5.25" width="8.5" height="8.5" rx="1"/><path d="M10.75 5.25V2.25h-8.5v8.5h3"/></svg>Copy the prompt</button>
-                <button class="btn sm" id="demo-play" type="button">Watch an agent build</button>
+                <button class="btn sm" id="demo-play" type="button" title="Builds a small todo list from the blank starter, through the tools an agent uses">Watch an agent build</button>
               </div>
-              <p class="hint" id="connect-note">No agent? "Watch an agent build" plays three changes through the same tools, as an agent would.</p>
             </div>
             <p class="ap-empty" id="feed-empty" hidden>Nothing has run yet.</p>
             <ol class="feed" id="feed" aria-label="Agent activity, newest first"></ol>
-            <p id="builder-status">Every step an agent takes in any machine shows here, with the files it changed.</p>
+            <p id="builder-status"></p>
           </div>
 
           <div class="pane-foot">
             <div class="actions">
-              <button class="btn sm" id="undo-change" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5.5 3.5L2.5 6.5l3 3M2.75 6.5H10a3.5 3.5 0 010 7H7"/></svg>Undo last change</button>
-              <button class="btn sm" id="revert-start" type="button">Revert to starter…</button>
+              <button class="btn sm" id="undo-change" type="button" title="Takes web's app back one change; the last 20 are kept"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5.5 3.5L2.5 6.5l3 3M2.75 6.5H10a3.5 3.5 0 010 7H7"/></svg>Undo last change</button>
+              <button class="btn sm" id="revert-start" type="button" title="Takes web's app back to the blank starter; Undo brings it back">Revert to starter…</button>
               <button class="btn sm" id="demo-stop" type="button" hidden>Stop the walkthrough</button>
             </div>
-            <p class="honest">Changes are to web's app in <code>/root/app</code>; the last 20 are kept to undo.</p>
           </div>
         </section>
 
@@ -427,11 +417,10 @@
 
           <div class="tabpanel" role="tabpanel" id="panel-preview" aria-labelledby="tab-preview">
             <div class="stage-empty" id="preview-empty">
-              <h2>Your app will appear here</h2>
-              <p>A React app (Vite, Tailwind, TypeScript) on Supabase, built by the web machine in this tab and rebuilt after every change the agent makes. Opening it starts web and supabase: about 1.4 GB of this tab's memory, and seconds to a minute the first time.</p>
+              <h2>No app open</h2>
               <div class="row">
-                <button class="btn go" id="open-app" type="button">Open the app</button>
-                <span id="preview-note">No preview is open.</span>
+                <button class="btn go" id="open-app" type="button" title="Starts web: up to about 1.4 GB of this tab's memory">Open the app</button>
+                <span id="preview-note"></span>
               </div>
             </div>
             <div id="preview-panel" hidden>
@@ -462,7 +451,7 @@
                   </span>
                 </div>
                 <div class="code-empty" id="code-empty">
-                  <p>The files of web's app, read from the machine as the agent changes them. Reading wakes web and asks you once, as a command does.</p>
+                  <p>web's files, as the agent changes them.</p>
                   <button class="btn sm" id="code-load" type="button">Show the files</button>
                 </div>
                 <pre class="code" id="code-view" tabindex="0" aria-label="Code" hidden></pre>
@@ -473,7 +462,7 @@
           <div class="tabpanel" role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>
             <div id="db-panel">
               <div class="db-head">
-                <p id="db-note">The tables in Supabase's <code>public</code> schema, with their columns and whether row level security is on. Reading them wakes supabase (2 CPUs, about 730 MB).</p>
+                <p id="db-note">Supabase's tables.</p>
                 <button class="btn sm" id="db-load" type="button">Show the tables</button>
               </div>
               <ul class="tables" id="db-tables"></ul>
@@ -486,10 +475,7 @@
         <div class="intro">
           <div>
             <h2 id="machines-h">Machines</h2>
-            <p class="lede">The Linux machines the studio runs on, all in this tab: Supabase and the React app's web machine,
-              and Python, DuckDB and PostgreSQL for work that needs compute. Run a shell command in any of them, copy files
-              from one to another, and preview a machine's web server. A machine starts on its first command; only a few stay
-              awake at once, and the rest sleep with their files saved.</p>
+            <p class="lede">Linux machines in this tab. A few stay awake; the rest sleep with their files saved.</p>
           </div>
           <div class="awake">
             <p class="budget" id="budget"><b>0 of 2 awake</b><span>on this page</span></p>
@@ -504,12 +490,12 @@
             <ul class="machines" id="machines" aria-label="Machines">
               <!-- Until the page has read runtimes.json (or without JavaScript): what it runs -->
               <li class="machine"><span class="pick">Supabase</span><p class="purpose">Supabase for web app building: Postgres, Auth and the Data API, with a preview</p></li>
-              <li class="machine"><span class="pick">React + Vite</span><p class="purpose">Build web apps: a React app on Supabase, rebuilt and served on port 4173 as it changes (Vite, Tailwind, TypeScript, npm)</p></li>
+              <li class="machine"><span class="pick">React + Vite</span><p class="purpose">Build web apps: a blank React project on Supabase, rebuilt and served on port 4173 as it changes (Vite, Tailwind, TypeScript, npm)</p></li>
               <li class="machine"><span class="pick">Python + Rich</span><p class="purpose">Run Python: scripts, numpy and pandas for data work; pip install adds packages from PyPI.</p></li>
               <li class="machine"><span class="pick">DuckDB</span><p class="purpose">DuckDB for analytics: SQL over CSV, Parquet and JSON files.</p></li>
               <li class="machine"><span class="pick">PostgreSQL</span><p class="purpose">PostgreSQL for database work: load CSV files and query them with psql.</p></li>
             </ul>
-            <p class="storage" id="storage">A machine's files are saved in this browser when it is suspended. What an awake machine did since then is lost on reload.</p>
+            <p class="storage" id="storage"></p>
           </section>
 
           <div class="work">
@@ -547,7 +533,7 @@
                   <label>Port<input id="preview-port" name="previewPort" type="number" min="1" max="65535" step="1" value="4173" inputmode="numeric"></label>
                   <label>Path<input id="preview-path" name="previewPath" type="text" value="/" autocomplete="off" spellcheck="false"></label>
                 </div>
-                <p class="hint">It shows in the studio's Preview above. A server in a machine must listen on 0.0.0.0 to be seen there.</p>
+                <p class="hint">Shows in Preview above. The server must listen on 0.0.0.0.</p>
                 <div class="actions">
                   <button id="preview-open" class="btn" data-part="open-preview" type="submit">Open preview</button>
                   <button id="preview-close" class="btn" data-part="close-preview" type="button" disabled>Close preview</button>
@@ -564,7 +550,7 @@
                   <label>To runtime<select id="copy-to" name="to"></select></label>
                   <label>To path<input id="copy-to-path" name="toPath" type="text" value="/root/data.csv" autocomplete="off" spellcheck="false"></label>
                 </div>
-                <p class="limit">Any file up to 8 MiB, checked by sha256 on both ends. It goes over the machines' serial lines: expect tens of KiB a second.</p>
+                <p class="limit">Up to 8 MiB, at tens of KiB a second.</p>
                 <div class="actions">
                   <button id="copy-go" class="btn" type="submit" disabled>Copy</button>
                   <button id="copy-cancel" class="btn" type="button" disabled>Cancel copy</button>
@@ -588,22 +574,6 @@
         </div>
       </section>
 
-      <section class="note" aria-label="About this page">
-        <p>Each machine runs in a Web Worker of its own, in this tab; nothing runs on a server. Supabase runs on two
-          CPUs, which needs the page cross-origin isolated: its service worker does that, so the first visit reloads once. A machine left idle for
-          5 minutes, or hidden for a minute, is suspended: its state saved in this browser and its memory freed. The
-          next command wakes it with its files as they were. Only a suspended machine's state is kept: reloading the
-          page loses what an awake one did since its last suspend, and the browser asks first. Start fresh goes back to
-          the machine as built. The page needs the network: it doesn't work offline. Builds and <code>npm install</code> run
-          in the emulated machine: slower than on your computer (a rebuild takes seconds, an install of one package most of a minute).</p>
-        <p>Browsers with WebMCP get the tools <code>list_runtimes</code>, <code>run_command</code>, <code>job_status</code>,
-          <code>cancel_job</code>, <code>write_file</code>, <code>write_files</code>, <code>list_files</code>, <code>read_file</code>,
-          <code>revert_changes</code>, <code>build_status</code>, <code>run_sql</code>, <code>copy_file</code>, <code>open_preview</code>,
-          <code>close_preview</code> and <code>set_awake_limit</code>; scripts in the page get <code>window.snowglobeAgent</code>. Every run, copy and
-          preview asks the person at this page first, once per page load, and the page refuses to run inside another
-          page's frame. A preview is this site's page: what the machine serves runs here as one.
-          More in <a href="../docs/agents/#in-the-page">For agents and programs</a> and <a href="../llms.txt">llms.txt</a>.</p>
-      </section>
     </main>
 
     <footer>

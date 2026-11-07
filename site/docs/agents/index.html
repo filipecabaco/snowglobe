@@ -176,9 +176,10 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
             URL to give supabase-js. While a preview is open, its machine and every machine its page reaches stay awake.
             Nothing is answered unless a preview is open and the person has allowed the page, and a preview address
             opened from anywhere but the page is refused.</p>
-          <p>The two come ready and connected: Supabase has a <code>notes</code> table with row level security, and
-            web a React app on it (sign-up, login, notes) in <code>/root/app</code>, which <code>serve --watch</code>
-            builds, serves on port 4173 and builds again on every change. Vite's hot reload needs a WebSocket, so
+          <p>The two come ready and connected, and the app starts empty: web has a blank React project in
+            <code>/root/app</code> (an empty page, with supabase-js set up in <code>src/supabase.js</code>), and Supabase
+            has no tables of the app's yet, so the agent builds it from nothing. <code>serve --watch</code>
+            builds it, serves on port 4173 and builds again on every change. Vite's hot reload needs a WebSocket, so
             instead the page reads the server's <code>/__build</code> while the preview is open and reloads the preview
             after each new build. The top of the page is a studio, laid out as AI app builders are: the app's live
             preview fills it (at desktop, tablet or phone width, with its address, Reload and New tab), with the
@@ -187,8 +188,8 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
             read as a conversation: every file it edited (with the diff), command it ran, file it read, SQL it ran and
             build, a failed build's error over the preview, <strong>Undo last change</strong> and <strong>Revert to
             starter…</strong>. The page has no AI of its own: <strong>Connect an agent</strong> gives a prompt to paste
-            into yours, and <strong>Watch an agent build</strong> plays a short walkthrough through the same calls an
-            agent makes. The machines, with every control above, are below the studio.</p>
+            into yours, and <strong>Watch an agent build</strong> builds a small todo list from the blank starter through
+            the same calls an agent makes: the table by SQL, then the app, then a filter. The machines, with every control above, are below the studio.</p>
           <p>The app is React 19 with Vite, Tailwind v4 and TypeScript (a <code>tsconfig.json</code>; <code>.ts</code>
             and <code>.tsx</code> build as they are, <code>npm run typecheck</code> runs <code>tsc</code>), with
             React Router, Zustand and clsx installed. <code>npm install</code> works too: in the tab, every request the
@@ -200,12 +201,17 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
 list_files {runtime: "web"}, read_file {runtime: "web", paths: ["src/App.jsx", "src/styles.css"]}
 write_files {runtime: "web", files: [{path: "/root/app/src/components/Todo.tsx", content: ...}, ...]}: the diffs show, web rebuilds, the preview reloads, the build's result comes back
 run_sql {sql: "create table public.todos (...); alter table public.todos enable row level security; ..."}: the Data API sees it at once
-On supabase: psql "$DB_URL" -c "select * from notes" shows what you added, with your user's id</pre>
+On supabase: psql "$DB_URL" -c "select * from todos" shows what you added, with your user's id</pre>
           <p>The whole recipe is in <a href="../../llms.txt">llms.txt</a>.</p>
           <p id="suspend">An idle machine doesn't stay in memory: with no job for 5 minutes, or with its tab hidden
             for a minute, it is suspended, its state saved and its worker ended, so the browser takes back its memory.
             The next command, or a key typed into its terminal, wakes it, files and all, and then runs. The terminal
             pages keep their machine running.</p>
+          <p>On the agent page only a suspended machine's state is kept: a reload loses what an awake one did since its
+            last suspend (the browser asks first), and Start fresh goes back to the machine as built. Opening the app
+            starts web, and supabase once the app uses it: up to about 1.4 GB of the tab's memory, and seconds to a
+            minute the first time. Builds and <code>npm install</code> run in the emulated machine, so a rebuild takes
+            seconds and an install of one package most of a minute.</p>
 
           <h2 class="h3" id="limits">Limits, stopping and logs</h2>
           <div class="table-wrap">

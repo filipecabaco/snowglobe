@@ -266,7 +266,7 @@
       $("limit-note").textContent = scheduler.over ?? "";
       const storeErr = machines.find((m) => m.slot.error)?.slot.error;
       $("storage").textContent = storeErr ? `Not saving in this tab: ${storeErr}. It tries again at the next suspend.`
-        : "A machine's files are saved in this browser when it is suspended. What an awake machine did since then is lost on reload.";
+        : "";
       const m = selected();
       $("terminal-label").textContent = terminalBox.open ? `Hide ${m.name}'s terminal` : `Show ${m.name}'s terminal`;
       $("agent-sample").textContent = m.sample ? `Try: ${m.sample}` : "Runs as root, from /root, one at a time per machine.";
@@ -421,7 +421,7 @@
     showBuildFail(null);
     if (!p) {
       previewFrame.removeAttribute("src");
-      previewNote.textContent = previewable ? "No preview is open." : previewNote.textContent;
+      previewNote.textContent = previewable ? "" : previewNote.textContent;
       render();
       return;
     }
@@ -967,7 +967,7 @@
           li.append(h, rls, table);
           return li;
         }));
-        note.textContent = tables.length ? `${tables.length} table${tables.length === 1 ? "" : "s"} in Supabase's public schema, read just now.` : "No tables in Supabase's public schema yet.";
+        note.textContent = tables.length ? `${tables.length} table${tables.length === 1 ? "" : "s"} in Supabase's public schema, read just now.` : "No tables yet; your agent creates them with run_sql.";
       } catch (e) {
         note.textContent = `The tables could not be read: ${String(e?.message ?? e)}`;
       } finally {

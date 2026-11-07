@@ -52,5 +52,8 @@ test('the prompt names the tab, the tools, and where the app and its schema live
   const p = S.agentPrompt('https://x.example/snowglobe/agent/');
   for (const s of ['https://x.example/snowglobe/agent/', 'open_preview', 'write_files', 'read_file', 'run_sql', 'revert_changes', '/root/app', 'row level security', 'Machines'])
     assert.ok(p.includes(s), s);
+  // The project starts blank: no app of the starter's to describe
+  assert.match(p, /starts blank/);
+  assert.ok(!/notes/i.test(p));
   assert.match(p, /What to build: $/);
 });

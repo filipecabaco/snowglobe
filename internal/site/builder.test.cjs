@@ -1,5 +1,5 @@
 // What an agent changed (builder.js): the wrapper's report, its parsing, the rebuild watch, the
-// walkthrough's edits against the web example's real starter app, and the feed
+// walkthrough, from the web example's real (blank) starter app, and the feed
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -204,51 +204,74 @@ test('the rebuild watch: a server without /__build is said, and nothing reachabl
 });
 
 const starter = fs.readFileSync(path.join(__dirname, '../../examples/web/app/src/App.jsx'), 'utf8');
+const starterMigrations = path.join(__dirname, '../../examples/web/app/supabase/migrations');
 
-test('the walkthrough applies to the web example\'s starter app, and refuses an app that isn\'t it', () => {
-  // Step 1 is sed in the machine: the same edit here
-  assert.ok(starter.includes('<h1>Notes</h1>'));
-  let t = starter.replace('<h1>Notes</h1>', '<h1>Team notes</h1>');
-  for (const step of B.DEMO) for (const a of step.actions) if (a.edit) t = a.apply(t, step.title);
-  for (const s of ['done, created_at', 'async function toggle(n)', 'type="checkbox"', 'const [filter, setFilter]', 'shown.map((n) =>', 'aria-pressed={filter === f}']) assert.ok(t.includes(s), s);
-  assert.ok(!t.includes('notes.map('));
-  assert.throws(() => B.DEMO[1].actions[2].apply('nothing here', 'Add a done column'), /isn't the starter's/);
-  // The SQL step can run again (a replay)
-  assert.match(B.DEMO[1].actions[0].command, /add column if not exists done/);
-  assert.match(B.DEMO[1].actions[0].command, /drop policy if exists "update own notes"/);
+test('the web example starts blank: an empty page, no app of its own and no migrations; supabase-js is ready to import', () => {
+  assert.match(starter, /export default function App\(\)/);
+  assert.ok(starter.includes('Nothing here yet.'));
+  for (const s of ['supabase.from(', 'useState', '<form', 'notes']) assert.ok(!starter.includes(s), s);
+  assert.ok(!fs.existsSync(starterMigrations) || fs.readdirSync(starterMigrations).length === 0);
+  const client = fs.readFileSync(path.join(__dirname, '../../examples/web/app/src/supabase.js'), 'utf8');
+  assert.match(client, /export const supabase = createClient\(supabaseUrl, import\.meta\.env\.VITE_SUPABASE_ANON_KEY/);
+});
+
+test('the walkthrough builds a todo list from the blank starter: the table by SQL, the app written whole, then edited', () => {
+  const [table, app, filter] = B.DEMO;
+  // Step 1: the table under row level security, a policy for each verb, replayable
+  assert.deepEqual(table.actions.map((a) => Object.keys(a)[0]), ['sql']);
+  const sql = table.actions[0].sql;
+  assert.match(sql, /create table if not exists public\.todos/);
+  assert.match(sql, /user_id uuid not null default auth\.uid\(\)/);
+  assert.match(sql, /enable row level security/);
+  assert.match(sql, /grant select, insert, update, delete on public\.todos to authenticated/);
+  for (const verb of ['select', 'insert', 'update', 'delete']) assert.match(sql, new RegExp(`for ${verb} to authenticated`));
+  assert.equal(sql.match(/create policy "([^"]+)"/g).length, sql.match(/drop policy if exists/g).length);
+  // Step 2: looks first, then writes App.jsx whole (over whatever is there) and keeps the migration
+  assert.deepEqual(app.actions.map((a) => Object.keys(a)[0]), ['list', 'read', 'write']);
+  const files = app.actions[2].write;
+  assert.deepEqual(files.map((f) => f.path), ['/root/app/src/App.jsx', '/root/app/supabase/migrations/20261107000000_todos.sql']);
+  assert.equal(files[1].content, sql);
+  const written = files[0].content;
+  for (const s of ['import { supabase } from "./supabase.js"', 'signInWithPassword', 'signUp', '.from("todos").insert(', 'update({ done: !todo.done })', '.delete().eq("id", id)']) assert.ok(written.includes(s), s);
+  // Its JSX has no template literal: the walkthrough's source holds it in one
+  assert.ok(!written.includes('`') && !written.includes('${'));
+  // Step 3: an edit of what step 2 wrote
+  const t = filter.actions[0].apply(written, filter.title);
+  for (const s of ['const [filter, setFilter]', 'async function clearCompleted()', '.delete().eq("done", true)', 'shown.map((todo) =>', 'aria-pressed={filter === f}', 'Clear completed']) assert.ok(t.includes(s), s);
+  assert.ok(!t.includes('todos.map('));
+  assert.throws(() => filter.actions[0].apply(starter, filter.title), /isn't the one the walkthrough wrote/);
 });
 
 test('the walkthrough opens web\'s preview, then runs each step through the agent API, waiting for each job and each rebuild', async () => {
   const calls = [];
   let file = starter;
-  let n = 0;
-  const jobs = new Map();
   const agent = {
     openPreview: async (input, o) => { calls.push(['preview', input.runtime, input.port, o.source]); return { status: 200 }; },
-    runCommand: async (input, o) => {
-      calls.push(['run', input.runtime, input.command.split('\n')[0].slice(0, 40), o.source]);
-      if (input.command.includes('sed -i')) file = file.replace('<h1>Notes</h1>', '<h1>Team notes</h1>');
-      const jobId = String(++n);
-      jobs.set(jobId, { state: 'exited', exitStatus: 0, runtime: input.runtime, output: input.command.startsWith('cat ') ? file : '' });
-      return { jobId };
+    runSql: async (input, o) => { calls.push(['sql', input.runtime, o.source]); return { state: 'exited', exitStatus: 0, output: 'CREATE TABLE' }; },
+    listFiles: async (input, o) => { calls.push(['list', input.runtime, o.source]); return { entries: [] }; },
+    readFiles: async (input, o) => { calls.push(['read', input.runtime, o.source]); return input.paths.map((p) => ({ path: p, text: p.endsWith('App.jsx') ? file : '' })); },
+    writeFiles: async (input, o) => {
+      calls.push(['write', input.runtime, o.source]);
+      for (const f of input.files) if (f.path.endsWith('App.jsx')) file = f.content;
+      return { written: input.files.length };
     },
-    readJob: async (id) => jobs.get(id),
-    writeFile: async (input, o) => { calls.push(['write', input.runtime, input.path, o.source]); file = input.content; return { bytes: input.content.length }; },
   };
   const said = [];
   let builds = 0;
   await B.playDemo(agent, { say: (t) => said.push(t), waitBuild: async () => { builds++; }, pause: async () => {} });
   assert.deepEqual(calls[0], ['preview', 'web', 4173, 'walkthrough']);
-  assert.deepEqual(calls.filter((c) => c[0] !== 'preview').map((c) => c.slice(0, 2).join(' ')),
-    ['run web', 'run supabase', 'run web', 'run web', 'write web', 'run web', 'run web', 'write web']);
-  assert.ok(calls.every((c) => c[3] === 'walkthrough'));
-  assert.equal(builds, 3);
-  assert.ok(file.includes('shown.map((n) =>') && file.includes('<h1>Team notes</h1>'));
-  assert.match(said.at(-1), /^Done/);
-  // A failed command stops it, saying why
-  jobs.clear();
-  agent.readJob = async () => ({ state: 'exited', exitStatus: 1, runtime: 'web', output: '' });
-  await assert.rejects(B.playDemo(agent, { say: () => {}, pause: async () => {} }), /web: the command exited 1/);
+  assert.deepEqual(calls.slice(1).map((c) => c.slice(0, 2).join(' ')),
+    ['sql supabase', 'list web', 'read web', 'write web', 'read web', 'write web']);
+  assert.ok(calls.every((c) => c.at(-1) === 'walkthrough'));
+  assert.equal(builds, 2); // after each step that wrote web's files
+  assert.ok(file.includes('shown.map((todo) =>') && file.includes('<h1 className="text-3xl font-semibold tracking-tight">Todos</h1>'));
+  assert.match(said.at(-1), /^Done: a todo list/);
+  // A replay writes the app over again, so it plays to its end a second time
+  await B.playDemo(agent, { say: () => {}, pause: async () => {} });
+  assert.ok(file.includes('shown.map((todo) =>'));
+  // Failed SQL stops it, saying why
+  agent.runSql = async () => ({ state: 'exited', exitStatus: 3, output: 'psql:/x/sql:2: ERROR:  permission denied\n' });
+  await assert.rejects(B.playDemo(agent, { say: () => {}, pause: async () => {} }), /supabase: the SQL exited 3: psql:\/x\/sql:2: ERROR: {2}permission denied/);
 });
 
 // Just enough of a document for the feed

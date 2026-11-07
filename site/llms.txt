@@ -277,7 +277,8 @@ runs because of the address.
   the files", then the navigation "Files of web's app" (a button a file; "new" or "edited" after
   the agent's changes) and the open file in a `pre` labelled "Code of <path>", with "Last change"
   (that file's diff) and "Refresh". Database: "Show the tables": each table of Supabase's public
-  schema with its columns and whether row level security is on. Beside it (below it on narrower
+  schema with its columns and whether row level security is on (or "No tables yet; your agent
+  creates them with run_sql."). Beside it (below it on narrower
   screens), "Agent": "Connect an agent" (the prompt to give your agent, "Copy the prompt"), then a
   list, "Agent activity, newest first" (shown oldest at the top, as a chat), of every step in
   every machine (filter: "Show", a machine or "All machines"): "Edited src/App.jsx", "Changed 3
@@ -285,9 +286,10 @@ runs because of the address.
   3.0 s", "Build 8 failed" (with the error), each tagged with its runtime and who asked, its exit
   status, and the changed files, each a disclosure whose diff is a `pre` labelled "Changes to
   <path>". "Undo last change" and "Revert to starter…" (asks first) take web's app back. "Watch an
-  agent build" plays a short walkthrough through the same calls (rename the app; a `done` column
-  on Supabase and a checkbox for it; an All / Open / Done filter); "Stop the walkthrough" stops it
-  between steps.
+  agent build" plays a short walkthrough through the same calls, building a todo list from the
+  blank starter (a `todos` table with row level security, by `runSql`; the app, sign-in and the
+  list, by `writeFiles`; an All / Active / Done filter and "Clear completed"); "Stop the
+  walkthrough" stops it between steps.
 - `window.snowglobeAgent` (promises): `listRuntimes()` (name, purpose, state, sample, saved),
   `capabilities()`, `status(runtime)`, `runCommand({runtime, command, timeoutSeconds, requestId})`
   → `{jobId, runtime}` at once (wakes or boots the machine first), `readJob(jobId)`,
@@ -384,15 +386,17 @@ does. A port with nothing listening answers 502, "Nothing is listening".
 
 ### Building a web app on Supabase, seen live
 
-Both machines come ready and connected. `supabase` has a `notes` table (`id`, `user_id` default
-`auth.uid()`, `body`, `created_at`) with row level security: a user reads, adds and deletes only
-their own. `web` has a React app in `/root/app` (Vite 8, React 19, `@supabase/supabase-js`,
-Tailwind v4 through `@tailwindcss/vite`, TypeScript with React's types and a `tsconfig.json`, React
-Router, Zustand and clsx, all installed and pinned by its lockfile: no network needed) that signs
-up, logs in, lists, adds and deletes notes; from its boot `serve --watch dist 4173` builds it,
-serves it, and builds it again on every change. `.ts` and `.tsx` files build as they are (Vite
+Both machines come ready and connected, and the app starts empty: the agent builds it from
+nothing. `supabase` runs Postgres, Auth and the Data API, with no tables of the app's yet (its
+public schema has `notes`, the table of the Supabase demo's own command-line app: leave it be).
+`web` has a blank React project in `/root/app` (Vite 8, React 19, `@supabase/supabase-js`, Tailwind
+v4 through `@tailwindcss/vite`, TypeScript with React's types and a `tsconfig.json`, React Router,
+Zustand and clsx, all installed and pinned by its lockfile: no network needed): `src/App.jsx` is an
+empty page, and `src/supabase.js` a ready client for `supabase`. From its boot `serve --watch dist
+4173` builds it, serves it, and builds it again on every change. `.ts` and `.tsx` files build as they are (Vite
 strips the types); `npm run typecheck` runs `tsc --noEmit`. Tailwind classes work in any component
-(`src/styles.css` imports it; its own rules stay unlayered, so they win where they meet).
+(`src/styles.css` imports it, and its own base rules sit in `@layer base`: keep the app's rules in a
+layer too, since CSS outside a layer wins over every utility class).
 
 `npm install <pkg>` works in `web`, in the browser too: every HTTP request the machine makes is the
 page's own `fetch()`, so CORS applies; registry.npmjs.org answers GETs with
@@ -408,9 +412,10 @@ logging in don't work through it.
    key is in `/root/app/.env` (`VITE_SUPABASE_ANON_KEY`: the Supabase CLI's fixed local key, which
    is `$ANON_KEY` on `supabase`).
 2. See it: `list_files {runtime: "web"}`, then `read_file {runtime: "web", paths: [...]}`. Files:
-   `src/App.jsx` (the app), `src/main.jsx`, `src/supabase.js` (the client), `src/styles.css`,
-   `index.html`, `package.json`, `vite.config.js`, `tsconfig.json`, and
-   `supabase/migrations/` (the starter's schema, for reference).
+   `src/App.jsx` (the app: an empty page to start), `src/main.jsx`, `src/supabase.js` (the client:
+   `import { supabase } from "./supabase.js"`), `src/styles.css`, `index.html`, `package.json`,
+   `vite.config.js`, `tsconfig.json`, and `supabase/migrations/` (empty: the app's migrations go
+   there).
 3. Change it: `write_files {runtime: "web", files: [{path, content}, ...]}` with each file's whole
    new text (or `run_command` with sed). The page shows the diffs, `web` rebuilds (a few seconds in
    the tab, where the build runs in the emulated machine), the preview reloads, and the tool returns
@@ -421,14 +426,23 @@ logging in don't work through it.
    it shows, and is undone, with the rest. Every new table the app reads needs row level security
    and policies for `authenticated`, for example:
 
-       alter table public.notes add column if not exists done boolean not null default false;
-       create policy "update own notes" on public.notes for update to authenticated
+       create table public.todos (
+         id bigint generated always as identity primary key,
+         user_id uuid not null default auth.uid() references auth.users on delete cascade,
+         title text not null,
+         done boolean not null default false,
+         created_at timestamptz not null default now()
+       );
+       alter table public.todos enable row level security;
+       grant select, insert, update, delete on public.todos to authenticated;
+       create policy "own todos" on public.todos for all to authenticated
          using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 
    The app sees it on its next request (supabase-js asks the Data API each time).
 
-5. On `supabase`: `psql "$DB_URL" -c "select n.id, n.body, u.email from notes n join auth.users u
-   on u.id = n.user_id"` shows what the person added in the preview, with their user.
+5. On `supabase`: `psql "$DB_URL" -c "select t.id, t.title, u.email from todos t join auth.users u
+   on u.id = t.user_id"` shows what the person added in the preview, with their user. Local Auth
+   confirms sign-ups at once: `supabase.auth.signUp` returns a session.
 
 Without a second machine: copy the built `dist` (as a tarball, `copy_file`) to `supabase` and serve
 it there with Bun (`BUN_BE_BUN=1 supabase run serve.ts`, `Bun.serve({hostname: "0.0.0.0", port:
@@ -437,7 +451,7 @@ it there with Bun (`BUN_BE_BUN=1 supabase run serve.ts`, `Bun.serve({hostname: "
 ### The runtimes on this site
 
 - runtime `supabase`: Supabase for web app building: Postgres, Auth and the Data API, with a preview (2 CPUs; the API on port 54321; `$DB_URL`, `$API_URL`, `$ANON_KEY` in every shell; try `psql "$DB_URL" -c "select now()"`)
-- runtime `web`: build web apps: a React app on Supabase, rebuilt and served on port 4173 as it changes (Vite, Tailwind, TypeScript, npm) (the app in `/root/app`, watched: each command's changes are reported; try `cd /root/app && sed -i 's/<h1>Notes/<h1>My notes/' src/App.jsx`)
+- runtime `web`: build web apps: a blank React project on Supabase, rebuilt and served on port 4173 as it changes (Vite, Tailwind, TypeScript, npm) (the app in `/root/app`, watched: each command's changes are reported; try `cd /root/app && sed -i 's/Nothing here yet/Hello/' src/App.jsx`)
 - runtime `python`: run Python: scripts, numpy and pandas for data work; pip install adds packages from PyPI (try `python3 -c 'import numpy, pandas; print(numpy.__version__, pandas.__version__)'`)
 - runtime `duckdb`: DuckDB for analytics: SQL over CSV, Parquet and JSON files (try `duckdb -c 'select 6 * 7'`)
 - runtime `postgres`: PostgreSQL for database work: load CSV files and query them with psql (try `psql -h /run/postgresql -U postgres -tAc 'select count(*) from planets'`)

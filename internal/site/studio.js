@@ -200,15 +200,16 @@ select 'C', table_name, column_name, data_type || case when is_nullable = 'NO' t
   function agentPrompt(url) {
     return `Build a web app for me in my browser tab at ${url}
 That tab runs Linux machines in WebAssembly, and offers them as WebMCP tools (call list_runtimes first).
-The app: React 19, Vite, Tailwind v4 and TypeScript in /root/app on runtime "web" (src/App.jsx is the starter, a notes app),
-on Supabase (Postgres, Auth, the Data API) on runtime "supabase"; supabase-js is set up in src/supabase.js.
+The project: React 19, Vite, Tailwind v4 and TypeScript in /root/app on runtime "web". It starts blank (src/App.jsx is an
+empty page): you build the app from nothing. Supabase (Postgres, Auth, the Data API) is on runtime "supabase", with no
+tables of the app's yet; supabase-js is set up in src/supabase.js (import { supabase } from "./supabase.js").
 
 How to work:
 - open_preview {runtime: "web", port: 4173} so I can watch; the app rebuilds and reloads on every change.
 - list_files and read_file before you change anything; write_files with each file's whole new text (it waits
   for the rebuild and returns the build error if there is one: fix it). revert_changes undoes a change.
-- Schema: run_sql (create tables, enable row level security, add policies for the authenticated role), and keep
-  each migration in /root/app/supabase/migrations/. Already installed: react-router, zustand, clsx, tailwindcss;
+- Schema: run_sql (create tables, enable row level security, grant to and add policies for the authenticated role),
+  and keep each migration in /root/app/supabase/migrations/. Sign-ups are confirmed at once (local Auth). Already installed: react-router, zustand, clsx, tailwindcss;
   run_command "cd /root/app && npm install <pkg>" adds others (slowly: it runs in the tab).
 - If you have no WebMCP tools, use the page's Machines section instead: "Run a command" (runtime web) does the same.
 

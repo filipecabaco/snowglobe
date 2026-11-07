@@ -52,9 +52,11 @@ the old command ends, rather than being typed into it.
 
 ## Watching an agent build, on /agent/
 
-`supabase` and `web` come up connected: Supabase's stack with a `notes` table under row level
-security, and a React app (Vite 8, React 19, supabase-js) in web's `/root/app` that signs up, logs
-in and keeps notes there. Each machine is its own Web Worker. The page shows the app in its
+`supabase` and `web` come up connected, and the app starts empty: Supabase's stack (Postgres, Auth,
+the Data API) with no tables of the app's, and a blank React project (Vite 8, React 19, Tailwind v4,
+TypeScript, supabase-js set up in `src/supabase.js`) in web's `/root/app`, whose `src/App.jsx` is an
+empty page. The agent builds the app from nothing. (The supabase image is the Supabase demo page's
+too, so its public schema also holds that demo's `notes` table, empty.) Each machine is its own Web Worker. The page shows the app in its
 preview and, beside it, what the agent changes (`internal/site/builder.js`).
 
 - Live reload without WebSockets. The preview bridge carries HTTP/1.1 only, so Vite's dev server
@@ -81,9 +83,11 @@ preview and, beside it, what the agent changes (`internal/site/builder.js`).
   (no heredocs, no quoting), returning once written, with its changes.
 - The feed: every run, copy, write, build and preview event in every machine, newest first,
   filterable by machine; each changed file is a disclosure with its diff in the page's one dark
-  surface. "Watch an agent build" replays three edits through the same API (rename, a `done`
-  column with an update policy on Supabase and its checkbox, a filter), each step waiting for its
-  rebuild.
+  surface. "Watch an agent build" builds a todo list from the blank starter in three steps through
+  the same API an agent's tools use: a `todos` table with row level security and a policy a verb
+  (`runSql`), the app written whole with sign-in and the list, and its migration (`listFiles`,
+  `readFiles`, `writeFiles`), then a filter and "Clear completed" (read, edited, written). Each step
+  that wrote web's files waits for its rebuild; a replay writes the app over again.
 
 ## The studio: an agent changes all of the app
 
