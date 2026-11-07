@@ -50,6 +50,41 @@ jobs, and session ids that change on restore. A save taken mid-job and restored 
 serial shell busy: the next job's sync then fails with "the guest's shell is not answering" until
 the old command ends, rather than being typed into it.
 
+## Watching an agent build, on /agent/
+
+`supabase` and `web` come up connected: Supabase's stack with a `notes` table under row level
+security, and a React app (Vite 8, React 19, supabase-js) in web's `/root/app` that signs up, logs
+in and keeps notes there. Each machine is its own Web Worker. The page shows the app in its
+preview and, beside it, what the agent changes (`internal/site/builder.js`).
+
+- Live reload without WebSockets. The preview bridge carries HTTP/1.1 only, so Vite's dev server
+  and hot reload are out. From its boot, web runs `serve --watch dist 4173`: one Node process that
+  runs Vite's build in watch mode (its JavaScript API, so the project's own vite.config.js is
+  used and nothing in it has to cooperate) and serves `dist/`, answering `GET /__build` with
+  `{version, state, error, ms}`. While a preview is open the page reads it through the same bridge
+  (`previewGet`, never waking a machine): every 0.5 s for 45 s after a command, copy or write in
+  the previewed machine, every 5 s otherwise, and not while the tab is hidden. A new version
+  reloads the frame where it is; a failed build goes to the feed and the frame keeps the last good
+  page. Why not reload after the job: the rebuild lands after the job ends, at a time the page
+  can't know. Why not WebSockets in the bridge: a bigger change to the service worker and the TCP
+  relay, for a reload that a poll does well. A server with no `/__build` gets a reload after each
+  command in its machine instead.
+- What changed. A runtime labelled `snowglobe.agent-watch=<dir>` runs each command inside a
+  wrapper (the command itself goes in as a job file and runs unchanged): before it, a copy of
+  `<dir>` is taken if there is none; after it, every file that differs is reported with BusyBox's
+  `diff -U 2` (no git in the image), and the copy is updated. The report sits at the end of the
+  job's output between lines with a nonce of the job's own; the orchestrator takes it out, so
+  `job_status` shows the command's output plus one `[changed in <dir>: ...]` line, and `readJob`
+  gives `changes`. Diffs run inside the same job, so they never hold the machine's one job slot
+  after the agent's command (a separate job would make the agent's next `run_command` busy).
+- `write_file {runtime, path, content}`: a text file written as a job whose content is a job file
+  (no heredocs, no quoting), returning once written, with its changes.
+- The feed: every run, copy, write, build and preview event in every machine, newest first,
+  filterable by machine; each changed file is a disclosure with its diff in the page's one dark
+  surface. "Watch an agent build" replays three edits through the same API (rename, a `done`
+  column with an update policy on Supabase and its checkbox, a filter), each step waiting for its
+  rebuild.
+
 ---
 
 Enable AI agents to open a Snowglobe URL and use the Linux machine running inside that browser tab as a programmable workspace. Agents should be able to execute commands, read and write files, inspect results, cancel work, and save or restore progress through a documented interface accessible to browser automation tools.

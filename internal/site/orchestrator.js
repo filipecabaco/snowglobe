@@ -22,6 +22,7 @@
   "use strict";
 
   const S = () => root.SnowglobeSessions;
+  const B = () => root.SnowglobeBuilder;
   const MAX_TAPE = 256 << 10; // console output kept per machine, for its terminal
   const SAVE_ID = "machine";
   // How long the preview (a request through it, or open_preview) waits for an awake slot when
@@ -123,6 +124,8 @@
       const config = { build: r.build_id, memory: r.memory_mb, cpus, network: r.network === "fetch" ? "fetch" : "none" };
       const m = {
         name: r.name, title: r.title, purpose: r.purpose, sample: r.sample, base, cpus, network: r.network === "fetch",
+        // The directory whose changes each command reports (builder.js), if its site has one
+        watch: r.watch && B() ? B().checkWatch(r.watch) : null,
         slot: new SaveSlot(new URL(r.name, page).pathname, config, r.title),
         host: null, job: null, xfers: 0, starting: 0, lastUsed: 0, tape: [], tapeBytes: 0,
         loading: null, memoryBytes: 0, inMemory: null, discard: false, error: null,
@@ -197,6 +200,7 @@
         if (m.job === jobId) m.job = null;
         const j = jobs.get(jobId);
         if (j) try { j.final = await host.readJob(jobId); } catch {}
+        j?.end?.();
         m.lastUsed = now();
         m.lifecycle.touch();
         scheduler.notify();
@@ -233,6 +237,7 @@
       if (m.job) {
         const j = jobs.get(m.job);
         if (j && !j.final) j.final = { jobId: m.job, state: "failed", exitStatus: null, error: why, output: j.lastOutput ?? "" };
+        j?.end?.();
         const jobId = m.job;
         m.job = null;
         tell({ kind: "job", jobId, runtime: m.name });
@@ -333,6 +338,8 @@
       return {
         name: m.name, title: m.title, purpose: m.purpose, sample: m.sample,
         state: uiState(m),
+        // Each command here reports the files it changed in this directory (job_status's changes)
+        watch: m.watch,
         doing: m.job ? `job ${m.job}` : m.xfers ? "copying a file" : m.previews.size ? `serving the preview (port ${[...m.previews.keys()].join(", ")})` : null,
         saved: !!(m.slot.saved || m.inMemory),
         savedAt: m.slot.saved?.savedAt ?? null,
@@ -387,7 +394,7 @@
     /** A command started in a machine: { jobId, runtime }. Asks the person first (once per page
      *  load). Behind a copy in the same machine, it waits for it; beside a job, it is refused.
      *  `source` says who asked, for the page's history: "form", "webmcp", or "script". */
-    async function runCommand(input, { source = "script" } = {}) {
+    async function runCommand(input, { source = "script", files, display } = {}) {
       if (!input || typeof input !== "object") throw new Error("runCommand: { runtime, command, timeoutSeconds?, requestId? }");
       const m = get(input.runtime);
       const { command, timeoutSeconds, requestId } = input;
@@ -409,19 +416,45 @@
           if (m.job) throw busyJob(m);
           await awake(m);
           if (!m.host) throw new Error(`${m.name} is not running`);
-          const { jobId } = await m.host.runCommand({ command, timeoutSeconds });
+          // In a watched machine the command runs inside a wrapper that reports what it changed
+          const nonce = m.watch ? token() : null;
+          const run = m.watch ? B().wrapCommand(command, m.watch, nonce) : { command, files: {} };
+          const { jobId } = await m.host.runCommand({ command: run.command, timeoutSeconds,
+            ...(files || m.watch ? { files: { ...files, ...run.files } } : {}) });
           m.job = jobId;
           m.dirty = true;
-          jobs.set(jobId, { machine: m, final: null });
+          const j = { machine: m, final: null, nonce };
+          j.ended = new Promise((resolve) => { j.end = resolve; });
+          jobs.set(jobId, j);
           if (requestId !== undefined) requests.set(requestId, { runtime: m.name, command, jobId });
           changed();
-          tell({ kind: "run", runtime: m.name, command, jobId, source });
+          tell({ kind: "run", runtime: m.name, command: display ?? command, jobId, source, watch: m.watch });
           return { jobId, runtime: m.name };
         });
       } finally {
         m.starting = down(m.starting);
         changed();
       }
+    }
+
+    /** A random token of 16 hex digits. */
+    function token() {
+      const b = new Uint8Array(8);
+      (root.crypto ?? globalThis.crypto).getRandomValues(b);
+      return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+    }
+
+    /** A job's view as callers see it: in a watched machine, the report of what it changed taken out
+     *  of its output and given as changes ({ files, more }, once it is complete). */
+    function present(j, v) {
+      const out = { ...v, runtime: j.machine.name };
+      if (j.nonce) {
+        const split = B().splitChanges(v.output ?? "", j.nonce);
+        out.output = split.output;
+        out.changes = split.changes;
+        out.watch = j.machine.watch;
+      }
+      return out;
     }
 
     function owner(jobId) {
@@ -432,20 +465,51 @@
 
     async function readJob(jobId) {
       const j = owner(jobId);
-      if (j.final) return { ...j.final, runtime: j.machine.name };
+      if (j.final) return present(j, j.final);
       if (!j.machine.host) throw new Error("the job's machine was put away before it reported");
       const v = await j.machine.host.readJob(j.final?.jobId ?? (typeof jobId === "string" ? jobId : jobId.jobId));
       if (v.state !== "running") j.final = v;
       else j.lastOutput = v.output; // what a failed machine's job says it had printed
-      if (j.final) return { ...j.final, runtime: j.machine.name }; // it failed meanwhile
-      return { ...v, runtime: j.machine.name };
+      if (j.final) return present(j, j.final); // it failed meanwhile
+      return present(j, v);
     }
 
     async function cancelJob(jobId) {
       const j = owner(jobId);
-      if (j.final) return { ...j.final, runtime: j.machine.name };
+      if (j.final) return present(j, j.final);
       const v = await j.machine.host.cancelJob(typeof jobId === "string" ? jobId : jobId.jobId);
-      return { ...v, runtime: j.machine.name };
+      return present(j, v);
+    }
+
+    const MAX_WRITE = 1 << 20;
+
+    /**
+     * Write a text file in a machine: { runtime, path, content }. A job of its own (so it takes its
+     * turn, and asks the person first, as a run does), the content passed as a file of the job's,
+     * never typed into a shell command; the file's directory is made. Resolves once it is written:
+     * { jobId, runtime, path, bytes, changes } (changes: in a watched machine, what it changed).
+     */
+    async function writeFile(input, { source = "script", signal } = {}) {
+      if (!input || typeof input !== "object") throw new Error("writeFile: { runtime, path, content }");
+      const { path, content } = input;
+      if (typeof path !== "string" || !path.trim() || path.length > 4096 || /[\0\n\r]/.test(path) || path.endsWith("/")) {
+        throw new Error("path: a file path in the machine (relative paths start in /root), with no line breaks");
+      }
+      if (typeof content !== "string") throw new Error("content: the file's text");
+      const bytes = new TextEncoder().encode(content);
+      if (bytes.length > MAX_WRITE) throw new Error(`content: ${bytes.length} bytes; at most ${MAX_WRITE} (1 MiB): copy_file larger files`);
+      const q = "'" + path.replace(/'/g, "'\\''") + "'";
+      const command = `f=${q}; d=$(dirname -- "$f"); mkdir -p -- "$d" && cat "$EXCLAVE_WORKSPACE/in/content" >"$f" && echo "wrote $(wc -c <"$f") bytes to $f"`;
+      const { jobId, runtime } = await runCommand({ runtime: input.runtime, command }, { source, files: { content: bytes }, display: `write ${path} (${bytes.length} bytes)` });
+      const j = jobs.get(jobId);
+      const abort = () => { cancelJob(jobId).catch(() => {}); };
+      signal?.addEventListener?.("abort", abort);
+      try { await j.ended; } finally { signal?.removeEventListener?.("abort", abort); }
+      const v = await readJob(jobId);
+      if (v.state !== "exited" || v.exitStatus !== 0) {
+        throw new Error(`${path} was not written: ${v.state === "exited" ? `exit ${v.exitStatus}` : v.state}${v.error ? ` (${v.error})` : ""}${v.output.trim() ? `: ${v.output.trim().slice(-300)}` : ""}`);
+      }
+      return { jobId, runtime, path, bytes: bytes.length, changes: v.changes ?? null, watch: v.watch ?? null };
     }
 
     /**
@@ -600,6 +664,34 @@
     }
 
     /**
+     * A small GET to a server in a machine the preview reaches, for the page itself (the preview's
+     * /__build, say): { status, body } (body as text, at most 64 KiB), or null when no preview is
+     * open, the person hasn't allowed the page, or the machine isn't running (it is never woken).
+     */
+    async function previewGet({ runtime, port, path = "/" }, { signal, answerMs = 10000 } = {}) {
+      if (!state.preview || !granted()) return null;
+      const m = get(runtime);
+      if (m.lifecycle.state !== "running" || !m.host || !m.network) return null;
+      const host = m.host;
+      let head = null;
+      let error = null;
+      const parts = [];
+      let size = 0;
+      await Preview.serve((p) => host.tcpOpen(p), { runtime: m.name, port: Preview.checkPort(port), method: "GET", path: Preview.checkPath(path),
+        headers: [["Accept", "application/json, text/plain, */*"]], prefix: new URL(previewUrl(m.name, port, "/")).pathname.replace(/\/$/, ""), origin: page.origin },
+      (msg) => {
+        if (msg.type === "head") head = msg;
+        else if (msg.type === "data" && size < 64 << 10) { parts.push(msg.bytes); size += msg.bytes.length; }
+        else if (msg.type === "error" || msg.type === "abort") error = msg;
+      }, { connectMs: 3000, answerMs, signal });
+      if (!head) return error ? { status: error.status ?? 502, body: "", error: true } : null;
+      const all = new Uint8Array(Math.min(size, 64 << 10));
+      let at = 0;
+      for (const p of parts) { all.set(p.subarray(0, all.length - at), at); at += Math.min(p.length, all.length - at); }
+      return { status: head.status, body: new TextDecoder().decode(all) };
+    }
+
+    /**
      * A request the page's service worker passed on: { runtime, port, method, path, headers,
      * body, prefix, origin }. Its answer goes to `send` as it comes (preview.js's serve()). Answered
      * only while a preview is open and the person has allowed the page; a machine it reaches is
@@ -695,7 +787,8 @@
           reason: machines.length ? null : "no runtimes",
           maxConcurrentJobsPerRuntime: 1,
           maxCopyBytes: root.SnowglobeTransfer?.limits.MAX_BYTES ?? 8 << 20,
-          features: ["listRuntimes", "runCommand", "readJob", "cancelJob", "copyFile", "suspend", "wake", "startFresh", "setAwakeLimit", "openPreview", "closePreview"],
+          features: ["listRuntimes", "runCommand", "readJob", "cancelJob", "writeFile", "copyFile", "suspend", "wake", "startFresh", "setAwakeLimit", "openPreview", "closePreview"],
+          maxWriteBytes: MAX_WRITE,
           crossOriginIsolated: isolated,
           previewBase: new URL(Preview?.PREFIX ?? "preview/", page).href,
           preview: previewView(),
@@ -710,6 +803,7 @@
       runCommand,
       readJob,
       cancelJob,
+      writeFile,
       copyFile,
       async cancelCopy(id) {
         for (const [k, c] of copies) if (id === undefined || k === id) c.abort();
@@ -729,6 +823,7 @@
       async closePreview(opts) { return closePreview("closed", opts?.source); },
       async preview() { return previewView(); },
       previewRequest,
+      previewGet,
       /** How many machines may be awake at once, 1 to 8, for this page load (2 until changed). It
        *  runs nothing, so it asks no one. Lower than what is awake: idle machines are suspended, least
        *  recently used first; busy ones once they finish (capabilities().overLimit says so meanwhile).

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 require('./sessions.js');
 globalThis.SnowglobeMachine = require('./machine.js');
 globalThis.SnowglobePreview = require('./preview.js');
+globalThis.SnowglobeBuilder = require('./builder.js');
 const { createAgents } = require('./orchestrator.js');
 const { Scheduler } = require('./scheduler.js');
 const P = require('./agent-panel.js');
@@ -38,9 +39,11 @@ function setup({ budget = 2, confirm = true, man = manifest, options = {} } = {}
       },
       destroy: async () => { if (h.alive) log.push(`end ${config.name}`); h.alive = false; },
       memory: async () => ({ wasmBytes: 600 << 20 }),
-      runCommand: async ({ command }) => {
+      jobs,
+      runCommand: async ({ command, files }) => {
         const jobId = (++n).toString(16).padStart(16, '0');
-        jobs[jobId] = { jobId, command, state: 'running', output: '', exitStatus: null };
+        jobs[jobId] = { jobId, command, files, state: 'running', output: '', exitStatus: null };
+        if (h.onRun) h.onRun(jobId, jobs[jobId]);
         return { jobId };
       },
       readJob: async (id) => ({ ...jobs[id] }),
@@ -729,4 +732,70 @@ test('connections into a machine: none kept once aborted, and every open one end
   } finally {
     globalThis.SnowglobeMachineCore = SC;
   }
+});
+
+// web with its project watched (label snowglobe.agent-watch)
+const watchedManifest = { ...appManifest, runtimes: appManifest.runtimes.map((r) => r.name === 'web' ? { ...r, watch: '/root/app' } : r) };
+
+test('in a watched machine each command reports what it changed: taken out of its output, given as changes', async () => {
+  const { api, host, activity } = setup({ man: watchedManifest, options: { isolated: true } });
+  assert.equal((await api.listRuntimes()).find((r) => r.name === 'web').watch, '/root/app');
+  const { jobId } = await api.runCommand({ runtime: 'web', command: "sed -i 's/a/b/' src/App.jsx" }, { source: 'webmcp' });
+  const job = host('web').jobs[jobId];
+  assert.equal(new TextDecoder().decode(job.files.cmd), "sed -i 's/a/b/' src/App.jsx\n");
+  assert.match(job.command, /sh "\$EXCLAVE_WORKSPACE\/in\/cmd"/);
+  assert.equal(activity.at(-1).command, "sed -i 's/a/b/' src/App.jsx", 'the page hears the command as asked');
+  assert.equal(activity.at(-1).watch, '/root/app');
+  const nonce = /SGCHANGES (\w+)/.exec(job.command)[1]; // the report's, the job's own
+  // Running, with the report under way: the output so far, no changes yet
+  job.output = `ok\n\nSGCHANGES_${nonce} BEGIN\nSGC_FILE M src/App.jsx\n`;
+  let v = await api.readJob(jobId);
+  assert.deepEqual([v.state, v.output, v.changes], ['running', 'ok\n', null]);
+  host('web').finish(jobId, `ok\n\nSGCHANGES_${nonce} BEGIN\nSGC_FILE M src/App.jsx\n@@ -1 +1 @@\n-a\n+b\nSGCHANGES_${nonce} END\n`);
+  await settle();
+  v = await api.readJob(jobId);
+  assert.equal(v.output, 'ok\n');
+  assert.deepEqual(v.changes.files.map((f) => [f.status, f.path, f.added, f.removed]), [['modified', 'src/App.jsx', 1, 1]]);
+  assert.equal(v.watch, '/root/app');
+  // A machine with nothing watched runs the command as it is
+  const s = await api.runCommand({ runtime: 'supabase', command: 'psql' });
+  assert.equal(host('supabase').jobs[s.jobId].command, 'psql');
+  assert.equal(host('supabase').jobs[s.jobId].files, undefined);
+});
+
+test('writeFile: the content goes in as a file of the job\'s, never in the command; it resolves once written, with what changed', async () => {
+  const { api, host, activity } = setup({ man: watchedManifest, options: { isolated: true } });
+  await api.wake('web');
+  host('web').onRun = (id, job) => setImmediate(() => {
+    const nonce = /SGCHANGES (\w+)/.exec(job.command)[1];
+    host('web').finish(id, `wrote 9 bytes to /root/app/src/x.js\n\nSGCHANGES_${nonce} BEGIN\nSGC_FILE A src/x.js\n@@ -0,0 +1 @@\n+it's $x\nSGCHANGES_${nonce} END\n`);
+  });
+  const r = await api.writeFile({ runtime: 'web', path: '/root/app/src/x.js', content: "it's $x\n" }, { source: 'webmcp' });
+  assert.deepEqual([r.path, r.bytes, r.watch], ['/root/app/src/x.js', 8, '/root/app']);
+  assert.deepEqual(r.changes.files.map((f) => [f.status, f.path]), [['added', 'src/x.js']]);
+  const job = Object.values(host('web').jobs)[0];
+  assert.equal(new TextDecoder().decode(job.files.content), "it's $x\n");
+  const inner = new TextDecoder().decode(job.files.cmd);
+  assert.ok(!inner.includes('$x') && inner.includes("f='/root/app/src/x.js'") && inner.includes('"$EXCLAVE_WORKSPACE/in/content"'), inner);
+  assert.equal(activity.find((e) => e.kind === 'run').command, 'write /root/app/src/x.js (8 bytes)');
+  // Refused before anything runs
+  await assert.rejects(api.writeFile({ runtime: 'web', path: '/root/app/', content: 'x' }), /path/);
+  await assert.rejects(api.writeFile({ runtime: 'web', path: 'a\nb', content: 'x' }), /path/);
+  await assert.rejects(api.writeFile({ runtime: 'web', path: 'a', content: 'x'.repeat((1 << 20) + 1) }), /at most 1048576/);
+  // A write that fails says so
+  host('web').onRun = (id) => setImmediate(() => { Object.assign(host('web').jobs[id], { state: 'exited', exitStatus: 1, output: 'cat: read-only file system\n' }); host('web').emit('job', { jobId: id }); });
+  await assert.rejects(api.writeFile({ runtime: 'web', path: '/ro/x', content: 'x' }), /\/ro\/x was not written: exit 1: cat: read-only/);
+});
+
+test('previewGet: a small GET for the page, only while a preview is open and allowed, and never waking a machine', async () => {
+  const { api, log } = setup({ man: watchedManifest, options: { isolated: true } });
+  assert.equal(await api.previewGet({ runtime: 'web', port: 4173, path: '/__build' }), null, 'no preview open');
+  await api.openPreview({ runtime: 'web', port: 4173 });
+  const r = await api.previewGet({ runtime: 'web', port: 4173, path: '/__build' });
+  assert.deepEqual(r, { status: 200, body: 'ok' });
+  assert.equal(await api.previewGet({ runtime: 'supabase', port: 54321, path: '/' }), null, 'supabase is asleep: not woken for it');
+  assert.ok(!log.some((l) => /boot supabase/.test(l)));
+  assert.equal((await api.previewGet({ runtime: 'web', port: 9999, path: '/' })).error, true, 'nothing listens there');
+  await api.closePreview();
+  assert.equal(await api.previewGet({ runtime: 'web', port: 4173, path: '/__build' }), null);
 });

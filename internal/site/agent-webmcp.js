@@ -9,7 +9,8 @@
 // one dispatch map: list_runtimes says what machines there are and their state; run_command starts
 // a job in one (by runtime) and returns its id; job_status reads its state and output, which ends
 // as `snowglobe mcp`'s run_command does natively ([exit N], [timed out], [stopped]); cancel_job
-// stops it; copy_file copies a file from one machine to another; set_awake_limit says how many
+// stops it; write_file writes a text file in a machine (and says what it changed there); copy_file
+// copies a file from one machine to another; set_awake_limit says how many
 // machines may be awake at once; open_preview shows a machine's web server in the page's preview
 // panel, and close_preview closes it. The first run, copy or preview asks the person at the page,
 // once for the page load (and window.snowglobeAgent asks the same question, whoever calls it).
@@ -34,6 +35,11 @@
     if (typeof p !== "string" || !p.trim()) throw new Error(`${key}: a file path in the machine`);
     return p;
   };
+  // What a command changed in a watched machine's project (builder.js), as a line after its output
+  const changedLine = (v) => {
+    const s = root.SnowglobeBuilder?.summary;
+    return v?.changes && s ? `\n[changed in ${v.watch ?? "its project"}: ${s(v.changes)}]` : "";
+  };
   const kb = (bytes, seconds) => !(seconds > 0) ? "-" : bytes / seconds < 1024 ? `${Math.round(bytes / seconds)} bytes/s` : `${Math.round(bytes / 1024 / seconds)} KiB/s`;
 
   /**
@@ -48,7 +54,8 @@
         description: "The Linux machines (arm64) this page runs in the browser tab: each one's runtime name, what it is good for, its CPUs, " +
           "its state (asleep, waking, awake, busy, suspending, failed) and a sample command. A machine boots or wakes on its first command; " +
           "only a few are awake at once (awake_limit; set_awake_limit changes it), and the least recently used idle one is suspended (its files kept) to wake another. " +
-          "A machine an open preview uses is busy, so never suspended. preview_base is where previews are: <preview_base><runtime>/<port>/<path>.",
+          "A machine an open preview uses is busy, so never suspended. preview_base is where previews are: <preview_base><runtime>/<port>/<path>. " +
+          "A runtime's watch, if it has one, is a project directory: each command's job_status (and write_file) says which files in it changed.",
         inputSchema: { type: "object", properties: {} },
         annotations: { readOnlyHint: true },
         async run() {
@@ -91,7 +98,9 @@
       job_status: {
         title: "A job's status and output",
         description: "A job's state (running, exited, timed_out, cancelled, failed) and its output so far. A finished job's output ends with " +
-          "[exit N], [timed out] or [stopped]; a running one's with [running]. Output beyond 1 MiB keeps the most recent part and says so.",
+          "[exit N], [timed out] or [stopped]; a running one's with [running]. Output beyond 1 MiB keeps the most recent part and says so. " +
+          "In a machine with a watched project (list_runtimes' watch: web's /root/app), a finished job adds a last line, " +
+          "[changed in <dir>: <files, with lines added and removed>], and the page shows the diffs.",
         inputSchema: {
           type: "object",
           properties: { job_id: { type: "string", description: "The id run_command returned" } },
@@ -100,7 +109,7 @@
         annotations: { readOnlyHint: true, untrustedContentHint: true },
         async run(input) {
           const v = await agent.readJob(jobIdOf(input));
-          return text(jobText(v), v.state === "failed" || (v.state === "exited" && v.exitStatus !== 0) || v.state === "timed_out");
+          return text(jobText(v) + changedLine(v), v.state === "failed" || (v.state === "exited" && v.exitStatus !== 0) || v.state === "timed_out");
         },
       },
       cancel_job: {
@@ -114,6 +123,32 @@
         annotations: { readOnlyHint: false },
         async run(input) {
           return text(jobText(await agent.cancelJob(jobIdOf(input))));
+        },
+      },
+      write_file: {
+        title: "Write a text file in a machine",
+        description: "Write a text file (UTF-8, at most 1 MiB) at a path in one of the machines, replacing it if it is there and making its " +
+          "directory; relative paths start in /root. The content goes in as it is: no shell quoting or heredoc needed. It runs as a job " +
+          "(one at a time in each machine, after what was asked before) and returns once the file is written. In a watched project " +
+          "(web's /root/app) it says what changed, and the page shows the diff; web rebuilds its app on every change under /root/app " +
+          "and the open preview reloads with it.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            runtime: { type: "string", description: "The machine (list_runtimes)" },
+            path: { type: "string", description: "The file, e.g. /root/app/src/App.jsx" },
+            content: { type: "string", description: "The file's whole text" },
+          },
+          required: ["runtime", "path", "content"],
+        },
+        annotations: { readOnlyHint: false, consequentialHint: true },
+        async run(input, options) {
+          const runtime = runtimeOf(input);
+          const path = pathOf(input, "path");
+          if (typeof input.content !== "string") throw new Error("content: the file's text, a string");
+          await ask(options);
+          const r = await agent.writeFile({ runtime, path, content: input.content }, { source: "webmcp", signal: options?.signal });
+          return text(`wrote ${r.bytes} bytes to ${runtime}:${path}` + changedLine(r));
         },
       },
       copy_file: {
