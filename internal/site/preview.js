@@ -1,4 +1,6 @@
-// The agent page's preview: a machine's web server, seen in the page. HTTP only, no WebSockets.
+// The agent page's preview: a machine's web server, seen in the page. HTTP here; a WebSocket a page
+// in the preview opens to a machine goes through the page that frames it instead (preview-hook.js's
+// shim, orchestrator.js's previewSocket: a service worker can't take a WebSocket).
 //
 // The page's service worker (agent-sw.js) takes every request under <agent page>/preview/
 // <runtime>/<port>/<path> and hands it to the agent page (a MessageChannel per request); the page

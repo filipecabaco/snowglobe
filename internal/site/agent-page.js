@@ -511,6 +511,8 @@
       .catch((err) => port.postMessage({ type: "error", ...SnowglobePreview.errorPage(502, "The preview failed", String(err?.message ?? err)) }));
   });
   navigator.serviceWorker?.startMessages?.();
+  // A WebSocket the page in the preview opens to a machine (preview-hook.js), spoken here (api.previewSocket)
+  addEventListener("message", (e) => { if (e.data?.type === "snowglobe-preview-socket" && e.origin === location.origin && e.source === previewFrame.contentWindow && e.ports?.[0]) api.previewSocket(e.data, e.ports[0]); });
 
   // ---------------------------------------------------------------- the terminal
   const terminalBox = $("terminal-box");

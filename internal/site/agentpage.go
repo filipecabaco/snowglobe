@@ -19,6 +19,11 @@ import (
 // AgentDir is the agent page's directory beside the sites: /agent/ on the demo site
 const AgentDir = "agent"
 
+// FleetDir is the fleet page's directory beside the sites: /fleet/ on the demo site. It has the
+// agent page's machines (the same runtimes.json) and scripts, which its page needs beside it: each
+// machine's worker and the service worker are loaded from the page's own directory
+const FleetDir = "fleet"
+
 // RuntimesFile is the agent page's list of its machines, written when the site is assembled
 const RuntimesFile = "runtimes.json"
 
@@ -51,6 +56,10 @@ var (
 	inspectJS []byte
 	//go:embed preview-hook.js
 	previewHookJS []byte
+	// A WebSocket spoken over a machine's TCP: a guest's to a link's name, and a preview page's to a
+	// machine (machine-core.js, orchestrator.js)
+	//go:embed ws-client.js
+	wsClientJS []byte
 	//go:embed builder.js
 	builderJS []byte
 	//go:embed studio.js
@@ -58,7 +67,20 @@ var (
 	// The page's service worker: cross-origin isolation (machines on several CPUs) and the preview
 	//go:embed agent-sw.js
 	agentSW []byte
+	// The fleet page: a snowglobe.toml read, planned and run over the same machines
+	//go:embed fleet.js
+	fleetJS []byte
+	//go:embed fleet-page.js
+	fleetPageJS []byte
 )
+
+// FleetScripts are the files WriteAgentPage puts in the fleet page's directory, by name: the agent
+// page's scripts and the fleet page's own
+func FleetScripts() map[string][]byte {
+	files := AgentScripts()
+	files["fleet.js"], files["fleet-page.js"] = fleetJS, fleetPageJS
+	return files
+}
 
 // AgentScripts are the files WriteAgentPage puts in the agent page's directory, by name
 func AgentScripts() map[string][]byte {
@@ -66,7 +88,7 @@ func AgentScripts() map[string][]byte {
 		"agent.js": agentJS, "agent-webmcp.js": agentWebMCPJS, "agent-panel.js": agentPanelJS, "machine.js": machineJS,
 		"machine-worker.js": machineWorkerJS, "transfer.js": transferJS, "scheduler.js": schedulerJS,
 		"orchestrator.js": orchestratorJS, "agent-page.js": agentPageJS, "sessions.js": sessionsJS,
-		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "inspect.js": inspectJS, "preview-hook.js": previewHookJS, "builder.js": builderJS, "studio.js": studioJS, "sw.js": agentSW,
+		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "inspect.js": inspectJS, "preview-hook.js": previewHookJS, "ws-client.js": wsClientJS, "builder.js": builderJS, "studio.js": studioJS, "sw.js": agentSW,
 	}
 }
 
@@ -130,8 +152,11 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 		return nil, err
 	}
 	agentRoot := filepath.Join(root, AgentDir)
-	if err := notALink(agentRoot); err != nil {
-		return nil, err
+	fleetRoot := filepath.Join(root, FleetDir)
+	for _, dir := range []string{agentRoot, fleetRoot} {
+		if err := notALink(dir); err != nil {
+			return nil, err
+		}
 	}
 
 	type found struct {
@@ -146,9 +171,9 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 	armlessFrom := map[string]string{}
 	for _, e := range entries {
 		dir := filepath.Join(root, e.Name())
-		if e.Name() == AgentDir {
+		if e.Name() == AgentDir || e.Name() == FleetDir {
 			if isSite(dir) {
-				return nil, fmt.Errorf("%s: a site named %q would be hidden by the agent page", dir, AgentDir)
+				return nil, fmt.Errorf("%s: a site named %q would be hidden by the agent and fleet pages", dir, e.Name())
 			}
 			continue
 		}
@@ -305,6 +330,18 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 	files[RuntimesFile] = append(data, '\n')
 	for name, b := range files {
 		if err := writeFile(filepath.Join(agentRoot, name), b); err != nil {
+			return nil, err
+		}
+	}
+	// The fleet page's directory: the same machines and scripts, and its own (its index.html is the
+	// demo site's, site/fleet/, copied in after)
+	if err := os.MkdirAll(fleetRoot, 0o755); err != nil {
+		return nil, err
+	}
+	fleetFiles := FleetScripts()
+	fleetFiles[RuntimesFile] = files[RuntimesFile]
+	for name, b := range fleetFiles {
+		if err := writeFile(filepath.Join(fleetRoot, name), b); err != nil {
 			return nil, err
 		}
 	}

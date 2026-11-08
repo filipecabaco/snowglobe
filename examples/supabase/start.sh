@@ -5,15 +5,17 @@ if [ "$(id -u)" = 0 ]; then
 fi
 export SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 SUPABASE_NO_UPDATE_NOTIFIER=1 CI=1
 
-echo "Starting Supabase's native stack: Postgres, PostgREST and Auth (no Docker) ..."
+echo "Starting Supabase's native stack: Postgres, PostgREST, Auth and Realtime (no Docker) ..."
 # --runtime native: plain processes, no Docker. --eager: every service is up before this returns
 # (they're in the snapshot) and none is stopped when idle, so a visitor never waits for a restart.
+# --preparation on-demand: only the enabled services' downloads are wanted, and the image has them
+# all (nothing is fetched at boot). The flags are the Dockerfile's first start's.
 # Postgres's first start was at image build time; this one only starts it again. A slow build
 # machine still gets a long readiness wait (SUPABASE_DB_HEALTH_TIMEOUT, set in the Dockerfile so
 # both starts agree), and a start that still gives up is resumed.
 for attempt in 1 2 3; do
-  supabase stack start --runtime native --eager \
-    -x realtime -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null 2>&1 |
+  supabase stack start --runtime native --eager --preparation on-demand \
+    -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null 2>&1 |
     grep -v -e "new version of Supabase CLI" -e "recommend updating"
   # API_URL, DB_URL, ANON_KEY, SERVICE_ROLE_KEY, ... for the shell (the stack picks its own ports)
   eval "$(supabase status --env </dev/null 2>/dev/null)"
@@ -23,11 +25,11 @@ done
 # Never reach the prompt (and so the snapshot) without the stack
 [ -n "$API_URL" ] || { echo "Supabase's stack didn't start."; exit 1; }
 export API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY
-# The same for every other shell (an agent's commands: /etc/profile.d/supabase.sh reads it)
-{
-  for v in API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY; do printf "export %s='%s'\n" "$v" "${!v}"; done
-  echo "export SUPABASE_API_PORT=54321"
-} > "$HOME/.stack-env"
+# The same for every other shell (an agent's commands: /etc/profile.d/supabase.sh reads it). No
+# SUPABASE_* variable of our own: the CLI reads every one as a config override (SUPABASE_API_PORT
+# would be api.port), so a supabase command in such a shell would see the stack as changed.
+for v in API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY; do printf "export %s='%s'\n" "$v" "${!v}"; done \
+  > "$HOME/.stack-env"
 # The API on the machine's network address too, at a fixed port, 54321 (Supabase's usual one): the
 # stack picks its own ports, on 127.0.0.1, which nothing outside the machine reaches. The agent
 # page's preview (and snowglobe run -p 54321:54321) connect there.
@@ -59,28 +61,35 @@ export -f sb-auth
 # Warm everything a visitor's first commands go through, so it's done in the snapshot rather than
 # on their clock: a first signup loads Auth's sign-up path (bcrypt, JWT signing) and opens its
 # database connections; a first insert fills PostgREST's schema cache and plans the row level
-# security policies; notes' first run reads Bun in. A throwaway user does all of it, then it's
-# removed and the counter reset, so visitors start from an empty app.
+# security policies; notes' first run reads Bun in; a first watch joins a Realtime channel and
+# streams an insert. A throwaway user does all of it, then it's removed and the counter reset, so
+# visitors start from an empty app.
 curl -sS -o /dev/null "$API_URL/auth/v1/health"
 curl -sS -o /dev/null -H "apikey: $ANON_KEY" "$API_URL/rest/v1/"
-notes signup warmup@example.com warmup-password >/dev/null 2>&1 &&
+if notes signup warmup@example.com warmup-password >/dev/null 2>&1; then
+  notes watch 60 >/dev/null 2>&1 &
+  watch_pid=$!
+  sleep 3
   notes add warming up >/dev/null 2>&1 && notes ls >/dev/null 2>&1 && notes search up >/dev/null 2>&1 &&
-  notes login warmup@example.com warmup-password >/dev/null 2>&1
+    notes login warmup@example.com warmup-password >/dev/null 2>&1
+  sleep 2; kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
+fi
 notes logout >/dev/null 2>&1
 psql "$DB_URL" -qc "delete from auth.users where email = 'warmup@example.com'; truncate notes restart identity" >/dev/null 2>&1
 
 
 cat <<'MOTD'
 
-  Supabase's local stack, running natively in this machine: Postgres, PostgREST and Auth.
-  notes is a small app on it, run by Bun: Auth for users, the Data API for notes, row level
-  security keeping each user's notes their own. Try:
+  Supabase's local stack, running natively in this machine: Postgres, PostgREST, Auth and
+  Realtime. notes is a small app on it, run by Bun: Auth for users, the Data API for notes, row
+  level security keeping each user's notes their own, Realtime streaming them live. Try:
 
     notes signup ada@example.com lovelace-1815
     notes add first program, for the analytical engine
     notes search engine
     notes ls
     notes signup grace@example.com hopper-1906 && notes ls     # Grace can't see Ada's notes
+    notes watch 10 & sleep 2; notes add live, by Realtime; wait   # an insert, as it happens
     psql "$DB_URL" -c "select email from auth.users"
     sb-auth "$API_URL/rest/v1/notes" | jq                     # the service role sees them all
     supabase stack status

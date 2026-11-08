@@ -425,8 +425,8 @@ func TestTheExampleFleetLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(steps(p), "|"); !strings.Contains(got, "+ template py (build "+filepath.Join(f.Dir, "..", "python")) ||
-		!strings.Contains(got, "+ service web") || len(p.Steps) != 5 {
+	if got := strings.Join(steps(p), "|"); !strings.Contains(got, "+ template supabase (build "+filepath.Join(f.Dir, "..", "supabase")) ||
+		!strings.Contains(got, "+ service viewer") || !strings.Contains(got, "+ link viewer-db (viewer reaches db:54321 as supabase.internal:54321") || len(p.Steps) != 9 {
 		t.Errorf("the example's plan: %v", got)
 	}
 }

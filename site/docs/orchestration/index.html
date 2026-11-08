@@ -178,7 +178,8 @@ snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
             snapshots, services and machines. <code>snowglobe diff</code> says what apply would do;
             <code>snowglobe down</code> removes all of it. An entry that changed is replaced, with what is made
             from it; one gone from the file is removed; names something else uses are refused. One file goes from
-            source to running services (<code>examples/fleet/snowglobe.toml</code>):</p>
+            source to running services. A small one; <code>examples/fleet/</code> has a feed and a viewer on two machines, joined
+            by a link, and <a href="#fleet-page">runs in a browser tab</a> too:</p>
           <pre>[templates.py]
 build = "../python"                <span class="dim"># built first, for running natively</span>
 network = "fetch"
@@ -252,6 +253,24 @@ as = "db.internal"</pre>
             <code>allow_private</code> did). Start and remove instances from the UI, the API
             (<code>POST /v1/fleets/NAME/instances</code>, <code>DELETE /v1/fleets/NAME/instances/ID</code>) or MCP
             (<code>start_instance</code>, <code>stop_instance</code>).</p>
+
+          <h2 class="h3" id="fleet-page">The same file in a browser: /fleet/</h2>
+          <p>The demo site's <a href="../../fleet/">/fleet/</a> runs a fleet file in one tab, on the machines of the
+            <a href="../agents/#in-the-page">agent page</a>: load or write the file, read the plan, Run each step or
+            Run all. It is another place to run the file, not another format: the same <code>snowglobe.toml</code> goes
+            to <code>snowglobe apply</code>.</p>
+          <ul>
+            <li><b>Steps.</b> A snapshot's <code>run</code> commands and <code>ready</code> check, each link, each machine
+              woken, each service opened in a frame.</li>
+            <li><b>Templates</b> name a site the page has: <code>build = "../python"</code> is the <code>python</code>
+              machine. One site is one machine on the page, so templates of one site share its files and processes.</li>
+            <li><b>Links</b> are real. A guest on port 80 or 443 makes HTTP(S) requests; any other port
+              (<code>as_port</code>, default <code>port</code>) is a raw TCP stream, which carries Postgres, Redis and
+              WebSocket traffic alike. A guest's <code>ws://name/</code> on 80 or 443, and a page in the frame, can
+              open WebSockets too. A machine reads its links when it wakes.</li>
+            <li><b>Read, not applied:</b> <code>min</code>, <code>max</code>, <code>idle</code>, <code>concurrency</code>,
+              <code>ttl</code>, <code>egress</code>, <code>network.mode</code> and host ports. The page lists them.</li>
+          </ul>
         </section>
 
         <nav class="pager" aria-label="Pages"><a class="prev" href="../agents/"><small>Previous</small>For agents and programs</a><a class="next" href="../isolation/"><small>Next</small>Isolation</a></nav>

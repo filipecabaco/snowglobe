@@ -338,14 +338,14 @@ test('panel: Suspend and Wake, the status line says how long a wake takes, and R
   e.suspend.fire('click');
   await settle();
   assert.equal(lifecycle.state, 'suspended');
-  assert.equal(e.status.textContent, 'Suspended to free memory. The next command wakes it (about 1 s).');
+  assert.equal(e.status.textContent, 'Asleep. The next command wakes it (about 1 s).');
   assert.equal(e.suspend.textContent, 'Wake');
   assert.equal(e.run.disabled, false, 'Run is offered: it wakes the machine');
 
   e.command.value = 'cat note.txt';
   e.form.fire('submit');
   await settle();
-  assert.equal(e.status.textContent, 'Waking the machine from its saved state (about 1 s)…');
+  assert.equal(e.status.textContent, 'Waking (about 1 s)…');
   assert.ok(e.run.disabled);
   assert.ok(e.suspend.disabled);
   release();
@@ -359,7 +359,7 @@ test('panel: Suspend and Wake, the status line says how long a wake takes, and R
   // The wake was measured (1.5 s on this clock): the next estimate is that
   await agent.suspend();
   await p.refresh();
-  assert.equal(e.status.textContent, 'Suspended to free memory. The next command wakes it (about 2 s).');
+  assert.equal(e.status.textContent, 'Asleep. The next command wakes it (about 2 s).');
   assert.equal(p.runs[0].command, 'cat note.txt');
 });
 
@@ -427,7 +427,7 @@ test('panel: Cancel while the machine wakes drops the run; the wake finishes, an
   assert.equal(e.cancel.disabled, false, 'Cancel is offered while it wakes');
   e.cancel.fire('click');
   await settle();
-  assert.equal(e.status.textContent, 'Cancelled before it ran: nothing ran. Waking the machine from its saved state (about 1 s)…');
+  assert.equal(e.status.textContent, 'Cancelled before it ran: nothing ran. Waking (about 1 s)…');
   assert.equal(e.result.textContent, 'Cancelled');
   assert.equal(e.cancel.disabled, true);
   assert.deepEqual(p.runs.map((r) => [r.command, r.state]), [['touch /root/should-not-exist', 'cancelled']]);
@@ -503,4 +503,375 @@ test('the guest network drops cache-hint headers (pip sends them, and they would
   assert.deepEqual([...seen[0][1].headers.keys()].sort(), ['accept', 'authorization']);
   assert.equal(seen[0][1].method, 'GET');
   assert.equal(seen[1][1], undefined);
+});
+
+test('the guest network sends a link\'s name to the machine it names, through the page, and nothing else', async () => {
+  const { guestFetch, linked } = require('./machine-core.js');
+  const base = 'https://x.example/snowglobe/fleet/';
+  const links = Object.assign(Object.create(null), { 'feed.internal': { runtime: 'python', port: 9000 } });
+  assert.equal(linked('http://feed.internal/', links, base), 'https://x.example/snowglobe/fleet/preview/python/9000/');
+  assert.equal(linked('https://feed.internal:8443/a/b?c=1', links, base), 'https://x.example/snowglobe/fleet/preview/python/9000/a/b?c=1', 'any port of the name goes to the link\'s');
+  assert.equal(linked('http://other.internal/', links, base), 'http://other.internal/');
+  assert.equal(linked('http://feed.internal.evil.example/', links, base), 'http://feed.internal.evil.example/');
+  assert.equal(linked('http://constructor/', links, base), 'http://constructor/', 'names are own keys only');
+  assert.equal(linked('http://feed.internal/', undefined, base), 'http://feed.internal/');
+  assert.equal(linked('http://feed.internal/', links, undefined), 'http://feed.internal/');
+  assert.equal(linked('not a url', links, base), 'not a url');
+  const seen = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { seen.push([url, init]); return {}; };
+  try {
+    await guestFetch('http://feed.internal/x', { method: 'POST', body: 'b', headers: new Headers([['Accept', '*/*'], ['Pragma', 'no-cache']]) }, links, base);
+    await guestFetch('https://pypi.org/x', undefined, links, base);
+  } finally { globalThis.fetch = real; }
+  assert.equal(seen[0][0], 'https://x.example/snowglobe/fleet/preview/python/9000/x');
+  assert.equal(seen[0][1].method, 'POST');
+  assert.deepEqual([...seen[0][1].headers.keys()], ['accept']);
+  assert.equal(seen[1][0], 'https://pypi.org/x');
+});
+
+// ------------------------------------------------------------------ raw TCP over links
+
+// armless as far as links go: it keeps the network options it was given, and its tunnel code
+// (armless.js's _tunnel_open, as built) is played by `tunnel()` below
+class LinkArmless {
+  constructor(o) { this.options = o; this.ready = Promise.resolve(); LinkArmless.last = this; }
+  on() {}
+  run() {}
+  destroy() {}
+}
+// What armless's _tunnel_open does with the WebSocket class: one argument, binaryType, the on*
+// handlers, send() while readyState is 1, close(1000) while it is at most 1, on the guest's end and close
+function tunnel(WS, url) {
+  const g = { log: [], state: 'held' };
+  const socket = new WS(url);
+  socket.binaryType = 'arraybuffer';
+  let opened = false;
+  socket.onopen = () => { opened = true; g.state = 'open'; g.log.push('accept'); };
+  socket.onmessage = ({ data }) => g.log.push(`write ${typeof data === 'string' ? data : new TextDecoder().decode(new Uint8Array(data))}${data instanceof ArrayBuffer ? '' : ' (not an ArrayBuffer)'}`);
+  socket.onclose = () => { g.state = 'closed'; g.log.push(opened ? 'fin' : 'refuse'); };
+  g.socket = socket;
+  g.send = (s) => socket.readyState === 1 && socket.send(s);
+  g.end = () => socket.readyState <= 1 && socket.close(1000);
+  return g;
+}
+const tick = () => new Promise((r) => setImmediate(r));
+const MC = require('./machine-core.js');
+const db = MC.linkUrl('supabase', 5432);
+
+async function linkCore(tunnels = [{ host: 'db.internal', port: 5432, url: db }], o = {}) {
+  const events = [];
+  const real = [];
+  class RealWS { constructor(...a) { this.args = a; real.push(this); } }
+  const core = new MC.Core({ config: { network: { tls: 't', tunnels }, filesystem: { json: 'f', baseurl: 'b' } }, Armless: LinkArmless, agent: null,
+    emit: (e, p) => events.push([e, p]) });
+  core.WebSocket = RealWS;
+  await core.boot('s');
+  core.run();
+  return { core, events, real, RealWS, WS: LinkArmless.last.options.network.WebSocket, links: () => events.filter(([e]) => e === 'link').map(([, p]) => p), ...o };
+}
+
+test('links over TCP: armless\'s WebSocket for a link url is the page, as armless uses it: open, connect, bytes both ways, the guest\'s half-close, then its close', async () => {
+  const { core, WS, links } = await linkCore();
+  assert.equal(LinkArmless.last.options.network.tunnels[0].url, 'wss://link.invalid/supabase/5432', 'the tunnels as given');
+  assert.equal(typeof LinkArmless.last.options.network.fetch, 'function', 'fetch still the guest\'s');
+  const g = tunnel(WS, db);
+  assert.equal(g.socket.readyState, WS.CONNECTING);
+  assert.equal(g.socket.bufferedAmount, 0);
+  assert.equal(g.socket.url, db);
+  assert.deepEqual(links(), [{ cid: 1, kind: 'open', runtime: 'supabase', port: 5432 }]);
+  assert.throws(() => g.socket.send(new Uint8Array([1])), /connecting/, 'as a WebSocket: no send before it opens');
+  await core.linkIn(1, 'connect');
+  assert.deepEqual(g.log, ['accept']);
+  assert.equal(g.socket.readyState, WS.OPEN);
+  // The guest's bytes: a copy of a view into a bigger buffer, as armless's are
+  const buf = new TextEncoder().encode('xxSELECT 1yy');
+  g.send(buf.subarray(2, 10));
+  buf.fill(0);
+  assert.equal(new TextDecoder().decode(links()[1].bytes), 'SELECT 1');
+  assert.equal(links()[1].bytes.byteLength, links()[1].bytes.buffer.byteLength, 'a buffer of its own (handed over whole by the worker)');
+  // The server's bytes, as an ArrayBuffer
+  assert.equal(await core.linkIn(1, 'data', new TextEncoder().encode('row 1')), true);
+  assert.deepEqual(g.log.at(-1), 'write row 1');
+  // The guest's FIN: the page's side ends, and the server's answer still comes
+  g.end();
+  assert.deepEqual(links().at(-1), { cid: 1, kind: 'end' });
+  assert.equal(g.socket.readyState, WS.OPEN, 'still open, so that the guest\'s close reaches it too');
+  await core.linkIn(1, 'data', new TextEncoder().encode('bye'));
+  assert.deepEqual(g.log.at(-1), 'write bye');
+  // The guest's connection over (armless calls close again): closed at once
+  g.end();
+  assert.deepEqual(links().at(-1), { cid: 1, kind: 'close' });
+  assert.equal(g.socket.readyState, WS.CLOSED);
+  await tick();
+  assert.equal(g.log.at(-1), 'fin');
+  assert.equal(await core.linkIn(1, 'data', new TextEncoder().encode('late')), false, 'dropped: it is over');
+  g.end();
+  assert.equal(links().length, 4, 'nothing more said');
+});
+
+test('links over TCP: refused (nothing listens), the server\'s end and an error close the guest\'s side; addEventListener hears as on* does', async () => {
+  const { core, WS, links } = await linkCore();
+  // Refused: a close before any connect; never opened, so armless refuses the guest's SYN
+  const r = tunnel(WS, db);
+  const heard = [];
+  r.socket.addEventListener('error', () => heard.push('error'));
+  r.socket.addEventListener('close', (e) => heard.push(`close ${e.code} ${e.wasClean}`));
+  await core.linkIn(1, 'close');
+  assert.deepEqual(r.log, ['refuse']);
+  assert.deepEqual(heard, ['error', 'close 1006 false']);
+  // The server's end: the guest's side is closed after what came
+  const s = tunnel(WS, db);
+  await core.linkIn(2, 'connect');
+  await core.linkIn(2, 'data', new TextEncoder().encode('last'));
+  await core.linkIn(2, 'end');
+  assert.deepEqual(s.log, ['accept', 'write last', 'fin']);
+  assert.equal(s.socket.readyState, WS.CLOSED);
+  s.end(); // armless won't, at readyState 3; and if it did, nothing is said
+  // An error (the machine it reached went away): the guest's side closed
+  const e = tunnel(WS, db);
+  await core.linkIn(3, 'connect');
+  await core.linkIn(3, 'error');
+  assert.deepEqual(e.log, ['accept', 'fin']);
+  // An abort of a half-open attempt (the guest gave up on its SYN): said, and refused
+  const h = tunnel(WS, db);
+  h.end();
+  assert.deepEqual(links().at(-1), { cid: 4, kind: 'close' });
+  await tick();
+  assert.deepEqual(h.log, ['refuse']);
+  await core.linkIn(4, 'connect');
+  assert.deepEqual(h.log, ['refuse'], 'too late: nothing');
+  assert.equal(core.links.size, 0, 'nothing kept');
+});
+
+test('links over TCP: only this machine\'s link urls are carried; anything else, and a guest\'s own WebSocket, is the real WebSocket', async () => {
+  const { WS, real, RealWS, links } = await linkCore();
+  const other = new WS('wss://example.com/socket');
+  assert.ok(other instanceof RealWS);
+  assert.deepEqual(other.args, ['wss://example.com/socket']);
+  // A link url this machine wasn't given: never carried (the guest can't reach it through the page)
+  const notMine = new WS(MC.linkUrl('python', 22));
+  assert.ok(notMine instanceof RealWS);
+  // The guest's own WebSocket naming its own link url (armless passes its protocols): not carried
+  const guests = new WS(db, []);
+  assert.ok(guests instanceof RealWS);
+  assert.deepEqual(guests.args, [db, []]);
+  assert.equal(real.length, 3);
+  assert.deepEqual(links(), [], 'none reached the page');
+  // The urls themselves: only the exact form
+  assert.deepEqual(MC.parseLinkUrl('wss://link.invalid/supabase/5432'), { runtime: 'supabase', port: 5432 });
+  for (const u of ['wss://link.invalid/supabase/0', 'wss://link.invalid/supabase/65536', 'wss://link.invalid/supabase/05432', 'wss://link.invalid/supabase/5432/x',
+    'wss://link.invalid/supabase/5432?x', 'ws://link.invalid/supabase/5432', 'wss://link.invalid.example/supabase/5432', 'wss://link.invalid//5432', null]) {
+    assert.equal(MC.parseLinkUrl(u), null, String(u));
+  }
+  // A machine with no links gets armless's own WebSocket (none injected)
+  const plain = new MC.Core({ config: { network: { tls: 't' }, filesystem: { json: 'f', baseurl: 'b' } }, Armless: LinkArmless, agent: null });
+  await plain.boot('s');
+  assert.equal(LinkArmless.last.options.network.WebSocket, undefined);
+  const odd = new MC.Core({ config: { network: { tls: 't', tunnels: [{ port: 22, url: 'wss://tunnel.example/ssh' }] }, filesystem: { json: 'f', baseurl: 'b' } }, Armless: LinkArmless, agent: null });
+  await odd.boot('s');
+  assert.equal(LinkArmless.last.options.network.WebSocket, undefined, 'a tunnel of another kind is armless\'s own business');
+});
+
+test('links over TCP: a guest that half-closed and never closes is given up after the linger; the machine ending says each connection closed', async () => {
+  // The linger, on a clock the test moves
+  const c = clock();
+  const events = [];
+  const core = { emit: (e, p) => events.push(p), links: new Map(), _linkAdd(s) { this.links.set(1, s); return 1; }, _linkDelete(cid) { this.links.delete(cid); } };
+  const WS = MC.linkSockets(core, new Map([[db, { runtime: 'supabase', port: 5432 }]]), class {}, c);
+  const g = tunnel(WS, db);
+  g.socket._hear('connect');
+  g.end();
+  await c.advance(MC.LINK_LINGER_MS - 1000);
+  g.socket._hear('data', new TextEncoder().encode('more')); // the server still talking: the clock starts again
+  await c.advance(MC.LINK_LINGER_MS - 1000);
+  assert.equal(events.at(-1).kind, 'end');
+  await c.advance(1000);
+  assert.equal(events.at(-1).kind, 'close', 'given up after a quiet linger');
+  assert.equal(c.pending.size, 0);
+
+  const { core: k, WS: W, links } = await linkCore();
+  const a = tunnel(W, db);
+  tunnel(W, db);
+  await k.linkIn(1, 'connect');
+  k.destroy();
+  assert.deepEqual(links().slice(-2), [{ cid: 1, kind: 'close' }, { cid: 2, kind: 'close' }]);
+  await tick();
+  assert.deepEqual(a.log, ['accept'], 'armless, going away with it, hears nothing more');
+});
+
+test('links over TCP: the host carries link events and linkIn, inline and over a worker\'s messages (bytes handed over), and says gone when the machine ends', async () => {
+  globalThis.SnowglobeMachineCore = MC;
+  const { createMachine } = require('./machine-host.js');
+  const SC = MC;
+  const Core = class extends SC.Core { constructor(o) { super({ ...o, Armless: LinkArmless, agent: null }); } };
+  globalThis.SnowglobeMachineCore = { ...SC, Core, located: (b, x) => x };
+  try {
+    // Inline: the core in this thread
+    const host = createMachine({ base: 'https://x.example/', config: { network: { tls: 't', tunnels: [{ host: 'db.internal', port: 5432, url: db }] }, filesystem: { json: 'f', baseurl: 'b' } }, transport: 'inline' });
+    const heard = [];
+    host.on('link', (e) => heard.push(e.bytes ? { ...e, bytes: new TextDecoder().decode(e.bytes) } : e));
+    await host.boot('s');
+    await host.run();
+    const g = tunnel(LinkArmless.last.options.network.WebSocket, db);
+    // Answered at once, inside the open (inline, the page can): armless has its handlers by then
+    assert.deepEqual(heard, [{ cid: 1, kind: 'open', runtime: 'supabase', port: 5432 }]);
+    await host.linkIn(1, 'connect');
+    g.send(new TextEncoder().encode('q'));
+    const view = new TextEncoder().encode('__answer__').subarray(2, 8);
+    await host.linkIn(1, 'data', view);
+    assert.deepEqual(g.log, ['accept', 'write answer']);
+    assert.deepEqual(heard[1], { cid: 1, kind: 'data', bytes: 'q' });
+    await host.destroy();
+    assert.deepEqual(heard.slice(-2), [{ cid: 1, kind: 'close' }, { kind: 'gone' }]);
+  } finally {
+    globalThis.SnowglobeMachineCore = SC;
+  }
+
+  // Over a worker: what is posted, and what it hands over
+  const posted = [];
+  let w;
+  class FakeWorker {
+    constructor() { w = this; this.terminated = false; }
+    postMessage(msg, transfer) {
+      posted.push({ msg, transfer });
+      if (msg.id !== undefined) setImmediate(() => this.onmessage({ data: { id: msg.id, result: true } }));
+    }
+    terminate() { this.terminated = true; }
+  }
+  const wh = createMachine({ base: 'https://x.example/', config: { name: 'web', filesystem: { json: 'f', baseurl: 'b' } }, transport: 'worker', Worker: FakeWorker, scripts: { worker: 'w.js', core: [] } });
+  const said = [];
+  wh.on('link', (e) => said.push(e));
+  await wh.boot('s');
+  w.onmessage({ data: { event: 'link', payload: { cid: 7, kind: 'open', runtime: 'supabase', port: 5432 } } });
+  assert.deepEqual(said, [{ cid: 7, kind: 'open', runtime: 'supabase', port: 5432 }]);
+  const own = new TextEncoder().encode('rows');
+  await wh.linkIn(7, 'data', own);
+  let p = posted.at(-1);
+  assert.equal(p.msg.op, 'linkIn');
+  assert.deepEqual(p.msg.args.slice(0, 2), [7, 'data']);
+  assert.equal(p.transfer[0], own.buffer, 'a buffer of its own: handed over as it is');
+  const view = new TextEncoder().encode('xxrowsxx').subarray(2, 6);
+  await wh.linkIn(7, 'data', view);
+  p = posted.at(-1);
+  assert.notEqual(p.transfer[0], view.buffer, 'a view: a copy handed over, the rest of its buffer kept');
+  assert.equal(new TextDecoder().decode(p.msg.args[2]), 'rows');
+  await wh.linkIn(7, 'close');
+  assert.deepEqual(posted.at(-1).msg.args, [7, 'close']);
+  // The worker crashes: every link connection of its guest is said over
+  w.onerror({ message: 'boom', preventDefault() {} });
+  assert.deepEqual(said.at(-1), { kind: 'gone' });
+  await assert.rejects(wh.linkIn(7, 'connect'), /not running/);
+});
+
+test('links over TCP: the worker hands a link event\'s bytes over and takes linkIn', () => {
+  const src = require('node:fs').readFileSync(require.resolve('./machine-worker.js'), 'utf8');
+  const posted = [];
+  const self = { postMessage: (m, t) => posted.push([m, t]), location: { origin: 'https://x.example' } };
+  const run = new Function('self', 'importScripts', `${src}; return { emit, OPS };`);
+  const { emit, OPS } = run(self, () => {});
+  assert.ok(OPS.has('linkIn'));
+  const bytes = new Uint8Array([1, 2, 3]);
+  emit('link', { cid: 1, kind: 'data', bytes });
+  assert.equal(posted[0][1][0], bytes.buffer);
+  emit('link', { cid: 1, kind: 'close' });
+  assert.equal(posted[1][1], undefined);
+});
+
+// ------------------------------------------------------------------ a guest's WebSocket to a link's name
+
+test('links: a guest\'s own WebSocket to a link\'s name (armless\'s event 10, ports 80 and 443) is spoken by the machine over the link\'s connection', async () => {
+  const WsC = require('./ws-client.js');
+  const { server } = require('./ws-test-server.cjs');
+  const settle = async () => { for (let i = 0; i < 10; i++) await tick(); };
+  const links = [];
+  let sv = null;
+  let core;
+  // The page's side, as orchestrator.js's linkOpen: connect, then bytes both ways
+  const page = (p) => {
+    links.push(p.bytes ? { ...p, bytes: p.bytes.length } : p);
+    if (p.kind === 'open') {
+      if (!sv) return core.linkIn(p.cid, 'close'); // nothing listens
+      sv.stream.ondata = (b) => core.linkIn(p.cid, 'data', b);
+      sv.stream.onclose = () => core.linkIn(p.cid, 'close');
+      sv.stream.onend = () => core.linkIn(p.cid, 'end');
+      core.linkIn(p.cid, 'connect').then(() => sv.stream.onconnect?.());
+      sv.stream.onconnect = null;
+    } else if (p.kind === 'data') sv._in(Buffer.from(p.bytes));
+    else if (p.kind === 'end') sv.clientEnded = true;
+    else if (p.kind === 'close') sv.aborted = true;
+  };
+  const real = [];
+  class RealWS { constructor(...a) { this.args = a; real.push(this); } }
+  core = new MC.Core({ config: { network: { tls: 't', tunnels: [{ host: 'feed.internal', port: 9200, url: MC.linkUrl('python', 9200) }] },
+    links: { 'feed.internal': { runtime: 'python', port: 9200 } }, link_base: 'https://x.example/fleet/', filesystem: { json: 'f', baseurl: 'b' } },
+  Armless: LinkArmless, agent: null, emit: (e, p) => e === 'link' && page(p) });
+  core.WebSocket = RealWS;
+  await core.boot('s');
+  core.run();
+  const WS = LinkArmless.last.options.network.WebSocket;
+
+  // As armless's _websocket opens one: the url the guest asked for, and its protocols
+  sv = server({ protocol: (offered) => offered.includes('chat') ? 'chat' : undefined, echo: true });
+  const ws = new WS('ws://feed.internal/socket?vsn=1', ['chat']);
+  assert.ok(ws instanceof WsC.WebSocketClient, 'spoken here, not the real WebSocket');
+  ws.binaryType = 'arraybuffer';
+  const heard = [];
+  ws.onopen = () => heard.push(['open', ws.protocol]);
+  ws.onmessage = ({ data }) => heard.push(['message', typeof data === 'string' ? data : new Uint8Array(data).join()]);
+  ws.onclose = ({ code, wasClean }) => heard.push(['close', code, wasClean]);
+  await settle();
+  assert.deepEqual(links[0], { cid: 1, kind: 'open', runtime: 'python', port: 9200 }, 'a link connection to the port the name links to');
+  assert.equal(sv.head.line, 'GET /socket?vsn=1 HTTP/1.1');
+  assert.equal(sv.head.headers.host, 'feed.internal', 'the name the guest asked for');
+  assert.equal(sv.head.headers['sec-websocket-protocol'], 'chat');
+  assert.deepEqual(heard, [['open', 'chat']]);
+  ws.send('hello');
+  ws.send(new Uint8Array([1, 2, 3]));
+  await settle();
+  assert.deepEqual(heard.slice(1), [['message', 'hello'], ['message', '1,2,3']], 'echoed by the server in the other machine');
+  // The server closes: a clean close for the guest
+  sv.close(1000, 'bye');
+  await settle();
+  assert.deepEqual(heard.at(-1), ['close', 1000, true]);
+  assert.equal(core.links.size, 0, 'nothing kept');
+
+  // On an https page armless asks for wss:, and a port may be named: the same link, the same server
+  sv = server({ echo: true });
+  const s2 = new WS('wss://feed.internal:443/x', []);
+  await new Promise((r) => { s2.onopen = r; });
+  assert.deepEqual(links.filter((l) => l.kind === 'open').at(-1), { cid: 2, kind: 'open', runtime: 'python', port: 9200 });
+  assert.equal(sv.head.headers.host, 'feed.internal', 'a default port is left out, as a browser does');
+  s2.close();
+  await settle();
+  assert.equal(s2.readyState, WS.CLOSED);
+
+  // Nothing listens there: error and close 1006, as a refused WebSocket
+  sv = null;
+  const s3 = new WS('ws://feed.internal/', []);
+  const said = [];
+  s3.onerror = () => said.push('error');
+  s3.onclose = ({ code }) => said.push(code);
+  await settle();
+  assert.deepEqual(said, ['error', 1006]);
+
+  // Another name, and a link's tunnel url with protocols: the real WebSocket
+  assert.ok(new WS('ws://example.com/', []) instanceof RealWS);
+  assert.ok(new WS('ws://feed.internal.example.com/', []) instanceof RealWS);
+  assert.ok(new WS(MC.linkUrl('python', 9200), []) instanceof RealWS);
+  assert.equal(MC.wsLinked('http://feed.internal/', { 'feed.internal': { runtime: 'python', port: 9200 } }), null, 'only ws: and wss:');
+  assert.equal(MC.wsLinked('ws://constructor/', Object.create(null)), null);
+
+  // The machine going: the guest's WebSocket hears nothing more, the page lets go
+  sv = server();
+  const s4 = new WS('ws://feed.internal/', []);
+  await new Promise((r) => { s4.onopen = r; });
+  core.destroy();
+  assert.equal(links.at(-1).kind, 'close');
+});
+
+test('links: a machine with names but no tunnels still speaks a guest\'s WebSocket to them', async () => {
+  const core = new MC.Core({ config: { network: { tls: 't' }, links: { 'feed.internal': { runtime: 'python', port: 80 } }, filesystem: { json: 'f', baseurl: 'b' } }, Armless: LinkArmless, agent: null });
+  await core.boot('s');
+  assert.equal(typeof LinkArmless.last.options.network.WebSocket, 'function');
 });

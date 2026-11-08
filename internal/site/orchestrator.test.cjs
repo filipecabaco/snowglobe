@@ -16,7 +16,7 @@ const manifest = {
 };
 
 // Hosts that pretend: each boot, capture and job is logged; a job ends when the test says so
-function setup({ budget = 2, confirm = true, man = manifest, options = {} } = {}) {
+function setup({ budget = 2, confirm = true, man = manifest, options = {}, tcp = null } = {}) {
   const log = [];
   const activity = [];
   let asked = 0;
@@ -37,7 +37,15 @@ function setup({ budget = 2, confirm = true, man = manifest, options = {} } = {}
         log.push(`capture ${config.name}`);
         return { encoding: 'raw', state: new Blob([`saved-${config.name}`]) };
       },
-      destroy: async () => { if (h.alive) log.push(`end ${config.name}`); h.alive = false; },
+      // As machine-host.js's: its guest's link connections are said over when it ends
+      destroy: async () => { if (h.alive) log.push(`end ${config.name}`); h.alive = false; h.emit('link', { kind: 'gone' }); },
+      // What the page said to its guest's link connections: [cid, kind, text?]
+      linked: [],
+      linkIn: async (cid, kind, bytes) => {
+        h.linked.push(bytes ? [cid, kind, new TextDecoder().decode(bytes)] : [cid, kind]);
+        if (!h.alive) throw new Error('the machine is not running');
+        return true;
+      },
       memory: async () => ({ wasmBytes: 600 << 20 }),
       jobs,
       runCommand: async ({ command, files }) => {
@@ -58,6 +66,7 @@ function setup({ budget = 2, confirm = true, man = manifest, options = {} } = {}
       // A server on port 4173 (and 54321) answers; nothing else listens
       tcpOpen: (port) => {
         log.push(`connect ${config.name}:${port}`);
+        if (tcp) return tcp(port, h);
         const c = { write: (b) => {
           if (!new TextDecoder().decode(b).endsWith('\r\n\r\n')) return;
           setImmediate(() => { c.ondata(new TextEncoder().encode(`HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok`)); c.onclose(); });
@@ -92,7 +101,7 @@ test('nothing boots until a command needs it; each machine is its site, in a wor
   assert.equal(h.config.wasm, 'https://x.example/snowglobe/python/armless/armless.wasm', 'one armless for all of them');
   assert.equal(h.config.filesystem.baseurl, 'https://blobs.example/');
   assert.deepEqual(h.scripts.core, ['https://x.example/snowglobe/python/armless/armless.js', 'https://x.example/snowglobe/agent/sessions.js',
-    'https://x.example/snowglobe/agent/agent.js', 'https://x.example/snowglobe/agent/transfer.js', 'https://x.example/snowglobe/agent/machine-core.js']);
+    'https://x.example/snowglobe/agent/agent.js', 'https://x.example/snowglobe/agent/transfer.js', 'https://x.example/snowglobe/agent/ws-client.js', 'https://x.example/snowglobe/agent/machine-core.js']);
   assert.equal(api._status('duckdb').state, 'busy');
   await assert.rejects(api.runCommand({ runtime: 'duckdb', command: 'x' }), /busy: job .* one job at a time in each machine/);
   await assert.rejects(api.runCommand({ runtime: 'nope', command: 'x' }), /no runtime "nope"; these are: python, duckdb, postgres/);
@@ -216,7 +225,7 @@ test('panel: each run is tagged with the runtime it ran in; a copy is a run too,
   assert.equal(e.result.textContent, 'Copied');
   assert.equal(e.output.textContent, 'Copied 3 bytes.');
   assert.deepEqual(drawn.at(-1), ['python → duckdb:copied', 'duckdb:exited']);
-  assert.equal(P.idleText({ state: 'suspended', fresh: true }), 'Asleep, with nothing saved. Run starts it from the machine as built (a few seconds).');
+  assert.equal(P.idleText({ state: 'suspended', fresh: true }), 'Asleep. Run starts it.');
 });
 
 // ------------------------------------------------------------------ failures, consent, the limit
@@ -897,4 +906,502 @@ test("the guest's fetch drops npm's and the cache's hints, so a registry GET nee
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test('links: a machine reads its names when it wakes, and the page answers its target without a preview', async () => {
+  const { api, log, hosts } = setup({ man: appManifest, options: { isolated: true } });
+  const ask = async (req) => { const sent = []; await api.previewRequest({ method: 'GET', path: '/', headers: [], prefix: '/p', origin: 'https://x.example', ...req }, (m) => sent.push(m)); return sent; };
+  // Declared before anything wakes: nothing to suspend
+  assert.deepEqual(await api.setLinks([{ from: 'web', to: 'supabase', port: 54321, as: 'db.internal' }]), []);
+  await api.wake('web');
+  const cfg = hosts.find((h) => h.config.name === 'web').config;
+  assert.deepEqual({ ...cfg.links }, { 'db.internal': { runtime: 'supabase', port: 54321 } });
+  assert.equal(cfg.link_base, 'https://x.example/snowglobe/agent/', 'the page directory');
+  // supabase has no other machine's names; python (no link) has none
+  await api.runCommand({ runtime: 'supabase', command: 'true' }); // the person's yes, as a click gives it
+  assert.equal(hosts.find((h) => h.config.name === 'supabase').config.links, undefined);
+
+  // The target's port is answered with no preview open (the machine is woken and asked); another port and machine are not
+  let sent = await ask({ runtime: 'supabase', port: 54321 });
+  assert.notEqual(sent[0].status, 403);
+  sent = await ask({ runtime: 'supabase', port: 5432 });
+  assert.equal(sent[0].status, 403);
+  sent = await ask({ runtime: 'web', port: 54321 });
+  assert.equal(sent[0].status, 403);
+
+  // Changing the links suspends the machine that was awake with other names (it reads them at its next wake)
+  const before = log.length;
+  assert.deepEqual(await api.setLinks([]), ['web']);
+  assert.ok(log.slice(before).some((l) => l === 'capture web'));
+  sent = await ask({ runtime: 'supabase', port: 54321 });
+  assert.equal(sent[0].status, 403, 'the target is no longer one');
+  // The same links again change nothing
+  await api.setLinks([{ from: 'web', to: 'supabase', port: 54321, as: 'db.internal' }]);
+  assert.deepEqual(await api.setLinks([{ from: 'web', to: 'supabase', port: 54321, as: 'db.internal' }]), []);
+});
+
+test('links: refused with the reason', async () => {
+  const { api } = setup({ man: appManifest, options: { isolated: true } });
+  const l = (o) => api.setLinks([{ from: 'web', to: 'supabase', port: 80, as: 'x.internal', ...o }]);
+  await assert.rejects(l({ to: 'web' }), /link to itself/);
+  await assert.rejects(l({ from: 'python' }), /python has no network device/);
+  await assert.rejects(l({ to: 'duckdb' }), /no such|duckdb/i);
+  await assert.rejects(l({ port: 0 }), /port/);
+  await assert.rejects(l({ as: '10.0.0.1' }), /host name/);
+  await assert.rejects(l({ as: 'a b' }), /host name/);
+  await assert.rejects(l({ from: 'nope' }), /nope/);
+  await assert.rejects(api.setLinks('x'), /setLinks/);
+  // A refusal changes nothing: no link is a target
+  const sent = [];
+  await api.previewRequest({ method: 'GET', path: '/', headers: [], prefix: '/p', origin: 'https://x.example', runtime: 'supabase', port: 80 }, (m) => sent.push(m));
+  assert.equal(sent[0].status, 403);
+});
+
+// ------------------------------------------------------------------ raw TCP over links
+
+// Connections into a machine that the test drives: each is { port, written, ended, aborted }, and
+// the test calls its onconnect, ondata, onend, onclose and onerror
+function streams() {
+  const all = [];
+  const tcp = (port, h) => {
+    const c = { port, machine: h.config.name, written: [], ended: false, aborted: 0, writeResult: null,
+      write(b) { c.written.push(new TextDecoder().decode(b)); return c.writeResult ?? Promise.resolve(true); },
+      end() { c.ended = true; }, abort() { c.aborted++; } };
+    all.push(c);
+    return c;
+  };
+  return { all, tcp };
+}
+const enc = (s) => new TextEncoder().encode(s);
+const dbLink = { from: 'web', to: 'supabase', port: 5432, as: 'db.internal' };
+
+/** web awake with its links, the person's yes given, and web's host */
+async function linked(o = {}) {
+  const st = streams();
+  const s = setup({ man: appManifest, options: { isolated: true }, tcp: st.tcp, ...o });
+  await s.api.setLinks(o.links ?? [dbLink]);
+  await s.api.runCommand({ runtime: 'web', command: 'true' }); // wakes it, and the person's yes
+  s.host('web').finish(s.api._get('web').job, '');
+  await settle();
+  return { ...s, st, web: s.host('web') };
+}
+
+test('links over TCP: each link is a tunnel in its machine\'s config; as_port is checked like port, and HTTP to a name goes to its first link', async () => {
+  const { api, hosts } = setup({ man: appManifest, options: { isolated: true } });
+  await api.setLinks([{ from: 'web', to: 'supabase', port: 54321, as: 'db.internal' }, { ...dbLink, as_port: 6543 }, { from: 'web', to: 'supabase', port: 5432, as: 'pg.internal' }]);
+  await api.wake('web');
+  const cfg = hosts.find((h) => h.config.name === 'web').config;
+  assert.deepEqual(cfg.network.tunnels, [
+    { host: 'db.internal', port: 54321, url: 'wss://link.invalid/supabase/54321' },
+    { host: 'db.internal', port: 6543, url: 'wss://link.invalid/supabase/5432' },
+    { host: 'pg.internal', port: 5432, url: 'wss://link.invalid/supabase/5432' }]);
+  assert.equal(cfg.network.tls, 'system/tls.json', 'the rest of its network as it was');
+  assert.deepEqual({ ...cfg.links }, { 'db.internal': { runtime: 'supabase', port: 54321 }, 'pg.internal': { runtime: 'supabase', port: 5432 } });
+  // The url is what machine-core.js recognises
+  const { parseLinkUrl, linkUrl } = require('./machine-core.js');
+  assert.deepEqual(parseLinkUrl(cfg.network.tunnels[1].url), { runtime: 'supabase', port: 5432 });
+  assert.equal(linkUrl('supabase', 5432), cfg.network.tunnels[1].url);
+  const l = (o) => api.setLinks([{ ...dbLink, ...o }]);
+  await assert.rejects(l({ as_port: 0 }), /as_port/);
+  await assert.rejects(l({ as_port: 70000 }), /as_port/);
+  await assert.rejects(l({ as_port: 1.5 }), /as_port/);
+  await assert.rejects(l({ as_port: 'x' }), /as_port/);
+  await assert.rejects(api.setLinks([dbLink, { ...dbLink, port: 5433, as_port: 5432 }]), /db\.internal:5432 twice/);
+  // Changing only an as_port is a change: the awake machine is suspended for it
+  assert.deepEqual(await api.setLinks([{ from: 'web', to: 'supabase', port: 54321, as: 'db.internal' }, { ...dbLink, as_port: 6544 }, { from: 'web', to: 'supabase', port: 5432, as: 'pg.internal' }]), ['web']);
+});
+
+test('links over TCP: open, connect, bytes both ways, the guest\'s half-close, the server\'s end; the machine reached is woken, held awake while open, and let go after', async () => {
+  const { api, st, web, log } = await linked();
+  const sb = api._get('supabase');
+  assert.equal(sb.lifecycle.state, 'suspended');
+  web.emit('link', { cid: 1, kind: 'open', runtime: 'supabase', port: 5432 });
+  assert.equal(sb.busy(), true, 'held from the moment it is asked for');
+  await settle();
+  assert.equal(sb.lifecycle.state, 'running', 'woken for it');
+  assert.ok(log.includes('connect supabase:5432'));
+  const c = st.all[0];
+  assert.deepEqual(web.linked, [], 'nothing said to the guest before the server accepts');
+  c.onconnect();
+  await settle();
+  assert.deepEqual(web.linked, [[1, 'connect']]);
+  web.emit('link', { cid: 1, kind: 'data', bytes: enc('SELECT 1') });
+  c.ondata(enc('row 1'));
+  await settle();
+  assert.deepEqual(c.written, ['SELECT 1']);
+  assert.deepEqual(web.linked.at(-1), [1, 'data', 'row 1']);
+  assert.deepEqual(api._describe(sb).linkConnections, { in: 1, out: 0 });
+  assert.equal(api._describe(sb).doing, 'serving 1 link connection');
+  assert.deepEqual(api._describe(api._get('web')).linkConnections, { in: 0, out: 1 });
+  assert.equal(await api.suspend('supabase'), false, 'not suspended while a connection is open');
+  // The guest finished sending: the server reads its end, and still answers
+  web.emit('link', { cid: 1, kind: 'end' });
+  assert.equal(c.ended, true);
+  c.ondata(enc('bye'));
+  await settle();
+  assert.deepEqual(web.linked.at(-1), [1, 'data', 'bye']);
+  // The server finished too: the guest is told, the page's side ends, and the close lets go
+  c.onend();
+  assert.deepEqual(web.linked.at(-1), [1, 'end']);
+  assert.equal(sb.busy(), true, 'held until the server closes');
+  c.onclose();
+  await settle();
+  assert.deepEqual(web.linked.at(-1), [1, 'end'], 'nothing more said: the guest\'s side is closed already');
+  assert.equal(c.aborted, 0, 'closed cleanly, not aborted');
+  assert.equal(sb.busy(), false);
+  assert.deepEqual(api._describe(sb).linkConnections, { in: 0, out: 0 });
+  assert.equal(await api.suspend('supabase'), true);
+  // What comes for a connection that is over is dropped
+  web.emit('link', { cid: 1, kind: 'data', bytes: enc('late') });
+  assert.equal(c.written.length, 1);
+});
+
+test('links over TCP: nothing listening refuses the guest; a server that closes is a close; an abort of a half-open attempt lets go', async () => {
+  const { api, st, web } = await linked();
+  const sb = api._get('supabase');
+  web.emit('link', { cid: 1, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  st.all[0].onclose(); // a close with no connect: nothing listens on 5432
+  await settle();
+  assert.deepEqual(web.linked, [[1, 'close']]);
+  assert.equal(sb.busy(), false);
+  assert.equal(st.all[0].aborted, 0);
+
+  web.emit('link', { cid: 2, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  st.all[1].onconnect();
+  st.all[1].onclose();
+  await settle();
+  assert.deepEqual(web.linked.slice(1), [[2, 'connect'], [2, 'close']]);
+  assert.equal(sb.busy(), false);
+
+  // The guest gives up on its SYN before the server accepts: b's side aborted, nothing held
+  web.emit('link', { cid: 3, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  web.emit('link', { cid: 3, kind: 'close' });
+  assert.equal(st.all[2].aborted, 1);
+  assert.equal(sb.busy(), false);
+  st.all[2].onconnect(); // too late: nothing said
+  await settle();
+  assert.equal(web.linked.filter(([cid]) => cid === 3).length, 0);
+  // And while the machine it reaches still wakes
+  await api.suspend('supabase');
+  web.emit('link', { cid: 4, kind: 'open', runtime: 'supabase', port: 5432 });
+  web.emit('link', { cid: 4, kind: 'close' });
+  await settle();
+  assert.equal(sb.busy(), false);
+  assert.equal(st.all.length, 3, 'no connection made for it');
+});
+
+test('links over TCP: only the machine\'s own declared links, once the person allowed the page; a worker\'s forged runtime or port is refused', async () => {
+  const { api, st, web, host, log } = await linked({ links: [dbLink, { from: 'web', to: 'supabase', port: 54321, as: 'api.internal' }] });
+  const open = (h, cid, runtime, port) => h.emit('link', { cid, kind: 'open', runtime, port });
+  open(web, 1, 'supabase', 5433); // a port it has no link to
+  open(web, 2, 'python', 5432); // a machine it has no link to
+  open(web, 3, 'web', 5432); // itself
+  open(web, 4, 'nope', 5432);
+  open(web, 5, 'supabase', '5432'); // not a number
+  open(web, 1.5, 'supabase', 5432); // not a connection id
+  await settle();
+  assert.deepEqual(web.linked, [[1, 'close'], [2, 'close'], [3, 'close'], [4, 'close'], [5, 'close']]);
+  assert.equal(st.all.length, 0);
+  assert.ok(!log.some((l) => l.startsWith('boot supabase')), 'nothing woken for them');
+  // supabase is a link target (of web's), but supabase itself declared none: its guest can't use web's
+  await api.wake('supabase');
+  open(host('supabase'), 1, 'supabase', 5432);
+  await settle();
+  assert.deepEqual(host('supabase').linked, [[1, 'close']]);
+  // A host that is no longer the machine's (put away) is refused too
+  await api.suspend('web');
+  open(web, 7, 'supabase', 5432);
+  await settle();
+  assert.deepEqual(web.linked.at(-1), [7, 'close']);
+
+  // Not allowed yet: refused
+  const st2 = streams();
+  let yes = false;
+  const s = setup({ man: appManifest, options: { isolated: true, granted: () => yes }, tcp: st2.tcp });
+  await s.api.setLinks([dbLink]);
+  await s.api.wake('web');
+  s.host('web').emit('link', { cid: 1, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  assert.deepEqual(s.host('web').linked, [[1, 'close']]);
+  yes = true;
+  s.host('web').emit('link', { cid: 2, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  assert.equal(st2.all.length, 1);
+});
+
+test('links over TCP: at most 64 at once over one link; the 65th is refused, and one more is taken once one closes', async () => {
+  const { api, st, web } = await linked();
+  for (let cid = 1; cid <= 65; cid++) web.emit('link', { cid, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  assert.deepEqual(web.linked, [[65, 'close']]);
+  assert.equal(api._get('supabase').linksIn, 64);
+  // The same cid again is not a second connection
+  web.emit('link', { cid: 3, kind: 'open', runtime: 'supabase', port: 5432 });
+  assert.equal(api._get('supabase').linksIn, 64);
+  st.all[0].onclose();
+  web.emit('link', { cid: 66, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  assert.equal(api._get('supabase').linksIn, 64);
+  assert.ok(!web.linked.some(([cid]) => cid === 66));
+});
+
+test('links over TCP: the connecting machine going ends its connections; the machine reached going tells the guest', async () => {
+  const { api, st, web } = await linked();
+  const sb = api._get('supabase');
+  web.emit('link', { cid: 1, kind: 'open', runtime: 'supabase', port: 5432 });
+  web.emit('link', { cid: 2, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  st.all[0].onconnect();
+  await settle();
+  // web is suspended (its worker ended): supabase's side of both is aborted, and let go
+  assert.equal(await api.suspend('web'), true);
+  assert.deepEqual(st.all.map((c) => c.aborted), [1, 1]);
+  assert.equal(sb.busy(), false);
+  assert.deepEqual(api._describe(api._get('web')).linkConnections, { in: 0, out: 0 });
+  web.emit('link', { kind: 'gone' }); // said again: nothing more
+  assert.deepEqual(st.all.map((c) => c.aborted), [1, 1]);
+
+  // supabase goes under an open connection (it fails): the guest hears an error, nothing is held
+  await api.wake('web');
+  const w2 = api._get('web').host;
+  w2.emit('link', { cid: 1, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  const c = st.all.at(-1);
+  c.onconnect();
+  await settle();
+  sb.lifecycle.failed(new Error('boom'));
+  c.onerror(new Error('the machine was put away')); // as its host's streams do when it ends
+  await settle();
+  assert.deepEqual(w2.linked.at(-1), [1, 'error']);
+  assert.equal(sb.linksIn, 0);
+  assert.equal(api._get('web').linksOut, 0);
+  assert.equal(c.aborted, 0, 'nothing to abort: it is gone');
+});
+
+test('links over TCP: a machine reached that can\'t wake refuses the guest; bytes the other side doesn\'t take are bounded', async () => {
+  // supabase needs the page isolated: it can't wake here
+  const st0 = streams();
+  const s = setup({ man: appManifest, options: { isolated: false }, tcp: st0.tcp });
+  await s.api.setLinks([dbLink]);
+  await s.api.runCommand({ runtime: 'web', command: 'true' });
+  s.host('web').emit('link', { cid: 1, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  assert.deepEqual(s.host('web').linked, [[1, 'error']]);
+  assert.equal(s.api._get('supabase').busy(), false);
+
+  const { api, st, web } = await linked();
+  web.emit('link', { cid: 1, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  const c = st.all[0];
+  c.onconnect();
+  await settle();
+  // The server takes nothing: its writes never finish
+  c.writeResult = new Promise(() => {});
+  const chunk = new Uint8Array(1 << 20);
+  for (let i = 0; i < 8; i++) web.emit('link', { cid: 1, kind: 'data', bytes: chunk });
+  assert.equal(c.aborted, 0, '8 MiB on their way: still open');
+  web.emit('link', { cid: 1, kind: 'data', bytes: chunk });
+  assert.equal(c.aborted, 1, 'past 8 MiB: closed');
+  assert.deepEqual(web.linked.at(-1), [1, 'error']);
+  assert.equal(api._get('supabase').busy(), false);
+  // Written and taken: never counted against it
+  web.emit('link', { cid: 2, kind: 'open', runtime: 'supabase', port: 5432 });
+  await settle();
+  st.all[1].onconnect();
+  await settle();
+  for (let i = 0; i < 20; i++) { web.emit('link', { cid: 2, kind: 'data', bytes: chunk }); await settle(); }
+  assert.equal(st.all[1].aborted, 0);
+  assert.equal(st.all[1].written.length, 20);
+});
+
+// ---------------------------------------------------------------- WebSockets from the preview's pages
+
+globalThis.SnowglobeWsClient = require('./ws-client.js');
+const { server: wsServer } = require('./ws-test-server.cjs');
+const sbSocket = 'https://x.example/snowglobe/agent/preview/supabase/54321/realtime/v1/websocket?apikey=anon&vsn=1.0.0';
+
+/** The page's end of a preview socket's MessageChannel: what it said, and the shim's side to talk. */
+function channel() {
+  const said = [];
+  const p = {
+    said, closed: false, onmessage: null,
+    postMessage(msg, transfer) { said.push({ ...msg, transferred: transfer?.length ? transfer : undefined }); },
+    close() { p.closed = true; },
+    shim(data) { p.onmessage?.({ data }); },
+    types: () => said.map((m) => m.type),
+  };
+  return p;
+}
+
+/** A setup whose machines' port 54321 is a WebSocket server (a new one per connection: `servers`). */
+function socketSetup(o = {}, serverOpts = { echo: true }) {
+  const servers = [];
+  const s = setup({ man: appManifest, options: { isolated: true, ...o }, tcp: (port, h) => {
+    if (port !== 54321) {
+      const c = { write: (b) => { if (new TextDecoder().decode(b).endsWith('\r\n\r\n')) setImmediate(() => { c.ondata(new TextEncoder().encode('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok')); c.onclose(); }); }, end() {}, abort() {} };
+      setImmediate(() => (port === 4173 ? c.onconnect() : c.onclose()));
+      return c;
+    }
+    const sv = wsServer(typeof serverOpts === 'function' ? serverOpts(servers.length) : serverOpts);
+    sv.host = h;
+    servers.push(sv);
+    return sv.connect();
+  } });
+  return { ...s, servers };
+}
+
+test('preview sockets: refused with the reason (no preview, not allowed, not a preview address, bad protocols), and nothing woken for them', async () => {
+  let allowed = false;
+  const { api, log } = socketSetup({ granted: () => allowed });
+  let p = channel();
+  api.previewSocket({ url: sbSocket, protocols: [] }, p);
+  assert.deepEqual(p.types(), ['taken', 'error', 'close']);
+  assert.match(p.said[1].message, /no preview is open/);
+  assert.deepEqual(p.said[2], { type: 'close', code: 1006, reason: '', wasClean: false, transferred: undefined });
+  assert.equal(p.closed, true);
+
+  await api.openPreview({ runtime: 'web', port: 4173 }, { check: false });
+  p = channel();
+  api.previewSocket({ url: sbSocket }, p);
+  assert.match(p.said[1].message, /hasn't allowed/);
+  allowed = true;
+  for (const [url, re] of [['https://evil.example/snowglobe/agent/preview/supabase/54321/', /not an address under this page's preview/],
+    ['https://x.example/snowglobe/other/preview/supabase/54321/', /not an address under/], ['https://x.example/snowglobe/agent/preview/supabase/0/', /not a port/],
+    ['https://x.example/snowglobe/agent/preview/nosuch/54321/', /no runtime "nosuch"/], ['https://x.example/snowglobe/agent/preview/python/80/', /no network device/], [42, /not an address/]]) {
+    p = channel();
+    api.previewSocket({ url }, p);
+    assert.deepEqual(p.types(), ['taken', 'error', 'close'], String(url));
+    assert.match(p.said[1].message, re);
+  }
+  p = channel();
+  api.previewSocket({ url: sbSocket, protocols: ['a b'] }, p);
+  assert.match(p.said[1].message, /not a subprotocol/);
+  assert.ok(!log.some((l) => /boot supabase/.test(l)), 'supabase never woken');
+  await api.closePreview();
+});
+
+test('preview sockets: the WebSocket spoken by the page over a TCP connection into the machine; messages both ways, decoded; the machine held while open, let go after', async () => {
+  const { api, servers, log } = socketSetup();
+  await api.openPreview({ runtime: 'web', port: 4173 });
+  const p = channel();
+  api.previewSocket({ url: sbSocket, protocols: ['phoenix'] }, p);
+  await settle();
+  assert.ok(log.includes('connect supabase:54321'), 'supabase woken and connected to');
+  const sv = servers[0];
+  assert.equal(sv.head.line, 'GET /realtime/v1/websocket?apikey=anon&vsn=1.0.0 HTTP/1.1');
+  assert.equal(sv.head.headers.host, 'localhost:54321', 'a Host on the machine, as the preview\'s HTTP has');
+  assert.equal(sv.head.headers.origin, 'https://x.example', 'the page\'s origin');
+  assert.equal(sv.head.headers['sec-websocket-protocol'], 'phoenix');
+  assert.deepEqual(p.types(), ['taken', 'open']);
+  assert.equal(p.said[1].protocol, 'phoenix');
+  const sb = api._get('supabase');
+  assert.deepEqual([...sb.previews.entries()], [[54321, 'linked']], 'held as a preview request that was answered');
+  assert.equal(sb.busy(), true);
+
+  p.shim({ type: 'send', data: '{"event":"heartbeat","topic":"phoenix","ref":"1"}', n: 0 });
+  const bin = new Uint8Array([1, 2, 3]).buffer;
+  p.shim({ type: 'send', data: bin, n: 3 });
+  p.shim({ type: 'send', data: { not: 'data' }, n: 1 });
+  await settle();
+  assert.deepEqual(sv.received.map((r) => (typeof r === 'string' ? r : [...r].join())), ['{"event":"heartbeat","topic":"phoenix","ref":"1"}', '1,2,3']);
+  const messages = p.said.filter((m) => m.type === 'message');
+  assert.equal(messages[0].data, '{"event":"heartbeat","topic":"phoenix","ref":"1"}');
+  assert.ok(messages[1].data instanceof ArrayBuffer);
+  assert.equal(messages[1].transferred[0], messages[1].data, 'binary handed over, not copied');
+  assert.deepEqual(p.said.filter((m) => m.type === 'sent').map((m) => m.n), [49, 3], 'what the machine took: the shim\'s bufferedAmount');
+
+  p.shim({ type: 'close', code: 1000, reason: 'bye' });
+  await settle();
+  assert.deepEqual(sv.gotClose, { code: 1000, reason: 'bye' });
+  assert.deepEqual(p.said.at(-1), { type: 'close', code: 1000, reason: 'bye', wasClean: true, transferred: undefined });
+  assert.equal(p.closed, true);
+  assert.equal(sb.inflight.size, 0, 'not counted any more');
+  await api.closePreview();
+  assert.equal(sb.busy(), false);
+});
+
+test('preview sockets: closing the preview closes them (1001); a page that goes away, before or after it connected; a machine that goes away under one', async () => {
+  const { api, servers } = socketSetup();
+  await api.openPreview({ runtime: 'web', port: 4173 });
+  const a = channel();
+  api.previewSocket({ url: sbSocket }, a);
+  await settle();
+  assert.deepEqual(a.types(), ['taken', 'open']);
+  await api.closePreview();
+  await settle();
+  assert.equal(servers[0].gotClose.code, 1001, 'going away');
+  assert.deepEqual(a.said.at(-1).type, 'close');
+  assert.equal(api._get('supabase').inflight.size, 0);
+
+  await api.openPreview({ runtime: 'web', port: 4173 });
+  const b = channel();
+  api.previewSocket({ url: sbSocket }, b);
+  b.shim({ type: 'gone' }); // before it connected
+  await settle();
+  assert.deepEqual(b.types(), ['taken', 'error', 'close']);
+  assert.match(b.said[1].message, /went away/);
+  const c = channel();
+  api.previewSocket({ url: sbSocket }, c);
+  await settle();
+  c.shim({ type: 'gone' });
+  await settle();
+  assert.equal(servers.at(-1).gotClose.code, 1001);
+  assert.equal(c.said.at(-1).type, 'close');
+
+  const d = channel();
+  api.previewSocket({ url: sbSocket }, d);
+  await settle();
+  servers.at(-1).fail(new Error('the machine was put away'));
+  await settle();
+  assert.deepEqual(d.types().slice(-2), ['error', 'close']);
+  assert.match(d.said.at(-2).message, /supabase's port 54321: the machine was put away/);
+  assert.equal(d.said.at(-1).code, 1006);
+  assert.equal(api._get('supabase').inflight.size, 0, 'every one let go');
+  await api.closePreview();
+});
+
+test('preview sockets: at most 32 at once; bytes the machine doesn\'t take are bounded; a handshake the server refuses is said', async () => {
+  const { api, servers } = socketSetup({}, (i) => (i === 33 ? { respond: () => 'HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n' } : { respond: () => null }));
+  await api.openPreview({ runtime: 'web', port: 4173 });
+  const open = [];
+  for (let i = 0; i < 32; i++) {
+    const p = channel();
+    api.previewSocket({ url: sbSocket }, p);
+    open.push(p);
+  }
+  const over = channel();
+  api.previewSocket({ url: sbSocket }, over);
+  assert.match(over.said[1].message, /at most 32 WebSockets from the preview at once/);
+  await settle();
+  assert.equal(servers.length, 32, 'none connected for the 33rd');
+  await api.closePreview(); // the 32, still in their handshake, end
+  await settle();
+  assert.ok(open.every((p) => p.said.at(-1).type === 'close'));
+  await api.openPreview({ runtime: 'web', port: 4173 });
+  const refused = channel();
+  api.previewSocket({ url: sbSocket }, refused);
+  await settle();
+  // servers[33] answers 404 (servers[32], the one before, never answers its handshake)
+  const nf = channel();
+  api.previewSocket({ url: sbSocket }, nf);
+  await settle();
+  assert.match(nf.said.find((m) => m.type === 'error')?.message ?? '', /answered 404 Not Found/);
+  await api.closePreview();
+
+  const slow = socketSetup({}, { writeMs: 50 });
+  await slow.api.openPreview({ runtime: 'web', port: 4173 });
+  const s = channel();
+  slow.api.previewSocket({ url: sbSocket }, s);
+  await settle();
+  await new Promise((r) => setTimeout(r, 60));
+  s.shim({ type: 'send', data: new ArrayBuffer(9 << 20), n: 9 << 20 });
+  await settle();
+  assert.match(s.said.find((m) => m.type === 'error')?.message ?? '', /more than 8388608 bytes on their way to supabase/);
+  assert.equal(s.said.find((m) => m.type === 'close').code, 1006);
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(s.said.at(-1).type, 'close', 'nothing said after the close');
+  await slow.api.closePreview();
 });

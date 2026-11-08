@@ -147,6 +147,22 @@ func TestWriteAgentPage(t *testing.T) {
 			t.Errorf("%s not written as embedded: %v", name, err)
 		}
 	}
+	// The fleet page has the same machines and scripts beside it, and its own
+	for name, want := range FleetScripts() {
+		got, err := os.ReadFile(filepath.Join(root, FleetDir, name))
+		if err != nil || string(got) != string(want) {
+			t.Errorf("fleet/%s not written as embedded: %v", name, err)
+		}
+	}
+	for _, own := range []string{"fleet.js", "fleet-page.js"} {
+		if _, ok := AgentScripts()[own]; ok {
+			t.Errorf("%s is the fleet page's own, not the agent page's", own)
+		}
+	}
+	fleetRuntimes, _ := os.ReadFile(filepath.Join(root, FleetDir, RuntimesFile))
+	if string(fleetRuntimes) != string(data) {
+		t.Errorf("fleet/runtimes.json differs from agent/runtimes.json")
+	}
 	// The old addresses go to the page, preselecting
 	stub, _ := os.ReadFile(filepath.Join(root, AgentDir, "python", "index.html"))
 	if !strings.Contains(string(stub), `url=../?runtime=python`) || !strings.Contains(string(stub), `location.replace("../?runtime=python" + location.hash)`) {
@@ -164,7 +180,7 @@ func TestWriteAgentPage(t *testing.T) {
 	}
 
 	// The page's service worker and the preview's shared part are among its files
-	for _, f := range []string{"sw.js", "preview.js", "preview-hook.js", "inspect.js"} {
+	for _, f := range []string{"sw.js", "preview.js", "preview-hook.js", "inspect.js", "ws-client.js"} {
 		if _, err := os.Stat(filepath.Join(root, AgentDir, f)); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}
@@ -246,11 +262,24 @@ func TestWriteAgentPageRefuses(t *testing.T) {
 			t.Error("a refusal wrote something")
 		}
 	})
-	t.Run("a site named agent", func(t *testing.T) {
+	for _, dir := range []string{AgentDir, FleetDir} {
+		t.Run("a site named "+dir, func(t *testing.T) {
+			root := t.TempDir()
+			fakeSite(t, root, dir, agentRun("A", 1), "x")
+			if _, err := WriteAgentPage(root); err == nil {
+				t.Errorf("a site named %s is refused", dir)
+			}
+		})
+	}
+	t.Run("a symlinked fleet directory", func(t *testing.T) {
 		root := t.TempDir()
-		fakeSite(t, root, AgentDir, agentRun("A", 1), "x")
-		if _, err := WriteAgentPage(root); err == nil {
-			t.Error("a site named agent is refused")
+		fakeSite(t, root, "a", agentRun("A", 1), "x")
+		os.Symlink(t.TempDir(), filepath.Join(root, FleetDir))
+		if _, err := WriteAgentPage(root); err == nil || !strings.Contains(err.Error(), "symlink") {
+			t.Errorf("err %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(root, AgentDir)); err == nil {
+			t.Error("a refusal wrote something")
 		}
 	})
 	for _, name := range []string{"agent.js", "runtimes.json", "index.html", "machine-worker.js"} {
