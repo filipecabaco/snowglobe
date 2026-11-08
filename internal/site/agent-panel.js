@@ -51,13 +51,12 @@
   function idleText(st) {
     switch (st.state) {
       case "ready": return "Ready.";
-      case "booting": return "The machine is starting. Run is available once it is running.";
-      case "saving": return "Saving the workspace. Run is available again in a moment.";
-      case "busy": return `Busy: job ${st.jobId} is running. Wait for it, or cancel it.`;
-      case "suspended": return st.fresh ? "Asleep, with nothing saved. Run starts it from the machine as built (a few seconds)."
-        : `Suspended to free memory. The next command wakes it (${about(st)}).`;
-      case "suspending": return "Suspending: saving the machine's state to free its memory…";
-      case "waking": return `Waking the machine from its saved state (${about(st)})…`;
+      case "booting": return "Starting…";
+      case "saving": return "Saving…";
+      case "busy": return `Busy: job ${st.jobId}.`;
+      case "suspended": return st.fresh ? "Asleep. Run starts it." : `Asleep. The next command wakes it (${about(st)}).`;
+      case "suspending": return "Suspending…";
+      case "waking": return `Waking (${about(st)})…`;
       default: return `Unavailable: ${st.reason ?? "the machine is not running"}.`;
     }
   }

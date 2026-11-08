@@ -172,8 +172,8 @@ python3 -c 'print(6*7)' into Shell command, press Run, allow it, and tell me the
           <p>A web server in a machine shows in a frame of the page: <strong>Open preview</strong> (runtime, port, path)
             or <code>open_preview</code>. Its address is <code>/snowglobe/agent/preview/&lt;runtime&gt;/&lt;port&gt;/&lt;path&gt;</code>:
             the page's service worker hands each request there to the agent page, which opens a TCP connection to the port
-            on the machine's network address, writes the request as HTTP/1.1 and streams the answer back. HTTP only, no
-            WebSockets; a server must listen on <code>0.0.0.0</code>, not <code>localhost</code>, and pages need relative
+            on the machine's network address, writes the request as HTTP/1.1 and streams the answer back. HTTP, and the
+            WebSockets a page in the frame opens to the same address (up to 32); a server must listen on <code>0.0.0.0</code>, not <code>localhost</code>, and pages need relative
             asset paths (Vite's <code>base: "./"</code>). The page in the frame is this site's own, so it reaches every
             machine's server the same way: Supabase's API is <code>/snowglobe/agent/preview/supabase/54321</code>, the
             URL to give supabase-js. While a preview is open, its machine and every machine its page reaches stay awake.

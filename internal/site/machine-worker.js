@@ -6,14 +6,18 @@
 // worker answers { id, result } or { id, error: { name, message } }, and says what the machine
 // does as { event, payload }. TCP connections into the machine (the agent page's preview) are
 // tcpOpen(port) → an id, tcpWrite(id, bytes), tcpEnd(id) and tcpAbort(id), with what happens on
-// them as `tcp` events ({ sid, kind: connect, data, end or close, bytes }). The first op is init: the scripts to load (absolute URLs: armless.js
+// them as `tcp` events ({ sid, kind: connect, data, end or close, bytes }). The other way, TCP
+// connections the guest opens to a link's name and port start here: a `link` event ({ cid, kind:
+// open, with runtime and port; then data with bytes, end or close }), which the page answers with
+// linkIn(cid, kind: connect, data, end, close or error, bytes); bytes are handed over (transferred)
+// both ways. The first op is init: the scripts to load (absolute URLs: armless.js
 // from the machine's site, and this page's own) and the machine's configuration. Putting the
 // machine away is ending the worker: its memory goes with it.
 "use strict";
 
 let core = null;
 const OPS = new Set(["boot", "run", "input", "resize", "capture", "destroy", "memory", "runCommand", "readJob", "cancelJob", "status",
-  "readFile", "writeFile", "abort", "tcpOpen", "tcpWrite", "tcpEnd", "tcpAbort"]);
+  "readFile", "writeFile", "abort", "tcpOpen", "tcpWrite", "tcpEnd", "tcpAbort", "linkIn"]);
 
 function emit(event, payload) {
   if (event === "console" && payload instanceof Uint8Array) {
@@ -23,7 +27,7 @@ function emit(event, payload) {
     return;
   }
   // A connection's bytes (already a copy of their own), handed over
-  if (event === "tcp" && payload?.bytes instanceof Uint8Array) {
+  if ((event === "tcp" || event === "link") && payload?.bytes instanceof Uint8Array) {
     self.postMessage({ event, payload }, [payload.bytes.buffer]);
     return;
   }

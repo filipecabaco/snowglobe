@@ -461,7 +461,7 @@ test('panel: the status line follows the machine, and Run is only offered when i
   m.setState('loading');
   const p = new P.Panel(agent, els, { ask: async () => {}, jobText: A.jobText, timers: manualTimers() });
   await settle();
-  assert.equal(els.status.textContent, 'The machine is starting. Run is available once it is running.');
+  assert.equal(els.status.textContent, 'Starting…');
   assert.ok(els.run.disabled);
   assert.ok(els.cancel.disabled);
   m.setState('ready');
