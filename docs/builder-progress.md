@@ -940,3 +940,47 @@ optional skip) passed on the merged tree. Builder application/runtime sources
 were unchanged by that upstream commit. Existing console/browser and live-provider
 records retain their documented artifact scope. Review is being opened as a
 draft because the remaining release checklist is still open.
+
+## November 9: remembered multiple-provider AI connections
+
+Investigated the installed Pi AI 1.5.0 provider factories and auth/model contracts:
+42 built-in providers, 41 interactive key/token setups, nine OAuth methods, and
+model-specific thinking metadata. The new AI settings expose the built-in catalog,
+provider-owned secret/text/select/manual-code/device-code interactions, several
+simultaneous saved connections, and independent API-key/OAuth credentials for the
+same provider. A combined searchable model selector includes the existing official
+Codex account; model/thinking preference stays with each project. Switching hands
+off portable conversation text and never silently falls back to another provider.
+
+Pi credentials and rotated tokens persist in a private gateway AES-GCM vault,
+addressed by a hashed random capability held in an HttpOnly profile cookie. The
+operator owns the master key; this is not end-to-end encryption. Credentials are
+excluded from browser project storage, preview/VM access and source/VM exports.
+Official Codex still owns its own protected auth files, with remembered profiles
+now surviving normal shutdown and restart; explicit Forget signs out/removes the
+corresponding saved credential. Host cloud profiles, credential-file paths, key
+commands and native extensions are not exposed to browser users. Cloud key/token
+flows collect their required settings; OpenRouter and Radius catalogs are cached,
+and Copilot credential-specific model availability is honored.
+
+Validation: 123 Builder tests passed with one optional fixture skipped; that actual
+Codex app-server fixture also passed separately with the installed executable.
+The installed app-server JSON schema confirms model-reported reasoning efforts
+and the turn/start effort override. All 241 shared Node tests passed with the local
+Go toolchain on PATH (the first attempt's fleet test could not find Go). The fast
+browser regression set passed, including Chromium/WebKit provider workflows,
+existing model/tool/cancellation fixtures, preview isolation, persistence and
+backup handling. Provider browser tests restart both browser and gateway and
+verify restored keys/models/thinking, correct provider routing, portable chat
+handoff, and scoped Forget. Gateway tests additionally cover token rotation,
+concurrent requests/cancellation, per-user isolation, cloud settings, catalog
+filtering, and vault integrity. Admission, existing ChatGPT login UI and first-run
+onboarding checks passed against the private development server after restart.
+The server advertises 42 providers/nine OAuth methods. No live provider keys or
+new provider authorizations were used in these fixture tests.
+
+See [provider support and persistence](builder-providers.md) for the complete
+matrix, storage boundaries and advanced Pi capabilities outside this browser UI.
+Live-provider entitlement/OAuth acceptance remains provider-specific; earlier live
+ChatGPT records remain scoped to their original artifacts. The working-folder
+feature is deferred at the owner's request. Existing public-release gates remain.

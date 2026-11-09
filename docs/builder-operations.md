@@ -31,13 +31,28 @@ browsing, storage quota, OS eviction, and a different browser profile can preven
 recovery. Export important source and keep an independent backup.
 
 AI requests send prompts, selected source, tool results, and supplied conversation
-context to the configured provider through the gateway. API keys remain in
-memory until disconnect, one-hour expiry, or gateway restart. Codex device login
-uses a separate server-side working directory per browser session; its credential
-files are removed by runtime cleanup. Files may persist after an unclean server
-crash: restrict access to the runtime directory and clean abandoned directories
-only after verifying that their processes are stopped. Revoking provider access
-must be done at the provider as well.
+context through the gateway to the chosen provider. Pi API keys and OAuth tokens
+persist encrypted in `BUILDER_CREDENTIAL_DIR` (default
+`.local-dev/builder-credentials/`). Keep the directory private (0700); its master
+key and encrypted files are 0600. The operator can decrypt them. Browser access
+uses a one-year rolling HttpOnly, SameSite=Strict cookie scoped to `/builder-api/`
+and Secure on HTTPS. Losing that cookie loses access to the saved profile; losing
+the master key makes its vaults unreadable. Back up both only through private
+operator backup procedures; neither belongs in source/VM exports or public assets.
+
+The official Codex runtime manages separate protected credential files beneath
+`BUILDER_CODEX_DIR`. Remembered profiles restore authorization after expiry and
+normal gateway restart. Runtime cleanup stops processes and retains remembered
+credentials; **Forget ChatGPT connection** signs out and removes its directory.
+**Forget connection** deletes an individual Pi credential and its cached catalog.
+Browser storage clearing does not delete abandoned server files; operators must
+remove unused profiles privately after confirming no active sessions need them.
+Revoke authorization at the provider when required. Do not expose ambient host
+AWS/GCP profiles or environment secrets as browser-user credentials.
+
+See [provider authentication and persistence](builder-providers.md) for supported
+methods, cloud settings and the distinction between saved credentials and live
+provider acceptance.
 
 No remote analytics are enabled. Task stage timings are stored in sessionStorage;
 they contain durations and stage labels. Browser storage also contains project

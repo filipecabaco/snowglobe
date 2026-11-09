@@ -21,6 +21,9 @@ test('recovery and history reject invalid IDs before opening browser storage',as
   await assert.rejects(historyStore(id,{files:{}}),/Invalid project identifier/);
  }
 });
-test('model preferences contain only provider mode and a bounded model identifier',async()=>{
- const {modelPreference}=await import('../src/projects.js');assert.deepEqual(modelPreference('codex','gpt-5.3-codex'),{engine:'codex',id:'gpt-5.3-codex'});for(const [engine,id] of [['other','model'],['pi',''],['pi','a\nb'],['pi','x'.repeat(129)]])assert.throws(()=>modelPreference(engine,id));
+test('model preferences contain bounded model, connection and thinking metadata only',async()=>{
+ const {modelPreference}=await import('../src/projects.js');assert.deepEqual(modelPreference('codex','gpt-5.3-codex'),{engine:'codex',id:'gpt-5.3-codex'});for(const [engine,id] of [['other','model'],['pi',''],['pi','a\nb'],['pi','x'.repeat(513)]])assert.throws(()=>modelPreference(engine,id));
+ assert.deepEqual(modelPreference('pi','claude-opus-4-7',{connectionId:'anthropic:oauth',thinking:'high',key:'never saved'}),{engine:'pi',id:'claude-opus-4-7',connectionId:'anthropic:oauth',thinking:'high'});
+ assert.throws(()=>modelPreference('pi','model',{connectionId:'../private',thinking:'high'}));assert.throws(()=>modelPreference('pi','model',{thinking:'invented'}));
+ assert.equal(modelPreference('codex','model',{thinking:'none'}).thinking,'none');assert.throws(()=>modelPreference('codex','model',{thinking:'bad value'}));
 });

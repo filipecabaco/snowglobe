@@ -23,3 +23,23 @@ The preview retains CSP `form-action 'none'`. Chromium and WebKit regressions
 verify that client-side submit handlers can use the explicit backend bridge,
 while native form network/navigation, popup creation and parent/storage access
 remain denied. This does not close the broader adversarial release matrix.
+
+## November 9: multiple provider connections
+
+The initial memory-only OpenAI connection is superseded in the Builder UI by
+Pi's built-in provider/auth catalog. Each remembered browser profile can keep
+independent API-key and OAuth credentials for several providers, and both methods
+for one provider. Pi's native auth interactions provide the setup flow; its model
+metadata supplies supported thinking levels. Provider/model selection travels
+with each request and is remembered per project. Account-specific catalogs are
+cached; switching preserves portable chat context and never silently substitutes
+another provider after a failure.
+
+Pi credentials are serialized into a private AES-GCM gateway vault and accessed
+through an HttpOnly profile cookie. The operator retains access to the encryption
+key. Official Codex retains its own protected credential files and now preserves
+remembered authorization on shutdown. Explicit Forget removes the corresponding
+saved credential. Host credential chains, key commands, credential file paths and
+native extensions are unavailable to browser users. See
+[provider support](../builder-providers.md) for the matrix, boundaries and tests.
+This does not close the remaining public-release and live-provider acceptance gates.
