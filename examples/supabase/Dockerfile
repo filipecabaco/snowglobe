@@ -56,10 +56,18 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # (none is preloaded, and the CLI only checks its own binaries): Wrappers, PostGIS, pgRouting and
 # their geometry libraries, PL/Perl, PGroonga, and the charset converters for iconv. 390 MB
 # becomes 118. In the same step, so that the image never carries them.
+# Realtime boots in interactive mode, loading its modules as they are first called rather than all
+# of them up front: half the CPU to its listener (0.8 s natively becomes 0.4). The CLI gives a
+# service 60 seconds from launch to bind its listener (fixed, no setting), and on a slow CI runner
+# the guest's boot of the embedded release ran out of it on every attempt. The CLI passes its
+# services none of its own environment and doesn't set RELEASE_MODE; the launcher reads this file.
 RUN supabase init --yes >/dev/null && \
     CI=1 supabase stack start --runtime native --eager --preparation on-demand \
       -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null >/dev/null && \
     supabase stack stop </dev/null && supabase stack destroy --yes </dev/null && \
+    realtime_env=$(echo ~/.supabase/cache/stack/slim-services/realtime/*/linux-arm64/*/bin/.runtime-env.sh) && \
+    test -f "$realtime_env" && grep -q 'RELEASE_MODE:-"embedded"' "${realtime_env%/.runtime-env.sh}/realtime" && \
+    echo 'export RELEASE_MODE="${RELEASE_MODE:-interactive}"' >> "$realtime_env" && \
     cd ~/.supabase/cache/stack/slim-services/postgres/*/linux-arm64/*/ && \
     test -x bin/postgres && \
     rm -rf lib/wrappers-*.so share/postgresql/extension/wrappers* \
