@@ -132,9 +132,9 @@ Run `node packages/builder/test/recovery-browser.mjs` against the dev server for
 
 ## Live subscription acceptance page
 
-Use [the development live-test page](https://aspire.tailb03e.ts.net:18445/builder-test/) to approve a test when ready. It requests an official device code only after **Get a fresh sign-in code** is clicked, reports sign-in/build/interaction progress, clears ended codes and supports explicit replacement and Cancel. Approval starts the fixed local voting-app acceptance prompt in a separate browser workspace. Successful acceptance verifies a vote and its persistence across a real preview rebuild, then confirms gateway sign-out before closing. A failed build retains the isolated browser for debugging; Cancel signs out and closes it. No account credentials, cookies, account details or browser-control endpoint are served by the test page.
+Use [the development live-test page](https://aspire.tailb03e.ts.net:18445/builder-test/) to approve a test when ready. It requests an official device code only after **Get a fresh sign-in code** is clicked, reports sign-in/build/interaction progress, clears ended codes and supports explicit replacement and Cancel. Approval starts the configured fixed acceptance prompt in a separate browser workspace. The default voting controller verifies a vote and its persistence across a real preview rebuild; the profiles controller checks real Auth, row isolation, checkpoint/reload and denied SQL. Both confirm gateway sign-out before reporting success. The voting controller retains a failed browser for debugging; the profiles controller retains private diagnostics and disconnects during cleanup. No account credentials, cookies, account details or browser-control endpoint are served by the test page.
 
-This is an optional development utility in `dev/live-test.mjs`, not part of the Builder browser bundle or public Pages deployment. It listens on loopback 18448. The current host runs it as `snowglobe-builder-live-test` and mounts `/builder-test` through its existing tailnet-only HTTPS dev server. This does not restart Builder's gateway. For browser automation during a failed test, its owner-only `.local-dev/builder-live-control.json` references only that isolated test browser and is removed when it closes. No arbitrary client prompt or browser command is accepted by the utility's HTTP API. Origin validation protects code creation and cancellation.
+These optional development controllers are not part of the Builder browser bundle or public Pages deployment. After the package build, run `node packages/builder/dev/profile-test.mjs` for profiles or `node packages/builder/dev/live-test.mjs` for voting, one at a time. Both listen on loopback 18448; the current host mounts `/builder-test` through its existing tailnet-only HTTPS dev server. This does not restart Builder's gateway. For browser automation during a failed voting test, its owner-only `.local-dev/builder-live-control.json` references only that isolated test browser and is removed when it closes. The profiles controller exposes only whitelisted status and device-code fields, and blocks another run if disconnect cannot be confirmed. No arbitrary client prompt or browser command is accepted by the utility's HTTP API. Origin validation protects code creation and cancellation.
 
 `node packages/builder/test/live-test-browser.mjs` exercises real code creation, renewal and cancellation without approving an account or running inference. `node packages/builder/test/codex-login-browser.mjs` checks that successful connection closes the settings overlay and keeps the composer accessible. Live subscription generation still requires the user's approval on the test page; code-generation tests alone do not establish it.
 
@@ -220,8 +220,8 @@ node packages/builder/test/extensions-browser.mjs
 ```
 
 These tests use fresh browser contexts and fixture data. They do not require
-live model inference. The guest remains adapted to React/Vite pending the
-framework-provisioning milestone. Public deployment stays disabled.
+live model inference. React/Vite, vanilla TypeScript/Vite, Svelte/Vite and
+SvelteKit SPA now have passing development guest runs. Public deployment stays disabled.
 
 The extension and persistence suites also run in CI against an intercepted HTTPS
 fixture with production-like COOP/COEP headers. They need no tailnet, development
@@ -233,10 +233,10 @@ to check WebKit; a blocked opaque extension worker must fail closed with no
 active extension. Browser-engine fixtures do not establish physical-device
 performance or full browser VM compatibility.
 
-Latest automated continuation checks: 50 Builder unit/protocol tests passed with
-the native Codex fixture enabled, and 184 shared Node regressions passed. The
-updated gateway/tool catalog is loaded on the development server. The complete
-plan remains active; framework provisioning and production release gates are next.
+The shared suite passed 184 Node regressions; Builder native tests and fast browser
+regressions are recorded in the progress ledger. The updated gateway/tool catalog
+is loaded on the development server. The complete plan remains active; final
+owner/device, security, license and artifact release gates remain.
 
 ### November 9 subscription revalidation
 
@@ -249,6 +249,19 @@ The gateway confirmed disconnect. No API key was used. See the
 for scope and artifact fingerprint. This is local voting-app acceptance, not a
 live Supabase profile-app or public release sign-off.
 
+### Live accounts and profiles acceptance
+
+On November 9, the user-approved `gpt-6.1-sol` run generated and built the actual
+Supabase profiles app and applied its reviewed schema/RLS migration. Two real
+Auth accounts saved distinct profiles; direct REST checks denied cross-user
+reads/writes. Paired Save/reload preserved the signed-in profile, a denied
+DROP migration left its table intact, and cleanup confirmed provider disconnect.
+No repair turn or API key was needed. See
+[the live acceptance record](../../docs/builder-live-profile-acceptance.json),
+which is separate from [the deterministic real-VM fixture record](../../docs/builder-profile-fixture-acceptance.json).
+These are automated desktop Chromium development results; final artifact and
+owner/device qualification remain open.
+
 ### External VM backup round-trip acceptance
 
 The focused real source/database VM test passed actual backup downloads and
@@ -258,6 +271,19 @@ were removed. See [the acceptance record](../../docs/builder-backup-acceptance.j
 Repeat without the longer interrupted-capture scenario with
 `BUILDER_BACKUP_ONLY=1 node packages/builder/test/supabase-browser.mjs`.
 
+The opt-in live profiles harness is
+`BUILDER_LIVE_SUBSCRIPTION=1 npm run test:browser:live-profiles --prefix packages/builder`.
+It issues a fresh official device code immediately, then prepares the source/database
+VMs after approval and before sending the live model request.
+Its fixed test scope permits only synthetic profiles table/RLS/CRUD migration
+approval. It then verifies model-generated Auth/profile behavior, two-user REST
+isolation, checkpoint/reload and denied destructive SQL, and disconnects in cleanup.
+It retains source and redacted UI diagnostics privately under `.local-dev/` before
+cleanup, and allows one bounded live repair of a failed profile save. It is excluded
+from CI and requires explicit human subscription approval. Use
+`BUILDER_PROFILE_FIXTURE=1 node packages/builder/test/live-profile-browser.mjs`
+to validate the database assertions with deterministic source and no AI credentials.
+
 ### Client-side preview forms
 
 Preview forms support JavaScript submit handlers, including asynchronous Supabase
@@ -266,3 +292,10 @@ to deny host access and popups, and CSP blocks native form network/navigation.
 Chromium/WebKit regression coverage is in `test/preview-forms-browser.mjs` and the
 standard browser regression runner. Reload Builder after saving your work to
 load this preview fix into an already-open page.
+
+Browser dependency notices are generated from installed package files or exact
+name/version/license matches in `notices/sources.json`. The three Pi 1.5.0 npm
+packages omit their repository-root MIT text; the vendored snapshot is
+checksummed and links to the matching upstream commit. A changed version or
+license declaration keeps the missing-notice review visible. This completes
+browser notice text, not the separate guest inventory/license approval.

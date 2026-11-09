@@ -49,12 +49,12 @@ checks afterward. Browser bundles are rebuilt separately.
 
 | Plan milestone | Status | Remaining evidence/work |
 | --- | --- | --- |
-| M0 compatibility | Partial | SvelteKit clean-VM gate now passed; live-provider acceptance remains; Firefox/WebKit Pi fixture now passes; memory samples recorded below |
+| M0 compatibility | Development workflows verified | Four framework guest runs and live Codex subscription generation passed; final supported-device/artifact matrix remains; optional Pi/API live qualification remains open |
 | M1 project tools | Implemented with transport adaptation | Job-file transport replaces the proposed TCP listener; race-hardening against concurrently hostile guest processes remains gated |
-| M2 agent loop | Implemented development slice | Current live Pi/API-key acceptance and full multi-turn failure/recovery walkthrough |
+| M2 agent loop | Codex subscription loop verified | Live voting-app repair and profile generation passed; supported-desktop Stop/Retry and novice walkthrough remain; optional API providers are not live qualified |
 | M3 trust boundaries | Partial | Public authentication/custody/abuse controls, full production deployment/security acceptance |
 | M4 project UX | Partial | Framework chooser and pinned provisioning implemented; React binary-asset browser recovery passed; SvelteKit guest acceptance passed; final release matrix remains pending |
-| M5 database workflow | Substantial implementation | Live model-driven profile-app acceptance and broader migration planning/check coverage |
+| M5 database workflow | Live development acceptance passed | Live generated profiles, two accounts, direct row isolation, paired reload and denied SQL passed; broader migration planning/check coverage and final device acceptance remain |
 | M6 release | Partial | Gateway budgets, privacy/recovery/rollback and tool-contract docs implemented; license review, live-provider/device/novice and full public-security acceptance remain open |
 
 ## Validation in this implementation pass
@@ -87,15 +87,17 @@ public deployment are not established by native or browser-engine fixtures.
 
 ## Current remaining work
 
-1. Complete SvelteKit compatibility acceptance. Final interrupted Supabase recovery
-   now passes, including account and row history after a failed source capture. React
-   binary-source browser Save/reload and verified Vite framework runs now pass.
-2. Keep SvelteKit unavailable until its actual guest build, routing, edit, export
-   and recovery gate passes. Next.js static/SSR remains a separate roadmap gate.
-3. Complete current live-provider profile-app/repair acceptance, physical-device
-   and nontechnical walkthroughs; fixtures do not establish these results.
-4. Close guest filesystem concurrency/security and public identity/abuse controls,
-   guest image provenance and license review before public distribution.
+1. Complete the final supported-desktop Stop/Retry and nontechnical walkthrough
+   using the retained worksheet. Four framework development runs and live Codex
+   voting/repair and accounts/profiles acceptance have terminal passing results.
+2. Record an approved immutable artifact, matching guest images and rollback
+   reference; retain independent source and sensitive VM backups. The focused
+   real backup-download/new-project-import test passed.
+3. Finish applicable guest filesystem concurrency/security, guest image/OS
+   provenance and license review. Missing browser Pi notices have been recovered
+   from pinned upstream source; that does not approve the full guest inventory.
+4. Public hosting/signup/abuse qualification, Next.js/SSR and broader device/API
+   provider support remain separate scope. The first release is private on Tailscale.
 
 The implementation remains private. No public deployment or PR publication has
 been performed.
@@ -784,3 +786,48 @@ The local, uncommitted profile harness now captures source and redacted UI
 failure diagnostics before cleanup and supports one bounded functional repair in
 the same live session. Diagnostic files stay private under the ignored local-dev
 directory and are not part of the pushed source.
+
+### Real profiles fixture and on-demand sign-in
+
+After the preview form fix, the deterministic profiles source passed against real
+Auth/PostgreSQL VMs: two accounts, profile saves, direct cross-user read/write
+denial, paired source/database save/reload and denied destructive SQL. The
+sanitized `builder-profile-fixture-acceptance.json` records this fixture result;
+it does not establish live-model generation.
+
+The private `/builder-test/` page now runs the draft profiles harness and requests
+a device code only when the user clicks. Real code creation, replacement and
+cancellation passed without account approval or inference. Cancellation cleanup
+owns Playwright's signal handling so gateway disconnect happens before Chrome
+closes. The controller refuses renewal after an unconfirmed disconnect and never
+reports a fixture result as live acceptance. Its targeted unit tests pass. The
+next live profiles run still requires fresh user approval; the prior failed run
+disconnected its session.
+
+### Live profiles acceptance passed
+
+On November 9, a fresh user-approved device login ran the actual profiles prompt
+through `gpt-6.1-sol`. The model inspected and changed the source, applied the
+reviewed profiles/RLS schema and built a working app. Two actual Auth accounts
+saved separate profiles; direct REST reads and cross-user writes confirmed row
+isolation. Paired source/database Save/reload retained the signed-in profile,
+and denial of a destructive migration left the profiles table intact. All
+assertions passed without the optional repair turn, and cleanup confirmed the
+provider session disconnected. The sanitized `builder-live-profile-acceptance.json`
+records the browser bundle and test-harness hashes; local source diagnostics and
+credentials are excluded.
+
+The profile controller's real code-creation/renewal/cancel check and unit tests
+also passed. Browser-bundle notices now use checksummed license text from the
+matching upstream Pi v1.5.0 commit when the npm package omits its repository-root
+license. Unknown versions or license declarations still require review. The
+notice rebuild left the browser bundle hash unchanged, and provenance now
+includes these notice inputs and distributed notice text. Full guest license,
+image provenance, security and owner/device release gates remain open.
+
+Final validation for this continuation: 106 Builder native tests passed, with
+one optional fixture skipped. The package build passed with zero missing browser
+notice entries; the browser bundle hash stayed unchanged. The prior complete
+fast browser regression run, focused form regression, real code lifecycle check,
+real profiles fixture and newly completed live profiles run all have terminal
+passing results. Shared runtime and Go sources were unchanged in this continuation.

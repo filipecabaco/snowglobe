@@ -74,13 +74,13 @@ export class BrowserTest {
  }
  async cancel(){++this.generation;this.set('disconnecting','Disconnecting the test session…');try{await this.dispose();this.set('cancelled','Test cancelled and disconnected. Request a fresh code to try again.');}catch(error){this.set('failed',safeError(error));throw error;}}
 }
-export function createLiveTestServer({test=new BrowserTest(),origin='https://aspire.tailb03e.ts.net:18445'}={}){
+export function createLiveTestServer({test=new BrowserTest(),origin='https://aspire.tailb03e.ts.net:18445',html}={}){
  const publicState=()=>{const {phase,message,code,verificationUrl,issuedAt,checks}=test.state;return {phase,message,code:phase==='awaiting'?code:undefined,verificationUrl:phase==='awaiting'?verificationUrl:undefined,issuedAt,checks};};
  const server=http.createServer(async(req,res)=>{
   const pathname=new URL(req.url,'http://localhost').pathname.replace(/^\/builder-test(?=\/|$)/,'')||'/';
   const json=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");
-  if(req.method==='GET'&&pathname==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(await fs.readFile(new URL('./live-test.html',import.meta.url)));}
+  if(req.method==='GET'&&pathname==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(html??await fs.readFile(new URL('./live-test.html',import.meta.url)));}
   if(req.method==='GET'&&pathname==='/api/status')return json(200,publicState());
   if(req.method==='POST'&&['/api/start','/api/cancel'].includes(pathname)){
    req.resume();

@@ -159,8 +159,11 @@ exact VM configuration before writing a new isolated project. It preserves
 existing projects and removes staged data if a write fails. A crash during import
 can leave unlisted staged data, so retain the original files. Conversation and
 browser preview storage are not restored; rebuild the imported app to verify it.
-Real VM backup restore acceptance remains pending. Do not delete browser data
-based on an untested backup.
+The focused Chromium real-VM backup/import run passed, including both restored
+accounts and their isolated rows; see
+[the acceptance record](builder-backup-acceptance.json). That result applies to
+the recorded development artifact. Verify backups against the supported release
+artifact and device before deleting browser data.
 
 To fingerprint current Builder source and built assets, run
 `npm run provenance --prefix packages/builder`. The JSON records repository HEAD,

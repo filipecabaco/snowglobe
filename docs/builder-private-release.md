@@ -37,9 +37,12 @@ No network configuration was changed for this scope decision.
 - [x] Paired source/database save, actual backup downloads, reviewed import into a
   new project, rebuild and both restored accounts' isolated rows.
 - [x] Private gateway reload and route/status health checks.
-- [ ] Live model-generated accounts/profiles workflow, direct cross-user denial,
-  paired save/reload and denied destructive migration. Workspace preparation
-  passed; a fresh subscription approval is needed to run the live portion.
+- [x] Live model-generated accounts/profiles workflow, direct cross-user denial,
+  paired save/reload and denied destructive migration. After the preview form
+  fix, the user-approved `gpt-6.1-sol` run passed without a repair turn and
+  confirmed disconnect. See [the live record](builder-live-profile-acceptance.json);
+  [the separate fixture record](builder-profile-fixture-acceptance.json) records
+  deterministic source against real Auth/PostgreSQL VMs.
 - [ ] Final Stop/Retry and novice walkthrough on the owner's supported desktop
   browser, using the retained acceptance worksheet.
 - [ ] Record the approved artifact, matching guest image versions and rollback
