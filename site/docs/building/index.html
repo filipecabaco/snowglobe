@@ -127,7 +127,10 @@ snowglobe build my-app.tar --builder native     <span class="dim"># anywhere els
               what their browser cached.</li>
             <li><code>snowglobe pwa &lt;site&gt;</code> makes a site an installable app that keeps working offline
               once it has run. It adds a manifest, icons and a service worker that caches the page, the machine and
-              every file the run fetched. Run it after <code>pool</code>.</li>
+              every file the run fetched. The page asks for its build's own files (the snapshot, the filesystem
+              tree, the warm pack, the machine and its scripts) with that build's version (<code>?v=</code>), so a
+              repeat visit gets them from that cache instead of downloading them again, and a newer build's page asks
+              for other URLs and never gets an older build's copy. Run it after <code>pool</code>.</li>
           </ul>
           <p>Next: give the guest a network on <a href="../networking/">Networking</a>, or run the site without a
             browser on <a href="../running/">Running outside a browser</a>.</p>

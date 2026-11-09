@@ -930,3 +930,13 @@ both engines again. An acceptance-script expectation was corrected: the counter
 retains state across view changes, while a deliberate rebuild resets its React
 state. Physical macOS acceptance, the final immutable release candidate and the
 previous security/license/provenance gates remain open. No PR was created.
+
+### Upstream refresh before opening review
+
+Fetched and integrated upstream `3a4b859` (repeat-visit service-worker caching)
+after the Builder console work. The merge was clean and prepared in the isolated
+checkout. Go `test ./...`, 234 shared Node tests and 112 Builder tests (one
+optional skip) passed on the merged tree. Builder application/runtime sources
+were unchanged by that upstream commit. Existing console/browser and live-provider
+records retain their documented artifact scope. Review is being opened as a
+draft because the remaining release checklist is still open.
