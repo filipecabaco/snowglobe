@@ -28,6 +28,8 @@
       <a class="mark" href="../">snowglobe<i aria-hidden="true"></i></a>
       <nav aria-label="Site">
         <a href="../#runs">Runs</a>
+        <a href="../agent/">Agents</a>
+        <a href="../fleet/">Fleets</a>
         <a href="./" aria-current="page">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -38,11 +40,37 @@
       <main class="doc">
         <div class="hero">
           <h1>Docs</h1>
-          <p class="lede">snowglobe packages a Docker image into a folder of static files that runs it in a
-            browser tab: real Linux on an emulated 64-bit ARM CPU, restored from a snapshot taken once your
-            app was ready. The same site also runs headlessly, as one executable, and as a sandbox an agent
-            drives.</p>
+          <p class="lede">snowglobe runs a Docker image where Docker isn't. It turns the image into a site, a folder of
+            static files you can host anywhere. Open it in a browser tab, run it from one binary with no Docker
+            installed, or give it to an agent as a sandbox. It starts in about a second, because it restores a
+            snapshot taken once your app was ready.</p>
         </div>
+
+        <section id="pages" aria-labelledby="pages-title">
+          <h2 id="pages-title">Which page answers what</h2>
+          <p class="intro">New here? Read <a href="#start">Getting started</a> below, then
+            <a href="building/">Building a site</a>. Come back to this table when you have a question.</p>
+          <div class="table-wrap">
+            <table class="map">
+              <thead><tr><th scope="col">Your question</th><th scope="col">Read</th></tr></thead>
+              <tbody>
+                <tr><td>How do I install it and build my first site?</td><td><a href="#start">Getting started</a>, below</td></tr>
+                <tr><td>How do I choose when the snapshot is taken, make the first load fast, or give the site more CPUs?</td><td><a href="building/">Building a site</a></td></tr>
+                <tr><td>Can the machine reach the internet, a database, or my own machine?</td><td><a href="networking/">Networking</a></td></tr>
+                <tr><td>How do I run a site in a terminal, from a URL, or as one executable?</td><td><a href="running/">Running outside a browser</a></td></tr>
+                <tr><td>How does an agent or a script run commands in a machine, by CLI, MCP or in a page?</td><td><a href="agents/">For agents and programs</a></td></tr>
+                <tr><td>How do I run many machines, services that scale to zero, or a whole fleet from one file?</td><td><a href="orchestration/">Orchestration and fleets</a></td></tr>
+                <tr><td>How do machines reach each other?</td><td><a href="orchestration/#links">Links</a></td></tr>
+                <tr><td>What stops a guest from touching my computer?</td><td><a href="isolation/">Isolation</a></td></tr>
+                <tr><td>Where does a run in the browser keep my work?</td><td><a href="saving/">Saving your work</a></td></tr>
+                <tr><td>What happens inside a build, and why did mine fail?</td><td><a href="how-it-works/">How it works</a></td></tr>
+                <tr><td>What does this flag, command or variable do?</td><td><a href="reference/">CLI reference</a></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Agents can read all of this as one text file: <a href="../llms.txt">llms.txt</a>.</p>
+        </section>
+
         <section id="start" aria-labelledby="start-title">
           <h2 id="start-title">Getting started</h2>
           <p class="intro">Build a site from a Dockerfile, preview it, then put the folder on any static host.</p>
@@ -51,44 +79,52 @@
           <ul>
             <li><strong>Docker, or nothing.</strong> With Docker, snowglobe builds your Dockerfile and boots it in
               a build container. Without Docker, <code>--builder native</code> builds from an image in a registry
-              or a saved archive, and <code>snowglobe run --runtime native</code>, bundles and <code>snowglobe mcp</code>
-              run sites with no Docker either.</li>
-            <li><strong>An arm64 Alpine image:</strong> <code>FROM alpine</code> (multi-arch; snowglobe builds it for
-              arm64) or <code>FROM arm64v8/alpine</code>. On an x86 host, Docker needs QEMU's binfmt handlers to
-              build arm64 images. Docker Desktop has them; on Linux run
-              <code>docker run --privileged --rm tonistiigi/binfmt --install arm64</code> once.</li>
+              or a saved archive. <code>snowglobe run --runtime native</code>, bundles and <code>snowglobe mcp</code>
+              need no Docker either.</li>
+            <li><strong>An arm64 Alpine image.</strong> Use <code>FROM alpine</code> (multi-arch; snowglobe builds it for
+              arm64) or <code>FROM arm64v8/alpine</code>.</li>
+            <li><strong>On an x86 host, QEMU's binfmt handlers</strong>, so Docker can build arm64 images. Docker
+              Desktop has them. On Linux, run this once:
+              <code>docker run --privileged --rm tonistiigi/binfmt --install arm64</code>.</li>
           </ul>
 
           <h3 id="install">Install</h3>
-          <p>On Linux (x86-64 or arm64) or a Mac with Apple silicon, one line installs the latest release into
-            <code>~/.local/bin</code>, after checking it against the release's checksums. It needs no sudo, and
-            you can <a href="../install.sh">read the script</a> first:</p>
+          <p>One line installs the latest release into <code>~/.local/bin</code>. It works on Linux (x86-64 or
+            arm64) and on a Mac with Apple silicon. It checks the download against the release's checksums and
+            needs no sudo. You can <a href="../install.sh">read the script</a> first.</p>
           <pre>curl -fsSL https://filipecabaco.github.io/snowglobe/install.sh | sh</pre>
-          <p><code>SNOWGLOBE_VERSION=0.4.0</code> picks a version and <code>SNOWGLOBE_INSTALL_DIR</code> another
-            directory. You can also download a binary from the
-            <a href="https://github.com/filipecabaco/snowglobe/releases">releases</a>, or install it with Go 1.27 or
+          <p><code>SNOWGLOBE_VERSION=0.4.0</code> picks a version. <code>SNOWGLOBE_INSTALL_DIR</code> picks another
+            directory.</p>
+          <p>You can also download a binary from the
+            <a href="https://github.com/filipecabaco/snowglobe/releases">releases</a>, or install with Go 1.27 or
             later:</p>
           <pre>go install github.com/filipecabaco/snowglobe/cmd/snowglobe@latest</pre>
-          <p>The first build fetches the tools image (the machine that boots and snapshots your image) from
-            <code>ghcr.io/filipecabaco/snowglobe-tools</code>. A version that hasn't been released compiles it
-            locally instead, once, in a few minutes. A release of snowglobe is one file: it carries its own
-            <code>snowglobe-vm</code> (the machine) and unpacks it into your cache the first time it runs a site
-            natively; built with <code>go install</code>, it downloads the release's instead. Building without Docker
-            also fetches the prebuilt kernel once. Releases are for Linux on x86-64 and arm64, and macOS on Apple
-            silicon.</p>
 
           <h3 id="first-site">Your first site</h3>
           <p>Any directory with a Dockerfile, or any image reference, builds into <code>dist/</code>:</p>
           <pre>snowglobe build ./my-app          <span class="dim"># a directory with a Dockerfile, or an image reference</span>
 snowglobe serve dist              <span class="dim"># preview at http://localhost:8000</span></pre>
-          <p>Whatever the image runs (its <code>ENTRYPOINT</code> and <code>CMD</code>, with its <code>ENV</code> and
-            <code>WORKDIR</code>) appears in a terminal on the page. <code>dist/</code> is plain static files: upload it
-            to GitHub Pages, a CDN or any web server. There is no snowglobe server.</p>
+          <p>The page shows a terminal running whatever the image runs: its <code>ENTRYPOINT</code> and
+            <code>CMD</code>, with its <code>ENV</code> and <code>WORKDIR</code>.</p>
+          <p><code>dist/</code> is plain static files. Upload it to GitHub Pages, a CDN or any web server. There is
+            no snowglobe server.</p>
           <div class="note">
             <p>Everything runs on an emulated 64-bit ARM CPU, translated to WebAssembly as it runs, so expect it to
-              be slower than native. Cold loads take seconds; commands take tens of milliseconds to a few
+              be slower than native. Cold loads take seconds. Commands take tens of milliseconds to a few
               seconds.</p>
           </div>
+
+          <h3 id="first-run">What the first build downloads</h3>
+          <ul>
+            <li><strong>The tools image</strong>, the machine that boots and snapshots your image, from
+              <code>ghcr.io/filipecabaco/snowglobe-tools</code>. A version that hasn't been released compiles it
+              locally instead, once, in a few minutes.</li>
+            <li><strong><code>snowglobe-vm</code></strong>, the machine that runs sites natively. A release of snowglobe
+              is one file that carries its own and unpacks it into your cache the first time it runs a site
+              natively. Built with <code>go install</code>, snowglobe downloads the release's instead.</li>
+            <li><strong>The prebuilt kernel</strong>, once, when you build without Docker.</li>
+          </ul>
+          <p>Releases are for Linux on x86-64 and arm64, and macOS on Apple silicon.</p>
         </section>
 
         <nav class="pager" aria-label="Pages"><a class="next" href="building/"><small>Next</small>Building a site</a></nav>
@@ -109,7 +145,7 @@ snowglobe serve dist              <span class="dim"># preview at http://localhos
             <li><a href="networking/">Networking</a></li>
             <li><a href="running/">Running outside a browser</a></li>
             <li><a href="agents/">For agents and programs</a></li>
-            <li><a href="orchestration/">Orchestration</a></li>
+            <li><a href="orchestration/">Orchestration and fleets</a></li>
             <li><a href="isolation/">Isolation</a></li>
             <li><a href="saving/">Saving your work</a></li>
             <li><a href="how-it-works/">How it works</a></li>

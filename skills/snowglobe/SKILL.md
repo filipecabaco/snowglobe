@@ -5,7 +5,7 @@ description: Use when a task mentions snowglobe, snowglobe.toml, or packaging a 
 
 # snowglobe
 
-snowglobe packages a Docker image (64-bit ARM Alpine) into a **site**: a folder holding a snapshot of the machine once its app was ready. One site, one fleet file (`snowglobe.toml`), three places to run them:
+snowglobe runs a Docker image where Docker isn't. It packages the image (64-bit ARM Alpine) into a **site**: a folder holding a snapshot of the machine once its app was ready, so it starts in about a second. One site, one fleet file (`snowglobe.toml`), three places to run them:
 
 | Place | How | Notes |
 |---|---|---|

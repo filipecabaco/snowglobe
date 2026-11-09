@@ -6,7 +6,7 @@
   <title>How it works · snowglobe docs</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/how-it-works/">
   <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta name="description" content="How snowglobe builds a site: the boot layer, the filesystem, the snapshot, machines and the warm pack, and what to do when a build goes wrong.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="snowglobe docs">
@@ -28,6 +28,8 @@
       <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
       <nav aria-label="Site">
         <a href="../../#runs">Runs</a>
+        <a href="../../agent/">Agents</a>
+        <a href="../../fleet/">Fleets</a>
         <a href="../" aria-current="page">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -38,6 +40,8 @@
       <main class="doc">
         <section id="internals" aria-labelledby="internals-title">
           <h1 class="page-title" id="internals-title">How it works</h1>
+          <p class="intro">Read this when you want to know what a build makes, or a build fails. A site is made in
+            five layers:</p>
           <ol>
             <li><strong>Boot layer.</strong> snowglobe adds a kernel, an initramfs that mounts the root filesystem
               over 9p, and BusyBox's <code>init</code> and <code>getty</code> with a terminal running your command, as
@@ -86,7 +90,7 @@
             <li><a href="../networking/">Networking</a></li>
             <li><a href="../running/">Running outside a browser</a></li>
             <li><a href="../agents/">For agents and programs</a></li>
-            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../orchestration/">Orchestration and fleets</a></li>
             <li><a href="../isolation/">Isolation</a></li>
             <li><a href="../saving/">Saving your work</a></li>
             <li><a href="../how-it-works/" aria-current="page">How it works</a></li>

@@ -6,7 +6,7 @@
   <title>Networking · snowglobe docs</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/networking/">
   <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta name="description" content="Give a snowglobe guest a network: HTTP, HTTPS and WebSockets through the browser, tunnels for other TCP, credentials, egress outside a browser, and links between machines.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="snowglobe docs">
@@ -28,6 +28,8 @@
       <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
       <nav aria-label="Site">
         <a href="../../#runs">Runs</a>
+        <a href="../../agent/">Agents</a>
+        <a href="../../fleet/">Fleets</a>
         <a href="../" aria-current="page">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -38,64 +40,88 @@
       <main class="doc">
         <section id="network" aria-labelledby="network-title">
           <h1 class="page-title" id="network-title">Networking</h1>
-          <p class="intro">A guest has no network unless the site asks for one, and then its only way out is the
-            visitor's own browser.</p>
+          <p class="intro">Read this when the app needs the internet, a database or your own machine. A guest has no
+            network unless the site asks for one. In a page, its only way out is then the visitor's own
+            browser.</p>
+
+          <div class="table-wrap">
+            <table class="map">
+              <thead><tr><th scope="col">The guest wants</th><th scope="col">What it takes</th></tr></thead>
+              <tbody>
+                <tr><td>HTTP, HTTPS, WebSockets</td><td><a href="#fetch"><code>--network fetch</code></a>, and a server that allows CORS</td></tr>
+                <tr><td>Other TCP (a database)</td><td><a href="#tunnels">a tunnel</a>, over a WebSocket in a page</td></tr>
+                <tr><td>A password or token</td><td><a href="#credentials">a token endpoint</a>, never a secret in the image</td></tr>
+                <tr><td>Your own machine (loopback, private addresses)</td><td><a href="#credentials"><code>--allow-private</code></a>, for builds and <code>snowglobe run</code></td></tr>
+                <tr><td>Another machine of the daemon</td><td><a href="#machines">a link</a></td></tr>
+                <tr><td>UDP</td><td>not possible in a page</td></tr>
+              </tbody>
+            </table>
+          </div>
 
           <h2 class="h3" id="fetch">HTTP, HTTPS and WebSockets</h2>
-          <p>With <code>--network fetch</code> (or <code>snowglobe.network="fetch"</code>), the guest gets a network
-            card and DHCP, and every request it makes leaves as the page's own browser request. Its connections to
-            ports 80 and 443 end inside the machine:</p>
+          <p>Build with <code>--network fetch</code> (or <code>snowglobe.network="fetch"</code>). The guest gets a
+            network card and DHCP. Every request it makes leaves as the page's own browser request. Its
+            connections to ports 80 and 443 end inside the machine:</p>
           <ul>
             <li><strong>HTTP</strong> requests become a <code>fetch()</code>.</li>
-            <li><strong>HTTPS</strong> is terminated in the machine with a certificate signed by a CA made fresh for
-              each build, which the guest trusts, and replayed with <code>fetch("https://…")</code>. Nothing else
-              should trust that CA: its key ships with the site.</li>
+            <li><strong>HTTPS</strong> is terminated in the machine and replayed with
+              <code>fetch("https://…")</code>. The certificate is signed by a CA made fresh for each build, which the
+              guest trusts. Nothing else should trust that CA: its key ships with the site.</li>
             <li><strong>WebSockets</strong> open a browser <code>WebSocket</code> to the same URL.</li>
           </ul>
-          <p>The browser's rules still apply. HTTP(S) only reaches servers that allow CORS (others answer with a 502
-            that says so), UDP goes nowhere, and other TCP only through a tunnel.</p>
+          <p>The browser's rules still apply:</p>
+          <ul>
+            <li>HTTP(S) only reaches servers that allow CORS. Others answer with a 502 that says so.</li>
+            <li>UDP goes nowhere.</li>
+            <li>Other TCP goes only through a tunnel.</li>
+          </ul>
 
           <h2 class="h3" id="tunnels">Other TCP: tunnels</h2>
-          <p>A page can't open raw TCP, so a connection to a database or any port but 80 and 443 is refused unless
-            the site names it as a tunnel. <code>--tunnel HOST:PORT=URL</code> carries every connection to
-            <code>HOST:PORT</code> over a WebSocket to <code>URL</code>, as binary messages: what websockify, websocat
-            and Neon's wsproxy speak.</p>
+          <p>A page can't open raw TCP. So a connection to a database, or to any port but 80 and 443, is refused
+            unless the site names it as a tunnel.</p>
+          <p><code>--tunnel HOST:PORT=URL</code> carries every connection to <code>HOST:PORT</code> over a WebSocket
+            to <code>URL</code>, as binary messages. That is what websockify, websocat and Neon's wsproxy speak.</p>
           <pre>websocat --binary ws-l:0.0.0.0:6543 tcp:127.0.0.1:5432       <span class="dim"># next to Postgres</span>
 snowglobe build ./my-app --network fetch --tunnel db.internal:5432=wss://db-proxy.example.com/</pre>
 
           <h2 class="h3" id="credentials">Credentials</h2>
           <div class="note">
-            <p>Whatever the guest knows ships with the site: a password in its environment is in the snapshot, for
+            <p>Whatever the guest knows ships with the site. A password in its environment is in the snapshot, for
               every visitor.</p>
           </div>
-          <p>Instead, put <code>{token}</code> in the tunnel URL and name a token endpoint with
-            <code>--tunnel-token URL</code>. The page asks it for a fresh token on every connection (natively, once
-            per boot), and a gateway behind the tunnel checks the token and holds the real credentials. A token only
-            replaces the password: what it opens is whatever the gateway lets any visitor do.</p>
+          <p>Use a token instead:</p>
+          <ol>
+            <li>Put <code>{token}</code> in the tunnel URL.</li>
+            <li>Name a token endpoint with <code>--tunnel-token URL</code>. The page asks it for a fresh token on
+              every connection (natively, once per boot).</li>
+            <li>Put a gateway behind the tunnel. It checks the token and holds the real credentials.</li>
+          </ol>
+          <p>A token only replaces the password. What it opens is whatever the gateway lets any visitor do.</p>
           <p>Builds and <code>snowglobe run</code> refuse loopback and private addresses, so a guest can't reach the
             host's own services. <code>--allow-private</code> lets them, for a tunnel endpoint on your own machine
             while developing.</p>
 
           <h2 class="h3" id="native">Outside a browser</h2>
-          <p>Run natively, the network card goes out through the host instead of a page, so a tunnel's URL may also
+          <p>Run natively, the network card goes out through the host instead of a page. So a tunnel's URL may also
             be <code>tcp://HOST:PORT</code>: each connection the guest opens to the tunnel's name becomes one to that
-            address, with no WebSocket proxy in between. The same rules apply, so one to your own machine needs
+            address, with no WebSocket proxy in between. The same rules apply, so a tunnel to your own machine needs
             <code>--allow-private</code>.</p>
           <pre>snowglobe run dist/app --tunnel db.internal:5432=tcp://127.0.0.1:5432 --allow-private</pre>
           <p><code>snowglobe-vm</code>, and an executable made by <code>snowglobe bundle</code>, also take
-            <code>--egress</code>: <code>none</code> refuses every connection of the guest's own (links and forwarded
-            ports still work), <code>internet</code> allows public addresses, and <code>private</code> adds loopback
-            and private networks, as <code>--allow-private</code> does.</p>
+            <code>--egress</code>:</p>
+          <ul>
+            <li><code>none</code> refuses every connection the guest opens itself. Links and forwarded ports still
+              work.</li>
+            <li><code>internet</code> allows public addresses.</li>
+            <li><code>private</code> adds loopback and private networks, as <code>--allow-private</code> does.</li>
+          </ul>
 
           <h2 class="h3" id="machines">Between machines: links</h2>
-          <p>Machines in the daemon reach each other only through links. A link gives a machine, or every machine of
-            a template, a name to reach a machine, a service or a template's machines by: its guest connects to
-            <code>db.internal:5432</code> and gets the target's guest port. Each link is a Unix socket of that
-            machine's own, answered by the daemon, so no TCP port opens on the host for it, and a machine whose egress
-            is <code>none</code> still reaches what it is linked to.</p>
-          <p>A fleet file declares its links, a network mode for what may cross between the fleet's instances, and
-            each template's egress, which is <code>none</code> unless the file says otherwise.
-            <a href="../orchestration/#links">Orchestration</a> covers them; <code>snowglobe ui</code> draws them.</p>
+          <p>Machines in the daemon reach each other only through links. A link gives a machine a name to reach
+            another by: its guest connects to <code>db.internal:5432</code> and gets the target's guest port. A link
+            works even when the machine's egress is <code>none</code>, and opens no TCP port on the host.</p>
+          <p>Links, network modes and each template's egress are covered on
+            <a href="../orchestration/#links">Orchestration and fleets</a>.</p>
         </section>
 
         <nav class="pager" aria-label="Pages"><a class="prev" href="../building/"><small>Previous</small>Building a site</a><a class="next" href="../running/"><small>Next</small>Running outside a browser</a></nav>
@@ -116,7 +142,7 @@ snowglobe build ./my-app --network fetch --tunnel db.internal:5432=wss://db-prox
             <li><a href="../networking/" aria-current="page">Networking</a></li>
             <li><a href="../running/">Running outside a browser</a></li>
             <li><a href="../agents/">For agents and programs</a></li>
-            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../orchestration/">Orchestration and fleets</a></li>
             <li><a href="../isolation/">Isolation</a></li>
             <li><a href="../saving/">Saving your work</a></li>
             <li><a href="../how-it-works/">How it works</a></li>

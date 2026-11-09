@@ -9,7 +9,7 @@ Agent skills in the SKILL.md format (a directory per skill, YAML `name` and `des
 | `snowglobe-run` | `serve`, `run`, `sh`, `cp`, the daemon, `up`, snapshots, `snowglobe ui`, saving |
 | `snowglobe-fleet` | `snowglobe.toml`, `diff` / `apply` / `down` / `top`, instances, the same file at /fleet/ |
 | `snowglobe-networking` | `--network fetch`, tunnels, egress, links, WebSockets, what is refused |
-| `snowglobe-agents` | `snowglobe mcp`, the /agent/ page and its WebMCP tools, consent, limits |
+| `snowglobe-agents` | `snowglobe mcp`, the /agent/ page and its WebMCP tools, limits |
 | `snowglobe-hosted` | The handoff server: what works today and what does not |
 
 Rules for editing:
