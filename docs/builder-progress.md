@@ -831,3 +831,27 @@ notice entries; the browser bundle hash stayed unchanged. The prior complete
 fast browser regression run, focused form regression, real code lifecycle check,
 real profiles fixture and newly completed live profiles run all have terminal
 passing results. Shared runtime and Go sources were unchanged in this continuation.
+
+### Private candidate pinned for Chrome on macOS
+
+Stable acceptance/notices commit `b48f0fd` was pushed to
+`feat/builder-private-release`. The owner selected Chrome on macOS for the hands-on
+walkthrough and was given a fresh-project recipe/search/save/reload/Stop/Retry/export
+sequence; their results and Chrome version remain pending.
+
+An owner-only local snapshot preserves that exact source commit, the previous
+`0315dc3` source, tested browser assets and all referenced web/Supabase blobs.
+All 6,962 asset entries passed archive readback; both guest build IDs were
+independently recomputed and matched the catalog. The source archives retain their
+matching Git commit markers. The sanitized `builder-private-candidate.json`
+records hashes and scope; the binary archives and full inventory remain outside Git.
+
+An isolated loopback drill restored the archived previous gateway source with
+its unchanged dependency lock, started it after stopping an isolated candidate
+gateway, verified rejection of the old session cookie, and verified a new
+connect/disconnect/revocation cycle. It used synthetic credentials and made zero
+provider calls. An initial harness connection reused a closed keepalive socket;
+forcing Connection: close made the drill deterministic. The live gateway was not
+restarted and the owner's browser workspace was not touched. Operational host
+rollback, off-host image backup, guest provenance/license/security review and
+owner/device approval remain open; this is an unapproved private candidate.

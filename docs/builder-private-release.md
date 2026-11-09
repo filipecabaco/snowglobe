@@ -45,12 +45,17 @@ No network configuration was changed for this scope decision.
   deterministic source against real Auth/PostgreSQL VMs.
 - [ ] Final Stop/Retry and novice walkthrough on the owner's supported desktop
   browser, using the retained acceptance worksheet.
-- [ ] Record the approved artifact, matching guest image versions and rollback
-  reference. Keep independent source and sensitive VM backups.
+- [ ] Approve the [recorded private candidate](builder-private-candidate.json),
+  matching guest images and rollback reference. All 6,962 archived assets passed
+  readback and both guest build IDs matched. An isolated archived-gateway drill
+  passed restart/session-revocation and connect/disconnect checks without live
+  inference; an operational host rollback drill and independent off-host image
+  backup remain open. Keep source and sensitive browser VM backups separately.
 - [ ] Finish the applicable notices/provenance and security review. Tailnet-only
   access does not close preview, credential, restore or filesystem safety gates.
 
-Desktop Chrome/Edge are the first target. Firefox/WebKit component tests do not
+The owner selected Chrome on macOS for the final hands-on walkthrough. Its
+actual browser version and results remain pending. Desktop Chrome/Edge are the first target. Firefox/WebKit component tests do not
 establish full workflow support on physical Safari, iPhone or Android. Broader
 browser/device support is a separate qualification; unsupported devices must not
 be advertised as verified for this release.

@@ -1,6 +1,10 @@
 # Nontechnical acceptance worksheet
 
-Status: not executed. Complete this with a participant who has not used Builder.
+Status: owner results pending. The owner selected Chrome on macOS. The pinned
+[candidate record](builder-private-candidate.json) identifies source commit
+`b48f0fd9c47c10fd9351b5bd61f35c597f12f2b4`, browser assets and matching guest
+images. Record the actual Chrome version before counting physical-device results.
+Complete this with a participant who has not used Builder.
 The facilitator records results without supplying terminal commands or developer
 tools. This worksheet does not replace automated safety or real VM tests.
 
