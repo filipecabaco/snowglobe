@@ -1,0 +1,89 @@
+# A link that isn't HTTP: a Python machine speaks a line-based protocol on raw TCP port 7000 (it
+# answers each line with the line upper-cased and a counter), and a Node page connects with
+# node:net as echo.internal:7000. Any port but 80 and 443 is a plain TCP stream, which is what carries
+# Postgres or Redis between machines.
+name = "tcp-echo"
+
+[templates.python]
+build = "../../python"
+network = "fetch"
+
+[templates.node]
+build = "../../web"
+network = "fetch"
+
+[snapshots.echo]
+template = "python"
+run = [
+'''
+cat > /root/echo.py <<'PY'
+import socketserver
+n = 0
+class H(socketserver.StreamRequestHandler):
+    def handle(self):
+        global n
+        for line in self.rfile:
+            n += 1
+            self.wfile.write(f'{n}: {line.decode().strip().upper()}\n'.encode())
+class S(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+S(('0.0.0.0', 7000), H).serve_forever()
+PY
+  ''',
+'''
+python3 /root/echo.py >/tmp/echo.log 2>&1 &
+  ''',
+]
+ready = "python3 -c \"import socket; s = socket.create_connection(('127.0.0.1', 7000)); s.sendall(b'hi\\n'); assert s.recv(64)\""
+timeout = "2m"
+
+[snapshots.client]
+template = "node"
+run = [
+'''
+cat > /root/app/client.mjs <<'JS'
+import http from 'node:http';
+import net from 'node:net';
+const words = ['snow', 'globe', 'link', 'tcp'];
+let i = 0;
+const ask = (line) => new Promise((ok, no) => {
+  const s = net.connect(7000, 'echo.internal', () => s.write(line + '\n'));
+  s.once('data', (d) => { ok(String(d).trim()); s.end(); });
+  s.once('error', no);
+  setTimeout(() => { s.destroy(); no(new Error('timed out')); }, 8000);
+});
+http.createServer(async (req, res) => {
+  if (req.url === '/health') return res.end('ok');
+  let reply;
+  try { reply = await ask(words[i++ % words.length]); } catch (e) { reply = 'echo unreachable: ' + e.message; }
+  res.setHeader('content-type', 'text/html');
+  res.end(`<meta http-equiv='refresh' content='2'><body style='font:16px/1.5 system-ui;margin:24px'><h3>Raw TCP over a link</h3><pre style='font-size:24px'>${reply}</pre><small>net.connect(7000, 'echo.internal'): one line out, one line back</small>`);
+}).listen(8080, '0.0.0.0');
+JS
+  ''',
+'''
+cd /root/app && node client.mjs >/tmp/client.log 2>&1 &
+  ''',
+]
+ready = "wget -q -O /dev/null http://127.0.0.1:8080/health"
+timeout = "2m"
+
+[templates.echo]
+snapshot = "echo"
+
+[templates.client]
+snapshot = "client"
+
+[machines.echo]
+template = "echo"
+
+[services.client]
+template = "client"
+ports = ["8080:8080"]
+
+[links.client-echo]
+from = "client"
+to = "echo"
+port = 7000
+as = "echo.internal"

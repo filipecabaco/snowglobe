@@ -80,7 +80,10 @@
     return;
   }
 
-  const ask = SnowglobeWebMCP.consent({ doc });
+  // No dialog: the machines live in this tab, not on the person's computer, so there is nothing to
+  // ask about. Only "Start fresh" (it deletes saved files) still confirms, below.
+  const ask = async () => {};
+  ask.granted = () => true;
   const scheduler = new SnowglobeScheduler.Scheduler({ onchange: () => render() });
   const confirmFresh = (m) => SnowglobeWebMCP.confirmInPage(doc,
     `${m.title}: its saved files are deleted, and its next command starts from the machine as built. This cannot be undone.`,
@@ -511,6 +514,8 @@
       .catch((err) => port.postMessage({ type: "error", ...SnowglobePreview.errorPage(502, "The preview failed", String(err?.message ?? err)) }));
   });
   navigator.serviceWorker?.startMessages?.();
+  // A WebSocket the page in the preview opens to a machine (preview-hook.js), spoken here (api.previewSocket)
+  addEventListener("message", (e) => { if (e.data?.type === "snowglobe-preview-socket" && e.origin === location.origin && e.source === previewFrame.contentWindow && e.ports?.[0]) api.previewSocket(e.data, e.ports[0]); });
 
   // ---------------------------------------------------------------- the terminal
   const terminalBox = $("terminal-box");
@@ -973,7 +978,7 @@
       /** The Code tab is shown: read what is new (only once the person has allowed the page). */
       shown() {
         if (!hasWeb) { note.textContent = "There is no web machine on this page."; return; }
-        if (!ask.granted()) return; // "Show the files" asks
+        if (!ask.granted()) return;
         if (!st.loaded || st.stale) {
           st.stale = false;
           loadTree().then(() => st.open && st.loaded && openFile(st.open));

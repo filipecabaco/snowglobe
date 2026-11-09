@@ -1,12 +1,12 @@
 # snowglobe
 
-> snowglobe is a Go CLI that turns a Docker image into a static website that runs it in the
-> browser: real Linux on a 64-bit ARM CPU emulated in WebAssembly (armless), restored from a
-> snapshot taken once the app was ready. The output is a folder of static files (GitHub Pages
-> works); no server runs the program. The same site also runs headlessly from the command line,
-> in a container or natively with no Docker (the emulator sandboxes itself), as a single
-> executable, and as a sandbox that agents and job runners drive, on machines without KVM.
-> Guests must be arm64 Alpine images (FROM alpine, built for arm64, or FROM arm64v8/alpine).
+> snowglobe runs a Docker image where Docker isn't. It turns the image into a folder of static
+> files (GitHub Pages works; no server runs the program) that opens in a browser tab, runs from
+> one binary with no Docker, daemon, root or KVM, or serves as a sandbox that agents and job
+> runners drive. It starts in about a second: the site is a snapshot taken once the app was
+> ready. Under it is real Linux on a 64-bit ARM CPU emulated in WebAssembly (armless), so
+> guests must be arm64 Alpine images (FROM alpine, built for arm64, or FROM arm64v8/alpine) and
+> run slower than native.
 
 Live demos: https://filipecabaco.github.io/snowglobe/ (Supabase, Elixir IEx, PostgreSQL,
 Elixir + Postgres, Python + Rich, TypeScript + Zod, Go + Bubble Tea, Rust + clap, Java + Gson,
@@ -164,9 +164,10 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   template.awake, snapshot.saved, admission.refused, ...), the last 200 first; `snowglobe top
   [--once]` shows it live (memory and budget, templates, services, machines, recent events). API:
   `/v1/events` (server-sent events, `?after=SEQ`), `/v1/stats`.
-- `snowglobe apply [-f snowglobe.toml]` gets the daemon to what a fleet file says: `[templates.N]`
+- `snowglobe apply [-f snowglobe.toml]` gets the daemon to what a fleet file says (`name` = the fleet's
+  name, default its directory's): `[templates.N]`
   (`site`, or `build` = a Dockerfile directory built first with optional `network`, or `snapshot`;
-  `idle`, `max_machines`, `egress` = none (the default) | internet | private, `expose` = guest ports
+  `idle`, `max_machines`, `allow_private`, `egress` = none (the default) | internet | private, `expose` = guest ports
   the others reach under mode all), `[network]` (`mode` = exclusive (the default: each instance
   reaches only its own machines) | inclusive (every machine of a template reaches the target's
   template's, across instances) | all (as inclusive, plus every template reaches every other's
@@ -239,8 +240,7 @@ runs because of the address.
 - Machines start lazily: nothing boots until a command (or a copy) needs it. Each shows its
   state: asleep, waking, awake, busy, suspending, or failed (with Retry).
 - A few are awake at once: 2 by default ("2 of 2 awake"). The number field "Machines awake at once",
-  `set_awake_limit {count}` and `setAwakeLimit(count)` change it, 1 to 8, for this page load; it
-  runs nothing, so it asks no one. Each awake machine is about 540 to 740 MB of memory (supabase,
+  `set_awake_limit {count}` and `setAwakeLimit(count)` change it, 1 to 8, for this page load. Each awake machine is about 540 to 740 MB of memory (supabase,
   on 2 CPUs, about 730). Waking another suspends the least recently used idle one first; a busy
   machine (a job, a copy or an open preview in it) is never suspended: the wake waits, and the
   status line says so. A lower limit suspends idle
@@ -256,12 +256,12 @@ runs because of the address.
   store is unreachable), the page says so: "can't reach the machine's files (<url>)".
 - Operations on one machine go one at a time, in the order asked: a run asked during a copy waits
   for it; a run beside a running job is refused (one job at a time).
-- Every run, copy and preview, by the form, a WebMCP tool or `window.snowglobeAgent`, asks the
-  person at the page first, once per page load. In another page's frame the page refuses to run and
+- Agents can run commands in the page's machines straight away: no run, copy or preview, by the
+  form, a WebMCP tool or `window.snowglobeAgent`, asks anyone first. Only "Start fresh…" and
+  "Revert to starter…" confirm. In another page's frame the page refuses to run and
   offers no tools. It needs the network: it doesn't work offline.
 - For agents that click and type: the form "Run a command" has the combobox "Runtime", the
-  textbox "Shell command", and the buttons "Run" and "Cancel". The first run asks the person at
-  the page once per page load ("Let agents use these machines?": Allow). The region "Result" holds
+  textbox "Shell command", and the buttons "Run" and "Cancel". The region "Result" holds
   the latest run: "Exit status: N" and "Command output" ending `[exit N]`, `[timed out]` or
   `[stopped]`; "Earlier runs" lists the ones before it, each tagged with its runtime. These, the
   machines' list and the forms below are in the "Machines" section, under the studio. The status
@@ -335,7 +335,7 @@ runs because of the address.
   (a ref from before a re-render or reload is refused: snapshot again) and returns a fresh snapshot;
   `close_preview`;
   `set_awake_limit {count}` (1 to 8); `list_runtimes` reports `awake_limit`, `preview_base` and
-  the open `preview`. The first run, copy or preview asks the person at the page.
+  the open `preview`.
 - Jobs: one at a time in each machine, as root on its serial shell (never the visible terminal),
   from `/root`, so relative paths work and files persist between jobs. Default timeout 300 s, at
   most 3600; out of time or cancelled, everything the command started is killed. A repeated
@@ -354,7 +354,7 @@ runs because of the address.
 
 ### The preview
 
-A server in a machine, seen in the page, over HTTP/1.1 (no WebSockets). Its address is
+A server in a machine, seen in the page, over HTTP/1.1, plus the WebSockets a page in the preview opens (up to 32). Its address is
 
     <preview_base><runtime>/<port>/<path>      preview_base: https://filipecabaco.github.io/snowglobe/agent/preview/
 
@@ -374,7 +374,8 @@ does. A port with nothing listening answers 502, "Nothing is listening".
   5 s otherwise) and reloads the preview when a new build is written; a failed build is shown in
   the feed and the preview keeps the last page that built. A server with no `/__build` (plain
   `serve dist`, `vite preview`) has the preview reloaded after each command in its machine. Vite's
-  dev server and hot module reload don't work in the preview (they need a WebSocket).
+  dev server and hot module reload are untested in the preview, which does carry WebSockets now
+  (see the fleet page section); use `serve --watch`.
 - Build pages with relative asset paths: they are served under a prefix. The `web` project's Vite
   config has `base: "./"`.
 - The page in the preview is this site's own (same origin): it reaches any machine's server at
@@ -389,7 +390,7 @@ does. A port with nothing listening answers 502, "Nothing is listening".
   is busy with something else (a job, a copy), a preview request or `open_preview` waits up to 30 s
   for one to be free, then fails: 503 "No machine slot free" (raise the awake limit, or close the
   preview).
-- Answered only while a preview is open and the person has allowed the page; a preview address
+- Answered only while a preview is open; a preview address
   opened from anywhere but the agent page (typed in, linked from another site) is refused (403).
 
 ### Building a web app on Supabase, seen live
@@ -479,6 +480,31 @@ For example: write `/root/data.csv` in `python`, `copy_file` it to `duckdb`, que
 
 The other runs (IEx, TypeScript, Go, Rust, curl + jq, Elixir + Postgres and Java) are for people,
 on the landing page, not on the agent page.
+
+## The fleet page (`/fleet/`)
+
+A `snowglobe.toml` run in one tab, on the agent page's machines: https://filipecabaco.github.io/snowglobe/fleet/
+The file is read in the browser (`fleet.js`) into steps: a snapshot's `run` commands and `ready` check, a `[links.*]` entry,
+a `[machines.*]` wake, a `[services.*]` opened in a frame; each has its own Run, or Run all, and Stop ends the run, closes the
+frame, clears the links and sends the machines back to their image. The page draws the machines and links as a graph and
+colours the file; a `run` command may be a multi-line string (three single quotes as written, three double quotes with escapes;
+heredoc terminators need column 0). Small fleets to try are in `examples/fleet/templates/`, in the page's Templates menu. A template names a site the
+page has (`build = "../python"` is the `python` machine). One site is one machine on the page. Links are real, both ends
+need a network, and a machine reads its links when it wakes. The guest of `from` that connects to `as` on port 80 or 443
+makes an HTTP(S) request, which the page answers from `to`'s server on `port` (machine-core.js sends it to
+`<page>/preview/<machine>/<port>/…`, the service worker hands it to the page, the page to the machine). Any other port
+(`as_port`, default `port`) is a raw TCP stream: armless's tunnel option carries it as binary messages over a stand-in
+`WebSocket` (a private `wss://link.invalid/<machine>/<port>` URL, machine-core.js) to the page, which opens a connection into
+`to`'s machine and pipes bytes both ways (orchestrator.js: 64 connections per link, 8 MiB in flight each way; an open
+connection keeps `to` awake; either machine ending closes the connection). WebSockets work three ways: on any port but
+80 and 443 a guest speaks WebSocket itself over that raw TCP stream; a guest's `ws://<link name>/` on 80 or 443 is spoken by
+`ws-client.js` (an RFC 6455 client, no permessage-deflate) over the same stream; and a page in the preview can open
+`new WebSocket("<page>/preview/<machine>/<port>/…")`: the service worker can't see WebSockets, so `preview-hook.js` replaces
+`WebSocket` in the preview's pages with a proxy that passes the socket to the page (up to 32 at once, while the preview is open),
+which runs `ws-client.js` into the machine. UDP is not carried.
+Scale (`min`, `max`, `idle`), `ttl`, `egress` and `network.mode` are read, not applied. The page's example is
+`examples/fleet/snowglobe.toml`, which `snowglobe apply` runs for real too: a Supabase machine gets a row a second, and a node machine
+subscribes to the table with supabase-js over Supabase Realtime (a WebSocket, at `supabase.internal:54321`) and draws what it hears.
 
 ## Networking (`--network fetch`)
 

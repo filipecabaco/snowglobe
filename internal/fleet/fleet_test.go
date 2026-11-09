@@ -425,8 +425,8 @@ func TestTheExampleFleetLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(steps(p), "|"); !strings.Contains(got, "+ template py (build "+filepath.Join(f.Dir, "..", "python")) ||
-		!strings.Contains(got, "+ service web") || len(p.Steps) != 5 {
+	if got := strings.Join(steps(p), "|"); !strings.Contains(got, "+ template supabase (build "+filepath.Join(f.Dir, "..", "supabase")) ||
+		!strings.Contains(got, "+ service viewer") || !strings.Contains(got, "+ link viewer-db (viewer reaches db:54321 as supabase.internal:54321") || len(p.Steps) != 9 {
 		t.Errorf("the example's plan: %v", got)
 	}
 }
@@ -485,5 +485,25 @@ func TestLinksJoinTheFleetsMachinesAndAStepAppliesOnItsOwn(t *testing.T) {
 		if _, err := Load(write(t, text)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v, want %q", text, err, want)
 		}
+	}
+}
+
+func TestLoadCRLFCommandsGetLF(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "snowglobe.toml")
+	text := "name = \"x\"\r\n[templates.t]\r\nsite = \"/sites/t\"\r\n[snapshots.s]\r\ntemplate = \"t\"\r\nrun = [\r\n'''\r\nmkdir -p /a\r\ncat <<EOF\r\nhi\r\nEOF\r\n''',\r\n]\r\nready = '''\r\ntrue\r\n'''\r\n"
+	if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := Load(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.Snapshots["s"]
+	if strings.Contains(strings.Join(got.Run, "")+got.Ready, "\r") {
+		t.Fatalf("a command kept its CR: %q %q", got.Run, got.Ready)
+	}
+	if want := "mkdir -p /a\ncat <<EOF\nhi\nEOF\n"; len(got.Run) != 1 || got.Run[0] != want {
+		t.Fatalf("run = %q, want %q", got.Run, want)
 	}
 }

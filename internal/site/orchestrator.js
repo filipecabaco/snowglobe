@@ -12,7 +12,8 @@
 //  - offers all of it as one form for agents that click and type, as window.snowglobeAgent, and as
 //    one set of WebMCP tools; asking the person at the page once, before anything runs;
 //  - shows a machine's web server in the page (preview.js): an open preview keeps its machine, and
-//    every machine its page reaches through the preview, awake (busy) until it is closed.
+//    every machine its page reaches through the preview, awake (busy) until it is closed; a
+//    WebSocket its page opens to a machine is spoken here (previewSocket, ws-client.js).
 // A machine on several CPUs needs the page cross-origin isolated (its service worker makes it one);
 // where it isn't, that machine is refused with the reason, and the others run as ever.
 // A machine that fails (its worker crashed, it powered off, a capture hung) is ended at once: its
@@ -28,6 +29,17 @@
   // How long the preview (a request through it, or open_preview) waits for an awake slot when
   // every awake machine is busy with something other than the preview, before it gives up
   const PREVIEW_WAIT_MS = 30000;
+  // Raw TCP over links: connections at once over one link (from, to, port), beyond which a new one
+  // is refused; bytes on their way in either direction on one connection, beyond which it is
+  // closed (nothing in armless can tell a guest to slow down: see linkOpen); how long the machine
+  // linked to gets to accept, once awake
+  const MAX_LINK_CONNS = 64;
+  const MAX_LINK_QUEUED = 8 << 20;
+  const LINK_CONNECT_MS = 10000;
+  // WebSockets the preview's pages open to the machines (previewSocket): at once, in the whole page
+  const MAX_PREVIEW_SOCKETS = 32;
+  // A link's tunnel url, as machine-core.js's linkUrl() makes it and its LinkSocket recognises
+  const linkUrl = (runtime, port) => `wss://link.invalid/${encodeURIComponent(runtime)}/${port}`;
 
   /** One machine's save: one checkpoint in IndexedDB, in a scope of its own, held by one tab. */
   class SaveSlot {
@@ -105,7 +117,7 @@
     const abs = (u) => new URL(u, page).href;
     const scripts = {
       worker: abs("machine-worker.js"),
-      core: [abs(manifest.armless.js), abs("sessions.js"), abs("agent.js"), abs("transfer.js"), abs("machine-core.js")],
+      core: [abs(manifest.armless.js), abs("sessions.js"), abs("agent.js"), abs("transfer.js"), abs("ws-client.js"), abs("machine-core.js")],
     };
     const changed = () => { try { onchange?.(); } catch {} };
     const tell = (event) => { try { onactivity?.(event); } catch {} };
@@ -117,6 +129,13 @@
     // Upload lines typed ahead: 4 doubles how fast files go in (measured: 7 to 15 KiB/s), and
     // 4 lines stay under the guest terminal's 4 KiB buffer
     const state = { transport, uploadWindow: 4, preview: null };
+    // Links between machines, by the machine that connects: { names: { name: { runtime, port } } (its
+    // guest's HTTP to a name, guestFetch), tunnels: [{ host, port, runtime, to }] (its guest's TCP to
+    // host:port, carried to port `to` in `runtime`) }; and the ports they reach, which the page
+    // answers without a preview
+    const links = { byMachine: new Map(), targets: new Set() };
+    // WebSockets the preview's pages have open to the machines: each { close(why) }
+    const previewSockets = new Set();
 
     const machines = manifest.runtimes.map((r) => {
       const base = abs(r.base);
@@ -141,9 +160,14 @@
         previews: new Map(),
         // Preview requests under way, by port: a port is let go only once the last one is over
         inflight: new Map(),
-        busy() { return !!this.job || this.xfers > 0 || this.starting > 0 || this.previews.size > 0; },
+        // TCP connections over links: into it (each holds it awake, busy, until it closes), and out
+        // of its guest (while any is open, it and the machines it reaches count as one, as the
+        // preview's do, so the machine it connects to is woken beside it even at the awake limit)
+        linksIn: 0,
+        linksOut: 0,
+        busy() { return !!this.job || this.xfers > 0 || this.starting > 0 || this.previews.size > 0 || this.linksIn > 0; },
         // Held by the preview: the scheduler counts the preview's machines as one
-        previewHeld() { return this.previews.size > 0; },
+        previewHeld() { return this.previews.size > 0 || this.linksIn > 0 || this.linksOut > 0; },
       };
       m.armless = {
         name: r.name,
@@ -186,9 +210,154 @@
       m.onConsole?.(bytes);
     }
 
+    /** The machine's armless options, with the names its guest may connect to (read at each wake):
+     *  `links` for its HTTP to them, and a tunnel per link for its TCP (machine-core.js's LinkSocket). */
+    function withLinks(m) {
+      const l = links.byMachine.get(m.name);
+      if (!l) return m.armless;
+      const cfg = { ...m.armless, links: l.names, link_base: page.href };
+      if (m.armless.network) {
+        cfg.network = { ...m.armless.network, tunnels: [...(m.armless.network.tunnels ?? []),
+          ...l.tunnels.map((t) => ({ host: t.host, port: t.port, url: linkUrl(t.runtime, t.to) }))] };
+      }
+      return cfg;
+    }
+
+    // ---------------------------------------------------------------- TCP over links
+    //
+    // A guest's TCP connection to a link's name and port arrives as `link` events from its host
+    // (machine-core.js's LinkSocket, in its worker): open { cid, runtime, port }, then data, end
+    // (the guest's FIN) and close. The page checks it against that machine's own links (the worker
+    // is trusted less than the page), holds the machine it reaches awake (busy) while it is open,
+    // wakes it if it must, connects to the port there (tcpOpen) and pipes both ways, answering
+    // with host.linkIn(cid, connect | data | end | close | error). Every way it can end (either
+    // side closing, either machine going, a refusal, the bound on bytes on their way) ends it once
+    // and lets go of the hold once.
+
+    /** What a host says about its guest's link connections (`conns`: that host's, by cid). */
+    function linkEvent(a, host, conns, e) {
+      if (!e || typeof e !== "object") return;
+      if (e.kind === "gone") {
+        for (const c of [...conns.values()]) c.finish(null, `${a.name} went away`);
+        return;
+      }
+      if (e.kind === "open") return linkOpen(a, host, conns, e);
+      const c = conns.get(e.cid);
+      if (!c) return; // over already
+      if (e.kind === "data") c.fromGuest(e.bytes);
+      else if (e.kind === "end") c.guestEnded();
+      else if (e.kind === "close") c.finish(null, "the guest closed it");
+    }
+
+    function linkOpen(a, host, conns, { cid, runtime, port }) {
+      const refuse = () => { host.linkIn(cid, "close").catch(() => {}); };
+      if (!Number.isInteger(cid) || cid < 1 || conns.has(cid)) return;
+      // Only a machine's own links, as this page declared them, and once the person allowed the page
+      const declared = links.byMachine.get(a.name)?.tunnels.some((t) => t.runtime === runtime && t.to === port);
+      if (a.host !== host || !granted() || !declared || !links.targets.has(`${runtime}:${port}`)) return refuse();
+      const b = byName.get(runtime);
+      if (!b || b === a || !b.network) return refuse();
+      let open = 0;
+      for (const x of conns.values()) if (x.b === b && x.port === port) open++;
+      if (open >= MAX_LINK_CONNS) return refuse();
+
+      const wake = new AbortController();
+      let timer = null;
+      let stream = null;
+      let streamOver = false; // b's side said close or error: nothing to abort
+      let held = true;
+      const c = {
+        cid, b, port,
+        state: "opening", // opening, open, closing (the server finished: the guest was told), done
+        toB: 0, // bytes written to b's server that it hasn't taken yet
+        toA: 0, // bytes handed to a's guest that it hasn't taken yet
+        /** Over: `say` (connect's opposite, to a's guest: "close", "error", or null for nothing), b's
+         *  side ended, the hold let go. Once, whatever asks. */
+        finish(say, why) {
+          if (c.state === "done") return;
+          c.state = "done";
+          c.why = why;
+          conns.delete(cid);
+          if (timer !== null) clearTimeout(timer);
+          timer = null;
+          wake.abort();
+          if (say) host.linkIn(cid, say).catch(() => {});
+          if (stream && !streamOver) { try { stream.abort(); } catch {} }
+          if (held) {
+            held = false;
+            b.linksIn = down(b.linksIn);
+            a.linksOut = down(a.linksOut);
+            b.lastUsed = now();
+            if (b.lifecycle.state === "running") b.lifecycle.touch();
+            scheduler.notify();
+            changed();
+          }
+        },
+        fromGuest(bytes) {
+          if (c.state !== "open" || !(bytes instanceof Uint8Array)) return;
+          const n = bytes.length;
+          c.toB += n;
+          if (c.toB > MAX_LINK_QUEUED) return c.finish("error", `more than ${MAX_LINK_QUEUED} bytes on their way to ${b.name}`);
+          stream.write(bytes)?.then?.(() => { c.toB -= n; }, () => {});
+        },
+        guestEnded() {
+          // A half-close: b's server reads its end, and may still answer
+          if (c.state === "open") stream.end();
+        },
+      };
+      conns.set(cid, c);
+      b.linksIn++;
+      a.linksOut++;
+      changed();
+
+      (async () => {
+        try {
+          await awake(b, wake.signal, { waitMs: PREVIEW_WAIT_MS, preview: true });
+        } catch (e) {
+          return c.finish("error", String(e?.message ?? e));
+        }
+        if (c.state !== "opening") return;
+        if (!b.host) return c.finish("error", `${b.name} is not running`);
+        b.lastUsed = now();
+        b.lifecycle.touch();
+        b.dirty = true; // whatever comes over the connection may change it
+        const s = stream = b.host.tcpOpen(port);
+        timer = setTimeout(() => { timer = null; if (c.state === "opening") c.finish("error", `${b.name} did not accept on port ${port}`); }, LINK_CONNECT_MS);
+        s.onconnect = () => {
+          if (c.state !== "opening") return;
+          clearTimeout(timer);
+          timer = null;
+          c.state = "open";
+          host.linkIn(cid, "connect").catch(() => c.finish(null, `${a.name} went away`));
+        };
+        s.ondata = (bytes) => {
+          if (c.state !== "open") return;
+          const n = bytes.length;
+          c.toA += n;
+          if (c.toA > MAX_LINK_QUEUED) return c.finish("error", `more than ${MAX_LINK_QUEUED} bytes on their way to ${a.name}`);
+          host.linkIn(cid, "data", bytes).then(() => { c.toA -= n; }, () => c.finish(null, `${a.name} went away`));
+        };
+        // The server finished sending: the guest's side is closed after what came (armless can't be
+        // told a half-close), and the page's side to the server too; over once the server closes
+        s.onend = () => {
+          if (c.state !== "open") return;
+          c.state = "closing";
+          host.linkIn(cid, "end").catch(() => {});
+          try { s.end(); } catch {}
+        };
+        // Closed with no connect before it: nothing listens there, and the guest is refused
+        s.onclose = () => { streamOver = true; c.finish(c.state === "closing" ? null : "close", "the server closed it"); };
+        // The machine linked to went away (suspended, failed, ended) under it
+        s.onerror = (e) => { streamOver = true; c.finish(c.state === "closing" ? null : "error", String(e?.message ?? e)); };
+      })();
+    }
+
     // A machine's host, made at each wake (and its worker with it), ended at each suspend
     function makeHost(m) {
-      const host = createMachine({ base: m.base, config: m.armless, transport: state.transport, scripts, uploadWindow: state.uploadWindow, ...hostOptions });
+      const host = createMachine({ base: m.base, config: withLinks(m), transport: state.transport, scripts, uploadWindow: state.uploadWindow, ...hostOptions });
+      // Its guest's TCP connections over links, by cid: each ends when this host goes ("gone")
+      const linkConns = new Map();
+      host.on("link", (e) => linkEvent(m, host, linkConns, e));
       host.on("console", (bytes) => { if (m.host === host) record(m, bytes); });
       host.on("progress", (e) => {
         if (m.host === host && /state\.bin/.test(e.file) && e.total) {
@@ -342,7 +511,8 @@
         state: uiState(m),
         // Each command here reports the files it changed in this directory (job_status's changes)
         watch: m.watch,
-        doing: m.job ? `job ${m.job}` : m.xfers ? "copying a file" : m.previews.size ? `serving the preview (port ${[...m.previews.keys()].join(", ")})` : null,
+        doing: m.job ? `job ${m.job}` : m.xfers ? "copying a file" : m.previews.size ? `serving the preview (port ${[...m.previews.keys()].join(", ")})`
+          : m.linksIn ? `serving ${m.linksIn} link connection${m.linksIn === 1 ? "" : "s"}` : null,
         saved: !!(m.slot.saved || m.inMemory),
         savedAt: m.slot.saved?.savedAt ?? null,
         storage: m.slot.error ? `not saving: ${m.slot.error}` : "this browser (IndexedDB)",
@@ -358,6 +528,8 @@
         unavailable: unavailable(m),
         // The ports a preview holds it awake for
         previewPorts: [...m.previews.keys()],
+        // TCP connections over links: into it (holding it awake), and out of its guest
+        linkConnections: { in: m.linksIn, out: m.linksOut },
       };
     }
 
@@ -712,6 +884,8 @@
     function closePreview(why = "closed", source = "script") {
       const was = state.preview;
       state.preview = null;
+      // Its pages' WebSockets go with it (the page in the frame is gone, or going)
+      for (const s of [...previewSockets]) s.close("the preview closed");
       for (const m of machines) {
         if (!m.previews.size) continue;
         m.previews.clear();
@@ -825,7 +999,7 @@
      */
     async function previewRequest(req, send, { signal, waitMs = PREVIEW_WAIT_MS } = {}) {
       const refuse = (status, title, detail) => send({ type: "error", ...Preview.errorPage(status, title, detail, { back: page.href }) });
-      if (!state.preview) return refuse(403, "No preview is open", "This address shows a machine's server only while the agent page has a preview open: open one there (Open preview, or the open_preview tool).");
+      if (!state.preview && !links.targets.has(`${req.runtime}:${req.port}`)) return refuse(403, "No preview is open", "This address shows a machine's server only while the agent page has a preview open: open one there (Open preview, or the open_preview tool).");
       if (!granted()) return refuse(403, "Not allowed", "The person at the agent page hasn't allowed its machines to run yet.");
       let m;
       try { m = get(req.runtime); } catch (e) { return refuse(404, "No such machine", String(e?.message ?? e)); }
@@ -871,6 +1045,129 @@
           changed();
         }
       }
+    }
+
+    /**
+     * A WebSocket a page in the preview opened to a machine: preview-hook.js's shim, for a url under
+     * the page's preview/<runtime>/<port>/ (a service worker can't take a WebSocket, so the preview's
+     * page asks this page over a MessageChannel instead). `req` is { url (same origin, http(s)),
+     * protocols }; `port` the channel's end. The WebSocket itself (handshake, frames) is spoken here
+     * (ws-client.js) over a TCP connection into the machine (host.tcpOpen); the shim gets what it
+     * says already decoded: { type: "taken" } at once, then "open" { protocol, extensions },
+     * "message" { data: a string or an ArrayBuffer, handed over }, "sent" { n } (bytes of a message
+     * the machine took: the shim's bufferedAmount), "error" { message } and "close" { code, reason,
+     * wasClean }, the last thing said. The shim says "send" { data, n }, "close" { code, reason } and
+     * "gone" (its page went away).
+     *
+     * The gate, waking and holding are previewRequest's: a preview open (or the port a link's
+     * target) and the person's yes; the machine woken if it must be, and held awake (linked) while
+     * the preview stays open; closing the preview closes its sockets (1001). At most
+     * MAX_PREVIEW_SOCKETS at once; bytes on their way to the machine beyond MAX_LINK_QUEUED fail it.
+     */
+    function previewSocket(req, port, { waitMs = PREVIEW_WAIT_MS } = {}) {
+      const W = root.SnowglobeWsClient;
+      const say = (msg, transfer) => { try { port.postMessage(msg, transfer ?? []); } catch {} };
+      let over = false;
+      let held = null; // { m, port }: what this socket counts in previewRequest's accounting
+      let ws = null;
+      const wake = new AbortController();
+      const handle = { close: (why) => { if (ws) ws._close(1001, new TextEncoder().encode(why)); else end({ code: 1006, error: why }); } };
+      const release = () => {
+        previewSockets.delete(handle);
+        if (!held) return;
+        const { m, port: p } = held;
+        held = null;
+        const left = (m.inflight.get(p) ?? 1) - 1;
+        if (left > 0) m.inflight.set(p, left);
+        else m.inflight.delete(p);
+        if (left <= 0 && m.previews.get(p) === "linking") m.previews.delete(p);
+        m.lastUsed = now();
+        if (m.lifecycle.state === "running") m.lifecycle.touch();
+        scheduler.notify();
+        changed();
+      };
+      /** Over, once: what the shim hears last, and the hold let go. */
+      const end = ({ code = 1006, reason = "", wasClean = false, error = null }) => {
+        if (over) return;
+        over = true;
+        wake.abort();
+        if (error) say({ type: "error", message: String(error) });
+        say({ type: "close", code, reason, wasClean });
+        try { port.onmessage = null; port.close(); } catch {}
+        release();
+      };
+      say({ type: "taken" });
+      port.onmessage = ({ data }) => {
+        if (over || !data || typeof data !== "object") return;
+        if (data.type === "send") {
+          if (!ws || ws.readyState !== 1) return;
+          const d = data.data;
+          if (typeof d !== "string" && !(d instanceof ArrayBuffer)) return;
+          const n = typeof d === "string" ? W.byteLength(d) : d.byteLength;
+          ws.send(d).then(() => { if (!over) say({ type: "sent", n }); });
+          if (ws.bufferedAmount > MAX_LINK_QUEUED) ws._fail(1008, `more than ${MAX_LINK_QUEUED} bytes on their way to ${held?.m.name ?? "the machine"}`);
+        } else if (data.type === "close") {
+          if (!ws) return end({ code: 1006, error: "closed before it connected" });
+          try { ws.close(data.code ?? undefined, data.reason ?? undefined); } catch { ws.close(); }
+        } else if (data.type === "gone") {
+          if (ws) ws._close(1001, new TextEncoder().encode("the page went away"));
+          else end({ code: 1006, error: "the page went away" });
+        }
+      };
+      if (!W) return end({ error: "the page has no WebSocket client (ws-client.js)" });
+      let r = null;
+      try { r = Preview.route(new URL(String(req?.url)), page); } catch {}
+      if (!r || r.error) return end({ error: r?.error ?? `not an address under this page's preview/: ${String(req?.url).slice(0, 200)}` });
+      let protocols;
+      try { protocols = W.checkProtocols(req.protocols ?? []); } catch (e) { return end({ error: String(e?.message ?? e) }); }
+      if (!state.preview && !links.targets.has(`${r.runtime}:${r.port}`)) return end({ error: "no preview is open: this address reaches a machine's server only while the page has a preview open" });
+      if (!granted()) return end({ error: "the person at the page hasn't allowed its machines to run yet" });
+      let m;
+      try { m = get(r.runtime); } catch (e) { return end({ error: String(e?.message ?? e) }); }
+      if (!m.network) return end({ error: `${m.name} has no network device: nothing in it can be connected to` });
+      if (previewSockets.size >= MAX_PREVIEW_SOCKETS) return end({ error: `at most ${MAX_PREVIEW_SOCKETS} WebSockets from the preview at once` });
+      previewSockets.add(handle);
+      held = { m, port: r.port };
+      m.inflight.set(r.port, (m.inflight.get(r.port) ?? 0) + 1);
+      if (!m.previews.has(r.port)) {
+        m.previews.set(r.port, "linking");
+        changed();
+      }
+      (async () => {
+        try {
+          await awake(m, wake.signal, { waitMs, preview: true });
+        } catch (e) {
+          return end({ error: e?.name === "TimeoutError" ? `no machine slot free: ${e?.message ?? e}` : `${m.name} is not running: ${e?.message ?? e}` });
+        }
+        if (over) return;
+        const host = m.host;
+        if (!host) return end({ error: `${m.name} is not running` });
+        m.lastUsed = now();
+        m.lifecycle.touch();
+        m.dirty = true; // whatever comes over it may change the machine
+        // The server sees the page's own origin, and a Host on the machine (as the preview's HTTP does)
+        try {
+          ws = new W.WebSocketClient(r.prefix + r.path, protocols, { base: page.href, connect: () => host.tcpOpen(r.port), host: `localhost:${r.port}`, path: r.path, origin: page.origin });
+        } catch (e) {
+          return end({ error: String(e?.message ?? e) });
+        }
+        ws.binaryType = "arraybuffer";
+        let failed = false;
+        ws.onopen = () => {
+          if (m.previews.get(r.port) === "linking") {
+            m.previews.set(r.port, "linked");
+            changed();
+          }
+          say({ type: "open", protocol: ws.protocol, extensions: ws.extensions });
+        };
+        ws.onmessage = ({ data }) => {
+          if (typeof data === "string") say({ type: "message", data });
+          else say({ type: "message", data }, [data]);
+        };
+        ws.onerror = () => { failed = true; };
+        ws.onclose = ({ code, reason, wasClean }) => end({ code, reason, wasClean, error: failed ? `${m.name}'s port ${r.port}: ${ws.failure ?? "the connection failed"}` : null });
+      })();
+      return handle;
     }
 
     /** Back to the snapshot: its save deleted, and (if awake) the machine ended without a save.
@@ -942,6 +1239,47 @@
         return true;
       },
       async suspend(runtime) { return scheduler.suspend(get(runtime), "asked"); },
+      /**
+       * The links between machines, whole: [{ from, to, port, as, as_port? }]. The guest of `from`
+       * then reaches `as` (feed.internal) as `to`'s server on `port`: its HTTP to `as` (ports 80 and
+       * 443, fetch()), and its plain TCP to `as`:`as_port` (default: `port`; any port but 80 and
+       * 443, which armless keeps for HTTP), carried by the page. The page answers those without a
+       * preview open. When one name has several links, its HTTP goes to the first declared. A
+       * machine's links are read when it wakes, so one that is awake with other links is suspended
+       * (woken again by its next use). Resolves with the machines it suspended.
+       */
+      async setLinks(list = []) {
+        if (!Array.isArray(list)) throw new Error("setLinks: [{ from, to, port, as, as_port? }]");
+        const byMachine = new Map();
+        const targets = new Set();
+        for (const l of list) {
+          const from = get(l.from);
+          const to = get(l.to);
+          const port = Preview.checkPort(l.port);
+          if (from === to) throw new Error(`a machine can't link to itself (${from.name})`);
+          if (!from.network) throw new Error(`${from.name} has no network device, so it can't connect to ${to.name}`);
+          if (!to.network) throw new Error(`${to.name} has no network device, so nothing can connect to it`);
+          if (typeof l.as !== "string" || !/^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/.test(l.as) || /^[0-9.]+$/.test(l.as)) throw new Error(`as: a host name like feed.internal, not ${JSON.stringify(l.as)}`);
+          let asPort = port;
+          if (l.as_port !== undefined && l.as_port !== null) {
+            try { asPort = Preview.checkPort(l.as_port); } catch { throw new Error(`as_port: the port ${from.name}'s guest connects to, 1 to 65535, not ${JSON.stringify(l.as_port)}`); }
+          }
+          const mine = byMachine.get(from.name) ?? { names: Object.create(null), tunnels: [] };
+          if (mine.tunnels.some((t) => t.host === l.as && t.port === asPort)) throw new Error(`${from.name} links ${l.as}:${asPort} twice`);
+          if (!Object.hasOwn(mine.names, l.as)) mine.names[l.as] = { runtime: to.name, port };
+          mine.tunnels.push({ host: l.as, port: asPort, runtime: to.name, to: port });
+          byMachine.set(from.name, mine);
+          targets.add(`${to.name}:${port}`);
+        }
+        const key = (l) => JSON.stringify(l ? [Object.entries(l.names).sort(), l.tunnels] : null);
+        const stale = machines.filter((m) => m.host && key(links.byMachine.get(m.name)) !== key(byMachine.get(m.name)));
+        for (const m of stale) if (m.busy()) throw new Error(`${m.name} is busy: wait for it, then set the links again`);
+        links.byMachine = byMachine;
+        links.targets = targets;
+        for (const m of stale) await scheduler.suspend(m, "asked");
+        changed();
+        return stale.map((m) => m.name);
+      },
       async wake(runtime) { await awake(get(runtime)); return true; },
       async recoverFiles(runtime) {
         const m = get(runtime);
@@ -971,6 +1309,7 @@
       async closePreview(opts) { return closePreview("closed", opts?.source); },
       async preview() { return previewView(); },
       previewRequest,
+      previewSocket,
       previewGet,
       /** How many machines may be awake at once, 1 to 8, for this page load (2 until changed). It
        *  runs nothing, so it asks no one. Lower than what is awake: idle machines are suspended, least

@@ -865,3 +865,31 @@ This is owner-reported generation success, not an independently observed browser
 run or confirmation of each requested feature. Account isolation, search,
 Save/reload, Stop/Retry, export and the actual Chrome version remain unconfirmed.
 The private candidate remains unapproved and the full walkthrough gate stays open.
+
+### Upstream main merged into the Builder branch
+
+Integrated upstream main at `4b5b8d2`, preserving all six incoming commits
+(including fleet/link support, fleet templates, armless 0.9.3 and faster initial
+npm installs). The merge was prepared and tested in a separate checkout. Five
+conflicts were resolved by retaining both fleet publication and private Builder
+exclusion, both worker link/recovery operations, both sets of orchestrator tests,
+and both build/ignore requirements.
+
+Integration checks found two Builder-only adaptations that needed updating:
+the new worker loader requires `ws-client.js`, and the changed guestFetch
+signature no longer matched the old network-restriction replacement. Builder
+now copies/loads the WebSocket helper and its build rejects an unrecognized
+fetch function instead of silently shipping unrestricted networking. Both new
+artifact regressions failed before the fix and passed afterward. A real Chromium
+worker initialization fixture also imports the built loader dependencies and is
+included in the fast CI browser regression set. The shared demo networking keeps
+upstream's behavior; only Builder's copied worker core has the npm restriction.
+
+Terminal validation: Go `test ./...` passed, all 233 shared Node tests passed,
+108 Builder tests passed with one optional skip, the package build passed, and
+the complete fast browser regression set passed. Initial isolated-checkout test
+setup failures (Go missing from PATH and a dependency symlink rejected by the
+provenance scanner) were corrected without weakening either test. The prior
+live-model and real-VM acceptance records remain tied to their original archived
+artifact; they were not repeated against the merged runtime. The old private
+candidate needs requalification before release. No PR was created.

@@ -13,4 +13,13 @@ const notices=await browserNotices(bundled.metafile,'../../site/builder/THIRD_PA
 const clipboard=await fs.readFile('src/clipboard.js','utf8');
 const testPage=await fs.readFile('dev/live-test.template.html','utf8');
 await fs.writeFile('dev/live-test.html',testPage.replace('/* SIGN_IN_CLIPBOARD_HELPER */',()=>clipboard.replace(/^export /gm,'')));
-for(const name of ['sessions','agent','machine','transfer','machine-core','machine-host','machine-worker','preview','builder','scheduler','orchestrator']){let source=await fs.readFile('../../internal/site/'+name+'.js','utf8');if(name==='agent')source=source.replace('const SYNC_WAIT_MS = 10000;', 'const SYNC_WAIT_MS = 120000;');if(name==='machine-core')source=source.replace(/function guestFetch\(url, init\) \{[\s\S]*?\n  \}/,registryFetch.toString().replace('function registryFetch','function guestFetch'));await fs.writeFile('../../site/builder/'+name+'.js',source);}
+for(const name of ['sessions','agent','machine','transfer','ws-client','machine-core','machine-host','machine-worker','preview','builder','scheduler','orchestrator']){
+ let source=await fs.readFile('../../internal/site/'+name+'.js','utf8');
+ if(name==='agent')source=source.replace('const SYNC_WAIT_MS = 10000;', 'const SYNC_WAIT_MS = 120000;');
+ if(name==='machine-core'){
+  const guestFetchPattern=/function guestFetch\([^)]*\) \{[\s\S]*?\n  \}/;
+  if(!guestFetchPattern.test(source))throw Error('Cannot apply the Builder guest network restriction to this runtime');
+  source=source.replace(guestFetchPattern,registryFetch.toString().replace('function registryFetch','function guestFetch'));
+ }
+ await fs.writeFile('../../site/builder/'+name+'.js',source);
+}

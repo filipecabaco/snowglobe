@@ -45,8 +45,10 @@ No network configuration was changed for this scope decision.
   deterministic source against real Auth/PostgreSQL VMs.
 - [ ] Final Stop/Retry and novice walkthrough on the owner's supported desktop
   browser, using the retained acceptance worksheet.
-- [ ] Approve the [recorded private candidate](builder-private-candidate.json),
-  matching guest images and rollback reference. All 6,962 archived assets passed
+- [ ] Prepare and approve a candidate after upstream integration, including
+  matching guest images and rollback reference. The previous
+  [private candidate](builder-private-candidate.json) predates this merge; its
+  6,962 archived assets passed
   readback and both guest build IDs matched. An isolated archived-gateway drill
   passed restart/session-revocation and connect/disconnect checks without live
   inference; an operational host rollback drill and independent off-host image

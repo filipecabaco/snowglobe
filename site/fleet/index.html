@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fleets in a page · snowglobe</title>
+  <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/fleet/">
+  <link rel="alternate" type="text/plain" href="../llms.txt" title="snowglobe for agents">
+  <meta name="description" content="Run a snowglobe.toml in one browser tab: its snapshots set up, its services opened in a frame, its machines woken, all in Web Workers with no server.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="Fleets in a page · snowglobe">
+  <meta property="og:description" content="A fleet file, run in your browser tab: Linux machines in Web Workers, a service opened in a frame. No server.">
+  <meta property="og:url" content="https://filipecabaco.github.io/snowglobe/fleet/">
+  <meta property="og:image" content="https://filipecabaco.github.io/snowglobe/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="../fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <style>
+    [hidden] { display: none !important; }
+    .wrap { max-width: 1400px; }
+    .top { padding: 18px 0; }
+    :root { --ease: cubic-bezier(.2,.8,.2,1); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: 550 15px/1 var(--sans); height: 44px; padding: 0 18px; border-radius: 999px;
+      cursor: pointer; border: 1px solid var(--ink); background: transparent; color: var(--ink); text-decoration: none; white-space: nowrap;
+      transition: background-color .2s var(--ease), color .2s var(--ease), border-color .2s var(--ease); }
+    .btn.go { background: var(--signal); border-color: var(--signal); color: var(--on-signal); }
+    .btn:not(:disabled):hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+    .btn:disabled { opacity: .38; cursor: default; }
+    .btn.sm { height: 34px; padding: 0 14px; font-size: 14px; }
+    .link { font: inherit; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-2); flex: none; }
+    .dot[data-on="live"] { background: var(--signal); border-color: var(--signal); animation: live 1.2s infinite; }
+    .dot[data-on="ok"] { background: var(--ink); border-color: var(--ink); }
+    @keyframes live { 50% { opacity: .35; } }
+
+    .head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 32px; padding: 16px 0 6px; }
+    h1 { margin: 0; font-size: 26px; line-height: 1.1; letter-spacing: -.025em; font-weight: 620; }
+    h2 { margin: 0 0 10px; font-size: 15px; font-weight: 620; letter-spacing: -.005em; }
+    .lede { max-width: 70ch; margin: 0 0 14px; color: var(--ink-2); }
+    #fleet-status { margin: 0 0 12px; min-height: 1.4em; color: var(--ink-2); }
+
+    .cols { display: grid; grid-template-columns: minmax(300px, 5fr) minmax(0, 6fr); border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+    .col { padding: 18px 22px 22px 0; min-width: 0; }
+    .col + .col { padding: 18px 0 22px 22px; border-left: 1px solid var(--rule); }
+    .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 10px; }
+    .bar .grow { flex: 1; }
+    .pick { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--rule); border-radius: 6px; padding: 3px 6px; max-width: 11em; }
+    textarea { display: block; width: 100%; min-height: 420px; resize: vertical; }
+    .editor:has(textarea:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+    /* The file, coloured: a <pre> behind a textarea whose text is clear (the caret and selection still show) */
+    .editor { position: relative; border: 1px solid var(--rule); border-radius: 8px; --c-str: #0b6e4f; --c-num: #1d4ed8; --c-var: #a15c00; --c-key: var(--ink); }
+    :root[data-theme="dark"] .editor { --c-str: #7ad3a8; --c-num: #8ab4ff; --c-var: #e6b35c; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .editor { --c-str: #7ad3a8; --c-num: #8ab4ff; --c-var: #e6b35c; } }
+    .editor pre, .editor textarea { margin: 0; padding: 12px 14px; font: 13px/1.5 var(--mono, ui-monospace, monospace); tab-size: 2; white-space: pre; box-sizing: border-box; }
+    .editor pre { position: absolute; inset: 0; overflow: hidden; pointer-events: none; color: var(--ink); }
+    .editor pre code { display: block; font: inherit; will-change: transform; }
+    .editor textarea { position: relative; border: 0; border-radius: 8px; background: transparent; color: transparent; caret-color: var(--ink); overflow: auto; }
+    .editor textarea::selection { background: color-mix(in srgb, var(--signal) 28%, transparent); }
+    .editor[data-readonly] { opacity: .6; }
+    .hl-cmt { color: var(--ink-2); font-style: italic; }
+    .hl-tbl { font-weight: 700; }
+    .hl-key { color: var(--c-key); font-weight: 600; }
+    .hl-str { color: var(--c-str); }
+    .hl-num, .hl-bool { color: var(--c-num); }
+    .hl-var { color: var(--c-var); }
+    .hl-pun { color: var(--ink-2); }
+    /* Forced colours (high contrast) drop the backgrounds and colours: show the textarea's own text */
+    @media (forced-colors: active) { .editor textarea { color: CanvasText; } .editor pre { display: none; } }
+
+    /* The graph of the fleet */
+    .graph { margin: 0 0 18px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 8px; overflow-x: auto; }
+    .graph svg { display: block; max-width: 100%; height: auto; font: 13px var(--sans); }
+    .graph .node rect { fill: var(--bg); stroke: var(--ink); stroke-width: 1.2; }
+    .graph .node[data-state="running"] rect, .graph .node[data-state="busy"] rect { stroke: var(--signal); stroke-width: 2; }
+    .graph .node[data-state="asleep"] rect { stroke-dasharray: 4 3; stroke: var(--ink-2); }
+    .graph .node .t { fill: var(--ink); font-weight: 620; }
+    .graph .node .s { fill: var(--ink-2); font-size: 12px; }
+    .graph .node .dot { fill: var(--ink-2); }
+    .graph .node[data-state="running"] .dot, .graph .node[data-state="busy"] .dot { fill: var(--signal); }
+    .graph .edge { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+    .graph .edge.live { stroke: var(--signal); }
+    .graph .head { fill: var(--ink); }
+    .graph .lbl { fill: var(--ink-2); font: 12px var(--mono, ui-monospace, monospace); text-anchor: middle; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
+
+    ol.steps, ul.plain { margin: 0; padding: 0; list-style: none; }
+    ol.steps > li { padding: 12px 0; border-top: 1px solid var(--rule); }
+    ol.steps > li:first-child { border-top: 0; padding-top: 0; }
+    .step-head { display: flex; align-items: center; gap: 10px; }
+    .step-head .step-sum { flex: 1; color: var(--ink-2); min-width: 0; }
+    .step-state { margin: 6px 0 0 18px; color: var(--ink-2); font-size: 14px; }
+    .step-state.bad { color: var(--signal); }
+    .step-out { margin: 6px 0 0 18px; padding: 8px 10px; max-height: 180px; overflow: auto; font: 12px/1.45 var(--mono, ui-monospace, monospace); border: 1px solid var(--rule); border-radius: 6px; white-space: pre-wrap; }
+    .problems { margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--signal); border-radius: 8px; }
+    .problems li { margin: 2px 0; }
+    .sub { margin-top: 22px; }
+    .sub li { margin: 3px 0; color: var(--ink-2); font-size: 14px; }
+    summary { cursor: pointer; font-weight: 620; font-size: 15px; margin-bottom: 8px; }
+    summary span { color: var(--ink-2); font-weight: 400; }
+    code { font: 13px var(--mono, ui-monospace, monospace); }
+
+    .frame-box { margin-top: 22px; border: 1px solid var(--ink); border-radius: 8px; overflow: hidden; }
+    .frame-box header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+    .frame-box iframe { display: block; width: 100%; height: 320px; border: 0; background: #fff; }
+    @media (max-width: 900px) {
+      .cols { grid-template-columns: minmax(0, 1fr); }
+      .col, .col + .col { padding: 18px 0; border-left: 0; }
+      .col + .col { border-top: 1px solid var(--rule); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="mark" href="../">snowglobe<i aria-hidden="true"></i></a>
+      <nav aria-label="Site">
+        <a href="../#runs">Runs</a>
+        <a href="../agent/">Agents</a>
+        <a href="./" aria-current="page">Fleets</a>
+        <a href="../docs/">Docs</a>
+        <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
+        <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
+      </nav>
+    </header>
+
+    <main>
+      <div class="head"><h1>Fleets in a page</h1></div>
+      <p class="lede">A <code>snowglobe.toml</code>, run in this tab. The same file runs natively with <code>snowglobe apply</code>. <a href="../docs/orchestration/#fleet-page">Docs</a></p>
+      <p id="fleet-status" role="status" aria-live="polite">Loading…</p>
+
+      <div class="cols">
+        <section class="col" aria-labelledby="file-title">
+          <div class="bar">
+            <h2 id="file-title" class="grow">File</h2>
+            <button type="button" class="link" id="fleet-example">Load the example</button>
+            <select id="fleet-template" class="pick" aria-label="Load a template">
+              <option value="">Templates…</option>
+              <option value="api-and-client.toml">A page fetching an API over a link</option>
+              <option value="tcp-echo.toml">Raw TCP between two machines</option>
+              <option value="two-sources.toml">Two sources converging on one viewer</option>
+            </select>
+            <label class="link">Open a file<input type="file" id="fleet-file" accept=".toml,text/plain" hidden></label>
+          </div>
+          <div class="editor" id="fleet-editor">
+            <pre id="fleet-hl" aria-hidden="true"><code></code></pre>
+            <textarea id="fleet-text" spellcheck="false" wrap="off" aria-labelledby="file-title" autocapitalize="off" autocomplete="off"></textarea>
+          </div>
+        </section>
+
+        <section class="col" aria-labelledby="plan-title">
+          <div class="bar">
+            <h2 id="plan-title" class="grow">Plan <span id="fleet-name"></span></h2>
+            <button type="button" class="btn sm" id="fleet-stop" disabled title="Ends what runs, closes the frame, and sends the machines back to their image">Stop</button>
+            <button type="button" class="btn go sm" id="fleet-run-all" disabled>Run all</button>
+          </div>
+          <ul id="fleet-problems" class="plain problems" hidden></ul>
+          <figure class="graph" id="fleet-graph-box" hidden>
+            <svg id="fleet-graph" role="img" aria-label="The machines of the fleet and the links between them"></svg>
+          </figure>
+          <p id="fleet-plan-empty" class="lede" hidden></p>
+          <ol id="fleet-steps" class="steps"></ol>
+
+          <details class="sub" id="fleet-notes-box" hidden>
+            <summary>Not applied here <span id="fleet-notes-count"></span></summary>
+            <ul id="fleet-notes" class="plain"></ul>
+          </details>
+
+          <div class="sub">
+            <h2>Machines</h2>
+            <ul id="fleet-machines" class="plain"></ul>
+          </div>
+
+          <div class="frame-box" id="fleet-frame-box" hidden>
+            <header><b id="fleet-frame-title"></b><button type="button" class="link" id="fleet-frame-close">Close</button></header>
+            <iframe id="fleet-frame" title="A service of the fleet"></iframe>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer>
+      <span><a href="https://github.com/filipecabaco/snowglobe">snowglobe</a> · <a href="../llms.txt">llms.txt</a></span>
+      <span><a href="../">Back to the runs</a></span>
+    </footer>
+  </div>
+
+  <script src="../theme.js"></script>
+  <script src="sessions.js"></script>
+  <script src="agent.js"></script>
+  <script src="machine.js"></script>
+  <script src="transfer.js"></script>
+  <script src="ws-client.js"></script>
+  <script src="machine-core.js"></script>
+  <script src="machine-host.js"></script>
+  <script src="preview.js"></script>
+  <script src="inspect.js"></script>
+  <script src="builder.js"></script>
+  <script src="scheduler.js"></script>
+  <script src="orchestrator.js"></script>
+  <script src="fleet.js"></script>
+  <script src="fleet-page.js"></script>
+</body>
+</html>

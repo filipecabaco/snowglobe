@@ -1,9 +1,9 @@
 // notes: a small app on the local Supabase stack, run by the Bun inside the Supabase CLI.
 // Auth signs users up and in; the Data API (PostgREST) stores and queries the notes; row level
-// security in Postgres keeps each user's notes their own.
+// security in Postgres keeps each user's notes their own; Realtime streams them as they're written.
 //
 //   notes signup|login EMAIL PASSWORD    notes whoami    notes logout
-//   notes add TEXT...    notes ls    notes search WORD    notes rm ID
+//   notes add TEXT...    notes ls    notes search WORD    notes rm ID    notes watch [SECONDS]
 const { API_URL, ANON_KEY } = process.env;
 if (!API_URL || !ANON_KEY) throw new Error("API_URL and ANON_KEY aren't set (supabase status --env has them)");
 
@@ -87,12 +87,52 @@ try {
       console.log(gone.length ? `#${args[0]} removed` : `no note #${args[0]} of yours`);
       break;
     }
+    case "watch": {
+      // Realtime: a Phoenix channel over a WebSocket on the API's port, joined with the user's
+      // token, so row level security decides which inserts reach it (the user's own notes)
+      const { access_token: token, user } = await session();
+      const seconds = Number(args[0]) || 0;
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(`${API_URL.replace(/^http/, "ws")}/realtime/v1/websocket?apikey=${ANON_KEY}&vsn=1.0.0`);
+        let ref = 0;
+        const send = (topic: string, event: string, payload: unknown) =>
+          ws.send(JSON.stringify({ topic, event, payload, ref: String(++ref) }));
+        const heartbeat = setInterval(() => send("phoenix", "heartbeat", {}), 25_000);
+        const done = () => (clearInterval(heartbeat), ws.close(), resolve());
+        if (seconds) setTimeout(done, seconds * 1000);
+        ws.onopen = () =>
+          send("realtime:notes", "phx_join", {
+            config: { postgres_changes: [{ event: "*", schema: "public", table: "notes" }] },
+            access_token: token,
+          });
+        // Realtime may pass on changes committed just before the join; only later ones are news
+        let since = Infinity;
+        ws.onmessage = (m) => {
+          const { event, payload } = JSON.parse(String(m.data));
+          if (event === "system" && payload.extension === "postgres_changes") {
+            if (payload.status !== "ok") return reject(new Error(payload.message));
+            since = Date.now() - 50;
+            console.log(`watching ${user.email}'s notes${seconds ? ` for ${seconds}s` : " (Ctrl-C to stop)"}`);
+          } else if (event === "postgres_changes") {
+            const { type, record, old_record, commit_timestamp } = payload.data;
+            if (Date.parse(commit_timestamp) < since) return;
+            if (type === "INSERT") console.log(`  + #${record.id}  ${record.created_at.slice(11, 19)}  ${record.body}`);
+            else if (type === "DELETE") console.log(`  - #${old_record.id}`);
+          } else if (event === "phx_reply" && payload.status !== "ok") {
+            reject(new Error(payload.response?.reason ?? "couldn't join the channel"));
+          }
+        };
+        ws.onerror = () => reject(new Error("Realtime's WebSocket failed"));
+        ws.onclose = () => (clearInterval(heartbeat), resolve());
+      });
+      break;
+    }
     case "logout":
       await file.unlink().catch(() => {});
       console.log("signed out");
       break;
     default:
-      console.log("usage: notes signup|login EMAIL PASSWORD · whoami · add TEXT · ls · search WORD · rm ID · logout");
+      console.log("usage: notes signup|login EMAIL PASSWORD · whoami · add TEXT · ls · search WORD · rm ID · watch [SECONDS] · logout");
   }
 } catch (e) {
   console.error("notes:", (e as Error).message);

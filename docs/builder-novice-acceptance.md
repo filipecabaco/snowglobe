@@ -3,7 +3,7 @@
 Status: partial owner report. In Chrome on macOS, the owner connected ChatGPT
 and reported that the requested recipe app built and appeared to work well.
 Search, application accounts/isolation, Save/reload, Stop/Retry and export have
-not yet been individually confirmed. The pinned
+not yet been individually confirmed. The pinned pre-merge
 [candidate record](builder-private-candidate.json) identifies source commit
 `b48f0fd9c47c10fd9351b5bd61f35c597f12f2b4`, browser assets and matching guest
 images. Record the actual Chrome version before counting physical-device results.

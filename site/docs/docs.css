@@ -24,6 +24,8 @@
     .doc th { text-align: left; }
     .doc td:first-child { white-space: nowrap; }
     .compare tbody th { font-weight: 550; vertical-align: top; padding-right: 16px; }
+    /* A question or a need in the first column, so it wraps */
+    .doc .map td:first-child { white-space: normal; }
     .doc td code { font-size: 13.5px; }
     /* A note the reader should not miss: a hairline, never a coloured box */
     .note { margin: 8px 0 24px; padding: 14px 0 14px 20px; border-left: 1px solid var(--ink); max-width: 40em; }
@@ -100,3 +102,16 @@
     @media (pointer: coarse) {
       .toc a { padding-block: 12px; }
     }
+
+/* A screenshot of the UI, in the theme the page is in */
+.shot { margin: 8px 0 24px; max-width: 40em; }
+.shot a { display: block; border-radius: 6px; overflow: hidden; box-shadow: 0 0 0 1px var(--rule); }
+.shot img { display: block; width: 100%; height: auto; }
+.shot .dark { display: none; }
+:root[data-theme="dark"] .shot .light { display: none; }
+:root[data-theme="dark"] .shot .dark { display: block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .shot .light { display: none; }
+  :root:not([data-theme="light"]) .shot .dark { display: block; }
+}
+.shot figcaption { margin: 12px 0 0; font-size: 14px; color: var(--ink-2); }

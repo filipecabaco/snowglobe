@@ -1,35 +1,99 @@
-# A fleet: `snowglobe daemon --detach`, then `snowglobe apply` here. `snowglobe diff` says what apply
-# would do, `snowglobe down` removes it all, and `snowglobe top` shows it running.
-name = "python-demo"
+# Live data on one machine, shown by another over the network. `snowglobe daemon --detach`, then
+# `snowglobe apply` here, and open http://127.0.0.1:8080. `snowglobe diff` says what apply would do,
+# `snowglobe down` removes it all, and `snowglobe top` shows it running. The same file runs in a
+# browser tab at /fleet/ on the demo site.
+#
+# db (Supabase) gets a new row in public.ticks every second. viewer (node) subscribes to that table
+# with supabase-js over Supabase Realtime (a WebSocket) at supabase.internal:54321, keeps the last 40
+# rows and draws them on a page of its own. The link is the only way between them: neither can reach
+# anything else.
+name = "live-data"
 
-# The python example, built for running natively (with a network: its ports are forwarded)
-[templates.py]
-build = "../python"
+[templates.supabase]
+build = "../supabase"
 network = "fetch"
-idle = "30m"            # its server stops after 30 minutes with no machine
 
-# A machine of it, set up once and saved when ready: a web server listening
-[snapshots.serving]
-template = "py"
-run = ["mkdir -p /srv && echo 'hello from a snowglobe fleet' > /srv/index.html",
-       "cd /srv && python3 -m http.server 8000 >/dev/null 2>&1 &"]
-ready = "wget -q -O /dev/null http://127.0.0.1:8000/"
+# Node, with supabase-js in /root/app
+[templates.node]
+build = "../web"
+network = "fetch"
+
+# The database, set up once: the table, published to Realtime, and a row a second from a loop
+[snapshots.db]
+template = "supabase"
+run = [
+'''
+. /home/supa/.stack-env; psql -q "$DB_URL" <<'SQL'
+create table if not exists public.ticks (id bigserial primary key, v numeric not null, at timestamptz not null default now());
+grant select on public.ticks to anon, authenticated;
+alter publication supabase_realtime add table public.ticks;
+SQL
+  ''',
+'''
+. /home/supa/.stack-env; (while true; do psql -q "$DB_URL" -c "insert into public.ticks (v) values (round((random() * 10 + 100)::numeric, 2))"; sleep 1; done >/dev/null 2>&1 &)
+  ''',
+]
+ready = ". /home/supa/.stack-env; psql -tA \"$DB_URL\" -c 'select count(*) from public.ticks' | grep -q '^[1-9]'"
+timeout = "4m"
+
+# The viewer, set up once: it loads the last rows, subscribes, and serves what it has heard
+[snapshots.viewer]
+template = "node"
+run = [
+'''
+cat > /root/app/viewer.mjs <<'EOF'
+import http from 'node:http';
+import { createClient } from '@supabase/supabase-js';
+const sb = createClient('http://supabase.internal:54321', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0');
+let ticks = [];
+let status = 'connecting';
+const keep = (row) => { ticks = [...ticks.filter((t) => t.id !== row.id), row].sort((a, b) => a.id - b.id).slice(-40); };
+async function load() {
+  const { data } = await sb.from('ticks').select('id,v').order('id', { ascending: false }).limit(40);
+  for (const row of data ?? []) keep(row);
+}
+sb.channel('ticks')
+  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ticks' }, (p) => keep(p.new))
+  .subscribe((s) => { status = s; if (s === 'SUBSCRIBED') load().catch(() => {}); });
+http.createServer((req, res) => {
+  if (req.url === '/health') return res.end('ok');
+  const ys = ticks.map((t) => Number(t.v));
+  const lo = Math.min(...ys), hi = Math.max(...ys);
+  const pts = ys.map((y, i) => `${i * 10},${58 - ((y - lo) / (hi - lo || 1)) * 56}`).join(' ');
+  res.setHeader('content-type', 'text/html');
+  res.end(`<meta http-equiv='refresh' content='1'><body style='font:16px/1.5 system-ui;margin:24px'><h3>Live data, over Supabase Realtime</h3><p style='font-size:32px;margin:0'>${ys.at(-1) ?? '...'}</p><svg width='400' height='60'><polyline fill='none' stroke='#d6300c' stroke-width='2' points='${pts}'/></svg><p><small>${status}: pushed by Supabase at supabase.internal:54321, a machine of its own</small></p>`);
+}).listen(8080, '0.0.0.0');
+EOF
+  ''',
+'''
+cd /root/app && node viewer.mjs >/tmp/viewer.log 2>&1 &
+  ''',
+]
+ready = "wget -q -O /dev/null http://127.0.0.1:8080/health"
 timeout = "2m"
 
-# Every machine of this template starts with that server already listening
-[templates.serving]
-snapshot = "serving"
+[templates.db]
+snapshot = "db"
 
-# Behind localhost:8080, scaled to zero: the first request wakes a replica in about 20 ms
-[services.web]
-template = "serving"
-ports = ["8080:8000"]
+[templates.viewer]
+snapshot = "viewer"
+
+# The database: one machine, up
+[machines.db]
+template = "db"
+
+# The viewer, behind localhost:8080, scaled to zero: its first request wakes it
+[services.viewer]
+template = "viewer"
+ports = ["8080:8080"]
 min = 0
-max = 3
+max = 1
 idle = "5m"
-concurrency = 10
 
-# A scratch machine to run commands on (snowglobe sh scratch '...'), gone after a day
-[machines.scratch]
-template = "py"
-ttl = "24h"
+# The viewer reaches the database's API gateway (REST and Realtime) as supabase.internal:54321: a
+# port other than 80 and 443, which a page turns into HTTP; anything else is a plain TCP stream
+[links.viewer-db]
+from = "viewer"
+to = "db"
+port = 54321
+as = "supabase.internal"

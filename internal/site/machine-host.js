@@ -9,7 +9,8 @@
 //    The agent page: several machines on cores of their own, the page responsive whatever they
 //    do, and putting one away ends its worker, which frees its memory at once.
 // Either way the page sees the same thing: promises for what it asks, events for what the machine
-// says (progress, console, stop, error, job, xfer).
+// says (progress, console, stop, error, job, xfer, link: a TCP connection the guest opened over a
+// link, answered with linkIn()).
 (function (root) {
   "use strict";
 
@@ -73,10 +74,10 @@
       pending.clear();
     };
     const post = (msg, transfer) => w.postMessage(msg, transfer ?? []);
-    const request = (op, args = []) => new Promise((resolve, reject) => {
+    const request = (op, args = [], transfer) => new Promise((resolve, reject) => {
       const id = next++;
       pending.set(id, { resolve, reject });
-      try { post({ id, op, args }); } catch (e) { pending.delete(id); reject(e); }
+      try { post({ id, op, args }, transfer); } catch (e) { pending.delete(id); reject(e); }
     });
     const start = () => {
       if (started) return started;
@@ -112,7 +113,7 @@
       try { onEnd(err); } catch {}
     };
     return {
-      call: async (op, args = []) => {
+      call: async (op, args = [], transfer) => {
         if (op === "destroy") {
           if (!w) return null;
           let r = null;
@@ -138,7 +139,9 @@
         }
         if (!w) throw new Error("the machine is not running");
         await started;
-        return request(op, args);
+        // Ended while it waited: nothing to hand anything to
+        if (!w) throw new Error("the machine is not running");
+        return request(op, args, transfer);
       },
       send: (op, args = []) => { if (w) post({ op, args }); },
       get emulator() { return null; },
@@ -174,6 +177,10 @@
       for (const s of [...streams.values()]) s.fail(why);
       streams.clear();
       early.clear();
+      // And every link connection its guest had opened: whoever carried them lets go (said on
+      // every end, a worker that crashed or never answered its destroy included; saying it twice is
+      // harmless)
+      emit("link", { kind: "gone" });
     };
     const t = transport === "worker"
       ? worker(cfg, emit, uploadWindow, scripts, limits, Worker ?? root.Worker, dropStreams)
@@ -232,7 +239,13 @@
           if (sid !== null) streams.delete(sid);
           s.onerror?.(why ?? new Error("the machine was put away"));
         },
-        write(bytes) { chain = chain.then((id) => { if (!closed) t.call("tcpWrite", [id, bytes]).catch(() => {}); return id; }); },
+        /** Resolves once the machine's guest has taken most of it (false if it never got there):
+         *  what a writer counts to know how much is still on its way. */
+        write(bytes) {
+          let done = Promise.resolve(false);
+          chain = chain.then((id) => { if (!closed) done = t.call("tcpWrite", [id, bytes]).then(() => true, () => false); return id; });
+          return chain.then(() => done, () => false);
+        },
         end() { chain = chain.then((id) => { if (!closed) t.call("tcpEnd", [id]).catch(() => {}); return id; }); },
         abort() {
           if (closed) return;
@@ -283,6 +296,20 @@
       /** { size, sha256 }: `blob` written to `path` in the machine. */
       writeFile: (path, blob, opts = {}) => xfer("writeFile", [path, blob, opts.sha256], opts),
       tcpOpen,
+      /**
+       * Answer a TCP connection the guest opened over a link (a `link` event { cid, kind: "open",
+       * runtime, port }, then data, end and close): `kind` "connect", "data" (`bytes`, a Uint8Array
+       * handed over: not to be used after), "end", "close" or "error". Resolves once the machine has
+       * it; rejects if the machine is gone. A `link` event { kind: "gone" } says every connection
+       * its guest had open is over (the machine ended).
+       */
+      linkIn(cid, kind, bytes) {
+        if (bytes === undefined) return t.call("linkIn", [cid, kind]);
+        // Only a buffer of its own is handed over whole
+        const own = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && !(typeof SharedArrayBuffer !== "undefined" && bytes.buffer instanceof SharedArrayBuffer);
+        const b = own ? bytes : bytes.slice();
+        return t.call("linkIn", [cid, kind, b], transport === "worker" ? [b.buffer] : undefined);
+      },
       /** The armless machine itself, in this thread only (inline). */
       get emulator() { return t.emulator; },
       /** Connections it is tracking (live, and events waiting for an id): for tests. */

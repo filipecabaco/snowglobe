@@ -342,6 +342,7 @@
       <nav aria-label="Site">
         <a href="../#runs">Runs</a>
         <a href="./" aria-current="page">Agents</a>
+        <a href="../fleet/">Fleets</a>
         <a href="../docs/">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -368,7 +369,7 @@
           <div class="stream" id="stream">
             <div class="connect" id="connect">
               <h3>Connect an agent</h3>
-              <p>Open this page in your agent's browser and give it the prompt. This page has no AI of its own.</p>
+              <p>Open this page in your agent's browser with the prompt. <a href="../docs/agents/#in-the-page">Docs</a></p>
               <details class="prompt">
                 <summary><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg>The prompt</summary>
                 <pre id="agent-prompt" tabindex="0" aria-label="Prompt for your agent"></pre>
@@ -473,7 +474,7 @@
         <div class="intro">
           <div>
             <h2 id="machines-h">Machines</h2>
-            <p class="lede">Linux machines in this tab. A few stay awake; the rest sleep with their files saved.</p>
+            <p class="lede">Linux machines in this tab. <a href="../docs/agents/#in-the-page">Docs</a></p>
           </div>
           <div class="awake">
             <p class="budget" id="budget"><b>0 of 2 awake</b><span>on this page</span></p>
@@ -532,7 +533,7 @@
                   <label>Port<input id="preview-port" name="previewPort" type="number" min="1" max="65535" step="1" value="4173" inputmode="numeric"></label>
                   <label>Path<input id="preview-path" name="previewPath" type="text" value="/" autocomplete="off" spellcheck="false"></label>
                 </div>
-                <p class="hint">Shows in Preview above. The server must listen on 0.0.0.0.</p>
+                <p class="hint">Listen on 0.0.0.0.</p>
                 <div class="actions">
                   <button id="preview-open" class="btn" data-part="open-preview" type="submit">Open preview</button>
                   <button id="preview-close" class="btn" data-part="close-preview" type="button" disabled>Close preview</button>
@@ -549,7 +550,7 @@
                   <label>To runtime<select id="copy-to" name="to"></select></label>
                   <label>To path<input id="copy-to-path" name="toPath" type="text" value="/root/data.csv" autocomplete="off" spellcheck="false"></label>
                 </div>
-                <p class="limit">Up to 8 MiB, at tens of KiB a second.</p>
+                <p class="limit">Up to 8 MiB.</p>
                 <div class="actions">
                   <button id="copy-go" class="btn" type="submit" disabled>Copy</button>
                   <button id="copy-cancel" class="btn" type="button" disabled>Cancel copy</button>
@@ -588,6 +589,7 @@
   <script src="agent-panel.js"></script>
   <script src="machine.js"></script>
   <script src="transfer.js"></script>
+  <script src="ws-client.js"></script>
   <script src="machine-core.js"></script>
   <script src="machine-host.js"></script>
   <script src="preview.js"></script>

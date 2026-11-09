@@ -1,0 +1,66 @@
+# The smallest link: a Python machine serves a JSON file that changes every second, and a Node page
+# fetches it as http://api.internal:9000. The page is the only way in; the API machine has no other
+# neighbour. Paste this into /fleet/ (or `snowglobe apply` it natively) and press Run all.
+name = "api-and-client"
+
+[templates.python]
+build = "../../python"
+network = "fetch"
+
+[templates.node]
+build = "../../web"
+network = "fetch"
+
+[snapshots.api]
+template = "python"
+run = [
+'''
+mkdir -p /root/site && cd /root/site && (while true; do echo "{\"time\":\"$(date +%T)\",\"n\":$RANDOM}" > data.json.tmp && mv data.json.tmp data.json; sleep 1; done >/dev/null 2>&1 &)
+  ''',
+'''
+cd /root/site && python3 -m http.server 9000 --bind 0.0.0.0 >/tmp/api.log 2>&1 &
+  ''',
+]
+ready = "wget -q -O /dev/null http://127.0.0.1:9000/data.json"
+timeout = "2m"
+
+[snapshots.client]
+template = "node"
+run = [
+'''
+cat > /root/app/client.mjs <<'JS'
+import http from 'node:http';
+http.createServer(async (req, res) => {
+  if (req.url === '/health') return res.end('ok');
+  let body;
+  try { body = await (await fetch('http://api.internal:9000/data.json')).text(); } catch (e) { body = 'api unreachable: ' + e.message; }
+  res.setHeader('content-type', 'text/html');
+  res.end(`<meta http-equiv='refresh' content='1'><body style='font:16px/1.5 system-ui;margin:24px'><h3>Fetched over a link</h3><pre style='font-size:20px'>${body}</pre><small>GET http://api.internal:9000/data.json, a machine of its own</small>`);
+}).listen(8080, '0.0.0.0');
+JS
+  ''',
+'''
+cd /root/app && node client.mjs >/tmp/client.log 2>&1 &
+  ''',
+]
+ready = "wget -q -O /dev/null http://127.0.0.1:8080/health"
+timeout = "2m"
+
+[templates.api]
+snapshot = "api"
+
+[templates.client]
+snapshot = "client"
+
+[machines.api]
+template = "api"
+
+[services.client]
+template = "client"
+ports = ["8080:8080"]
+
+[links.client-api]
+from = "client"
+to = "api"
+port = 9000
+as = "api.internal"
