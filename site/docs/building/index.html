@@ -6,7 +6,7 @@
   <title>Building a site · snowglobe docs</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/building/">
   <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta name="description" content="Build a site from a Dockerfile: labels and flags, when the snapshot is taken, exercises and the warm pack, CPUs and memory, building without Docker, pooling and installable sites.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="snowglobe docs">
@@ -28,6 +28,8 @@
       <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
       <nav aria-label="Site">
         <a href="../../#runs">Runs</a>
+        <a href="../../agent/">Agents</a>
+        <a href="../../fleet/">Fleets</a>
         <a href="../" aria-current="page">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -38,75 +40,97 @@
       <main class="doc">
         <section id="build" aria-labelledby="build-title">
           <h1 class="page-title" id="build-title">Building a site</h1>
-          <p class="intro">A Dockerfile describes the app; labels in it, or flags, describe how snowglobe should
-            snapshot it.</p>
+          <p class="intro">Read this when you turn your own image into a site. The Dockerfile describes the app.
+            Labels in it, or flags on <code>snowglobe build</code>, tell snowglobe how to snapshot it.</p>
 
           <h2 class="h3" id="dockerfile">Describe it in the Dockerfile</h2>
-          <p>The Python demo is this Dockerfile. Labels let an image describe itself, and flags override them:</p>
+          <p>Labels let an image describe itself. A flag on the command line overrides its label. This is the
+            Python demo's whole Dockerfile:</p>
           <pre>FROM alpine:3.24.2
 RUN apk add --no-cache python3
 CMD ["python3"]
 LABEL snowglobe.title="Python in the browser" \
       snowglobe.ready=">>> " \
       snowglobe.exercise='["import json, re, collections", "import asyncio; asyncio.run(asyncio.sleep(0))"]'</pre>
+          <p>Every flag and its label are in the <a href="../reference/#build-flags">build flags</a> table.</p>
 
           <h2 class="h3" id="ready">When the snapshot is taken</h2>
           <p>snowglobe boots the image until the app is ready, then saves the whole machine. Visitors restore that
-            snapshot rather than booting Linux. Tell it what "ready" looks like with <code>--ready</code> (or
-            <code>snowglobe.ready</code>): text the app prints, usually its prompt. Without it, the app counts as
-            ready once its terminal has been quiet for 5 seconds.</p>
-          <p><code>--cmd</code> swaps the program without touching the image, and drops the image's
-            <code>ready</code> and <code>exercise</code> labels, which belonged to its own command.</p>
+            snapshot instead of booting Linux.</p>
+          <ul>
+            <li><strong>With <code>--ready TEXT</code></strong> (or <code>snowglobe.ready</code>), the app is ready
+              once it prints that text. Use its prompt.</li>
+            <li><strong>Without it</strong>, the app counts as ready once its terminal has been quiet for 5
+              seconds.</li>
+          </ul>
+          <p><code>--cmd</code> swaps the program without touching the image. It also drops the image's
+            <code>ready</code> and <code>exercise</code> labels, which belonged to the image's own command.</p>
 
           <h2 class="h3" id="exercises">Exercises and the warm pack</h2>
-          <p>The guest fetches its files on demand. To hide that, every site preloads a <code>warm.pack</code> in
-            the background, filled by measuring rather than guessing:</p>
+          <p>The guest fetches its files on demand. To hide that wait, every site preloads a
+            <code>warm.pack</code> in the background. snowglobe fills it by measuring, not guessing:</p>
           <ul>
             <li><strong>Boot reads:</strong> every file the guest read while booting.</li>
             <li><strong>Exercise reads:</strong> after the snapshot, snowglobe types each <code>--exercise</code>
-              command into the app and records what it reads: the files a visitor's first commands would
-              otherwise wait for. A command is done once the app prints its prompt again and goes quiet.</li>
+              command into the app and records what it reads. These are the files a visitor's first commands
+              would otherwise wait for. A command is done once the app prints its prompt again and goes
+              quiet.</li>
             <li><strong>Pattern:</strong> anything matching <code>--warm REGEX</code>, for files no exercise
               touches.</li>
           </ul>
-          <p>Each build prints a breakdown and writes <code>warm-report.json</code>. An app used over the network
-            rather than its console can be warmed from real traffic instead:</p>
+          <p>Each build prints a breakdown and writes <code>warm-report.json</code>.</p>
+          <p>An app used over the network, not through its console, can be warmed from real traffic instead.
+            Record its reads while something talks to it, then add them to the pack:</p>
           <pre>snowglobe run dist --name api --detach -p 5000:5000 --record-reads api-reads.json
 npm test                                    <span class="dim"># anything that talks to 127.0.0.1:5000</span>
 snowglobe stop api &amp;&amp; snowglobe warm dist api-reads.json</pre>
 
           <h2 class="h3" id="cpus">CPUs and memory</h2>
-          <p><code>--memory MB</code> sets the guest's RAM (512 by default). <code>--cpus N</code> (1 to 8) gives it
-            more CPUs, each in its own Web Worker on shared memory, which helps programs that use them. Browsers only
-            allow that on a cross-origin isolated page, which a static host can't declare, so such a site ships a
-            small service worker that reloads the page once on the first visit, and it can't run inside another
-            page's frame. A build boots on at least 4 CPUs (<code>--build-cpus</code>) and takes the extra ones
-            offline before the snapshot.</p>
+          <ul>
+            <li><code>--memory MB</code> sets the guest's RAM (512 by default).</li>
+            <li><code>--cpus N</code> (1 to 8) gives it more CPUs. Each runs in its own Web Worker on shared memory,
+              which helps programs that use them.</li>
+            <li>A build boots on at least 4 CPUs (<code>--build-cpus</code>) and takes the extra ones offline before
+              the snapshot.</li>
+          </ul>
+          <p>Browsers only share memory between workers on a cross-origin isolated page, and a static host can't
+            declare one. So a site on several CPUs ships a small service worker that reloads the page once on the
+            first visit. Such a site can't run inside another page's frame.</p>
 
           <h2 class="h3" id="image-services">Services in the image</h2>
           <p>The guest boots with BusyBox's <code>init</code> and no service manager, so the app is ready seconds
-            after the kernel starts. Services an image enables for OpenRC do not start: start them from the
-            command, as the Postgres and Elixir examples' start scripts do. Slow first-time setup (an
-            <code>initdb</code>, migrations) belongs in a Dockerfile <code>RUN</code>, where it runs at native speed
-            instead of in emulation.</p>
+            after the kernel starts.</p>
+          <ul>
+            <li>Services an image enables for OpenRC do not start. Start them from the command, as the Postgres and
+              Elixir examples' start scripts do.</li>
+            <li>Slow first-time setup (an <code>initdb</code>, migrations) belongs in a Dockerfile <code>RUN</code>.
+              There it runs at native speed instead of in emulation.</li>
+          </ul>
 
           <h2 class="h3" id="without-docker">Building without Docker</h2>
-          <p><code>--builder native</code> (or <code>SNOWGLOBE_BUILDER=native</code>) builds from an image reference,
-            pulled from its registry, or an image archive (<code>docker save</code>, or an OCI layout from buildah,
-            kaniko or anything else). Nothing runs at build time either way: the image's layers are flattened, the
-            prebuilt kernel and boot files are added on top, and <code>snowglobe-vm</code> boots and snapshots it on
-            your machine.</p>
+          <p><code>--builder native</code> (or <code>SNOWGLOBE_BUILDER=native</code>) builds from either:</p>
+          <ul>
+            <li>an image reference, pulled from its registry, or</li>
+            <li>an image archive: <code>docker save</code>, or an OCI layout from buildah, kaniko or anything
+              else.</li>
+          </ul>
+          <p>Nothing runs at build time either way. The image's layers are flattened, the prebuilt kernel and boot
+            files go on top, and <code>snowglobe-vm</code> boots and snapshots it on your machine.</p>
           <pre>snowglobe build python:3.13-alpine --builder native --ready '>>> '
 docker save my-app:latest -o my-app.tar         <span class="dim"># on a machine with a builder</span>
 snowglobe build my-app.tar --builder native     <span class="dim"># anywhere else</span></pre>
 
           <h2 class="h3" id="hosting">Hosting several sites, and installing them</h2>
-          <p><code>snowglobe pool &lt;dir&gt;</code> lets every site under a directory share one blob store. Blobs are
-            named by content, so sites built on the same base share many, and a visitor's second site reuses what
-            their browser cached.</p>
-          <p><code>snowglobe pwa &lt;site&gt;</code> makes a site an installable app that keeps working offline once it
-            has run: a manifest, icons and a service worker caching the page, the machine and every file the run
-            fetched. Run it after <code>pool</code>.</p>
+          <ul>
+            <li><code>snowglobe pool &lt;dir&gt;</code> lets every site under a directory share one blob store. Blobs
+              are named by content, so sites built on the same base share many, and a visitor's second site reuses
+              what their browser cached.</li>
+            <li><code>snowglobe pwa &lt;site&gt;</code> makes a site an installable app that keeps working offline
+              once it has run. It adds a manifest, icons and a service worker that caches the page, the machine and
+              every file the run fetched. Run it after <code>pool</code>.</li>
+          </ul>
+          <p>Next: give the guest a network on <a href="../networking/">Networking</a>, or run the site without a
+            browser on <a href="../running/">Running outside a browser</a>.</p>
         </section>
 
         <nav class="pager" aria-label="Pages"><a class="prev" href="../"><small>Previous</small>Getting started</a><a class="next" href="../networking/"><small>Next</small>Networking</a></nav>
@@ -127,7 +151,7 @@ snowglobe build my-app.tar --builder native     <span class="dim"># anywhere els
             <li><a href="../networking/">Networking</a></li>
             <li><a href="../running/">Running outside a browser</a></li>
             <li><a href="../agents/">For agents and programs</a></li>
-            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../orchestration/">Orchestration and fleets</a></li>
             <li><a href="../isolation/">Isolation</a></li>
             <li><a href="../saving/">Saving your work</a></li>
             <li><a href="../how-it-works/">How it works</a></li>

@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Orchestration · snowglobe docs</title>
+  <title>Orchestration and fleets · snowglobe docs</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/orchestration/">
   <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta name="description" content="Run many snowglobe machines: the daemon, templates, snapshots, services that scale to zero, fleets from one file, links, fleet instances and network modes, snowglobe ui and the API.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="snowglobe docs">
@@ -28,6 +28,8 @@
       <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
       <nav aria-label="Site">
         <a href="../../#runs">Runs</a>
+        <a href="../../agent/">Agents</a>
+        <a href="../../fleet/">Fleets</a>
         <a href="../" aria-current="page">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -37,43 +39,29 @@
     <div class="layout">
       <main class="doc">
         <section id="orchestration" aria-labelledby="orchestration-title">
-          <h1 class="page-title" id="orchestration-title">Orchestration</h1>
-          <p class="intro">Many machines from one site, without KVM, root or Docker: <code>snowglobe daemon</code> restores
-            sites once as templates and forks machines from them in milliseconds, keeps snapshots of running ones,
-            puts services behind ports that scale to zero, holds them all to a memory budget, and applies whole
+          <h1 class="page-title" id="orchestration-title">Orchestration and fleets</h1>
+          <p class="intro">Read this when one machine is not enough. <code>snowglobe daemon</code> runs many machines
+            from one site, without KVM, root or Docker. It forks them in milliseconds, keeps snapshots of running
+            ones, puts services behind ports that scale to zero, holds them all to a memory budget, and applies whole
             fleets from a file.</p>
-
-          <h2 class="h3" id="ui">In a browser: snowglobe ui</h2>
-          <p><code>snowglobe ui</code> shows the daemon in your browser, one view at a time:</p>
-          <ul>
-            <li><b>Overview</b>: the last hour on one time axis (memory against the budget, templates running, jobs
-              and their latency, what happened), a lane per template with each machine's life as a bar.</li>
-            <li><b>Network</b>: what reaches what. The templates and the links between them come first, dotted: the plan.
-              Under them is a group per fleet instance, its machines in their template's column, with solid edges
-              where a machine really reaches another (labelled with the name it uses) and a tag on each for the
-              host port it opens. Drag from a machine or template onto another to link them.</li>
-            <li><b>Fleets</b>: each fleet file, its instances, and its plan as steps that each have their own Apply;
-              write a new one or add one you have.</li>
-            <li><b>Machines</b>: one control per task (add a template, up a machine, add a service, link), and the
-              templates, machines, services, ports and snapshots.</li>
-            <li><b>Run</b> a command on a fresh fork, and <b>Builds</b> from a directory, an image or a Dockerfile.</li>
-          </ul>
-          <p>Whatever you select shows its figures and actions, its terminal one click away. Everything the UI does
-            goes through the daemon's API, which the CLI and the MCP server use too.</p>
-          <pre>snowglobe ui                                     <span class="dim"># opens http://127.0.0.1:7777/?token=…</span>
-snowglobe ui --start-daemon                      <span class="dim"># starts a detached daemon first if none runs</span></pre>
-          <p>It listens on 127.0.0.1 only. The link it prints carries a session token that becomes a cookie, and
-            every request needs it, so other pages you visit can't reach the daemon through it. The terminal is
-            <a href="https://github.com/coder/ghostty-web">ghostty-web</a>, Ghostty's terminal compiled to
-            WebAssembly, joined to the machine's console over a WebSocket. The page is Preact and htm (about 7 KB
-            gzipped), served gzipped from inside the binary, with no build step.</p>
+          <p>The words this page uses:</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Word</th><th scope="col">What it is</th></tr></thead>
+              <tbody>
+                <tr><td>template</td><td>a site restored once, for machines to fork from</td></tr>
+                <tr><td>machine</td><td>forked from a template in tens of milliseconds; shares the template's memory and keeps what it writes</td></tr>
+                <tr><td>snapshot</td><td>a running machine saved whole, to start machines and templates from</td></tr>
+                <tr><td>service</td><td>a template's machines behind host ports, started on demand and scaled to zero</td></tr>
+                <tr><td>link</td><td>a name one machine reaches another by; nothing else joins them</td></tr>
+                <tr><td>fleet</td><td>a <code>snowglobe.toml</code> naming all of the above, applied in one go</td></tr>
+                <tr><td>fleet instance</td><td>one copy of a fleet's services, machines and links, like <code>docker compose -p</code></td></tr>
+              </tbody>
+            </table>
+          </div>
 
           <h2 class="h3" id="daemon">Templates and machines: the daemon</h2>
-          <p><code>snowglobe daemon</code> keeps templates (a site restored once) and the machines forked from them.
-            <code>snowglobe up</code> forks a machine from a template in tens of milliseconds. The machine shares
-            the template's memory, lasts until it is stopped, keeps what it writes, and has its ports forwarded
-            by the daemon (its site needs a network for that). <code>sh</code>, <code>cp</code>, <code>exec</code>, <code>attach</code>,
-            <code>ps</code> and <code>stop</code> reach the daemon's machines as they reach instances.</p>
+          <p>Start the daemon, add a template, then fork machines from it with <code>snowglobe up</code>:</p>
           <pre>snowglobe daemon --detach                        <span class="dim"># in the background, its log in daemon.log beside the socket</span>
 snowglobe template add dist/api --name api       <span class="dim"># the python example built with --network fetch</span>
 snowglobe up api --name web -p 8080:8000 --label app=web
@@ -82,37 +70,27 @@ snowglobe sh web 'python3 -m http.server 8000 &amp;'
 snowglobe ps
 snowglobe stop worker
 snowglobe template rm api                        <span class="dim"># and its machines</span></pre>
-          <p>The API is HTTP/JSON on a Unix socket in the user cache (<code>curl --unix-socket</code> works):
-            <code>/v1/templates</code>, <code>/v1/machines</code>, <code>/v1/machines/{name}/jobs</code> and
-            <code>/v1/templates/{name}/jobs</code> (a job on a fresh fork). <code>--listen ADDR --token-file F</code>
-            also serves it over TCP, to requests bearing the token, and <code>SNOWGLOBE_DAEMON=http://HOST:PORT</code>
-            with <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it. Nothing the daemon starts outlives it:
-            stopped (ctrl-c, SIGTERM, <code>snowglobe daemon stop</code>; a second ctrl-c skips the grace), it stops its template servers, machines
-            and builds; killed outright, they stop themselves, each holding a lifeline to it. Started again, it
-            restores its templates from their sites and starts its services' replicas; machines are not brought
-            back.</p>
-          <p>It also builds: <code>POST /v1/builds</code> takes a directory with a Dockerfile (by its full path), an
-            image reference, or a Dockerfile's text, runs <code>snowglobe build</code> (Docker when it's there; an
-            image builds natively without it), and makes the result a template. <code>/v1/builds/{id}/log</code>
-            streams its output (<code>?follow=1</code>). A machine's terminal is a WebSocket at
-            <code>/v1/machines/{name}/attach?rows=R&amp;cols=C</code>. <code>/v1/metrics</code> keeps a sample every
-            5 s for the last hour (memory, machines, replicas, jobs and their latency), and <code>/metrics</code>
-            serves the same in Prometheus's format.</p>
-
-          <h2 class="h3" id="submit">Fire and forget: submit and runs</h2>
-          <p><code>snowglobe submit</code> runs a command once on a fresh fork of a template and returns at once
-            with the run's id. The fork is thrown away when the command ends; its output and exit status are kept
-            for <code>snowglobe runs</code>. <code>--wait</code> waits for the end and exits with the command's
-            status. The API is <code>POST /v1/runs</code> and <code>GET /v1/runs/{id}</code>.</p>
-          <pre>id=$(snowglobe submit py 'python3 report.py' --env DAY=monday --timeout 600)
-snowglobe runs                                   <span class="dim"># every run, newest first</span>
-snowglobe runs $id --wait                        <span class="dim"># its output; exits with its status</span></pre>
+          <ul>
+            <li>A machine shares the template's memory, lasts until it is stopped, and keeps what it writes.</li>
+            <li>The daemon forwards a machine's ports. Its site needs a network for that.</li>
+            <li><code>sh</code>, <code>cp</code>, <code>exec</code>, <code>attach</code>, <code>ps</code> and
+              <code>stop</code> reach the daemon's machines as they reach instances.</li>
+          </ul>
+          <p>Nothing the daemon starts outlives it:</p>
+          <ul>
+            <li><strong>Stopped</strong> (ctrl-c, SIGTERM, <code>snowglobe daemon stop</code>), it stops its template
+              servers, machines and builds. A second ctrl-c skips the grace.</li>
+            <li><strong>Killed outright</strong>, they stop themselves: each holds a lifeline to it.</li>
+            <li><strong>Started again</strong>, it restores its templates from their sites and starts its services'
+              replicas. Machines are not brought back.</li>
+          </ul>
 
           <h2 class="h3" id="snapshots">Snapshots of running machines</h2>
+          <p>Set a machine up once (dependencies installed, a server started, data loaded), then fork as many as you
+            want, already set up.</p>
           <p><code>snowglobe snapshot save</code> saves a machine whole: its memory, its running processes and the
-            files it wrote. Machines start from it again with <code>up --snapshot</code>, or it becomes a template
-            of its own with <code>template add --snapshot</code>. Set a machine up once (dependencies installed, a
-            server started, data loaded), then fork as many as you want, already set up.</p>
+            files it wrote. Start machines from it with <code>up --snapshot</code>, or make it a template of its own
+            with <code>template add --snapshot</code>.</p>
           <pre>snowglobe up api --name base
 snowglobe sh base 'pip install httpx &amp;&amp; python3 -m http.server 8000 &amp;'
 snowglobe snapshot save base --name ready        <span class="dim"># tens of milliseconds</span>
@@ -123,63 +101,38 @@ snowglobe snapshot rm ready</pre>
 
           <h2 class="h3" id="services">Services and scale to zero</h2>
           <p>A service puts a template's machines behind host ports that the daemon holds. Each connection (or
-            <code>snowglobe sh &lt;service&gt;</code>) goes to one of its replicas, started on demand.
-            With <code>--min 0</code> it scales to zero: replicas with no connection or job for <code>--idle</code>
-            stop, and the next request forks one again. Made of a snapshot whose server was already listening, a
-            service at zero answers its first request in about 20 ms. <code>--state keep</code> saves the replica
-            before it stops, and the next one carries on from that save (one replica); <code>--state
-            discard</code>, the default, starts every replica from the template.</p>
+            <code>snowglobe sh &lt;service&gt;</code>) goes to one of its replicas, started on demand.</p>
           <pre>snowglobe service add web --template api-ready -p 8080:8000 --min 0 --max 3 --idle 5m --concurrency 10
 snowglobe service add db --template pg --state keep --idle 10m
 snowglobe service ls                              <span class="dim"># replicas running now, of each</span>
 snowglobe service rm web</pre>
-          <p>A replica takes <code>--concurrency</code> connections before another is started, up to
-            <code>--max</code>; under <code>--min</code>, replicas that stop are replaced. The API is
-            <code>/v1/services</code> and <code>/v1/services/{name}/jobs</code>.</p>
-
-          <h2 class="h3" id="ports-map">Ports</h2>
-          <p><code>snowglobe ports</code> lists every host port the daemon holds and where it leads: the machine or
-            service, the guest port and whether it is open now (a service's stays open at zero).
-            <code>snowglobe ports check</code> says whether a host port is free, or which machine, service or other
-            program holds it, and exits 1 when it is taken. The UI shows the same, and checks the ports you type
-            as you type them. The API is <code>/v1/ports</code> and <code>/v1/ports/check?port=N&amp;ip=IP</code>.</p>
-          <pre>snowglobe ports
-<span class="dim">HOST             GUEST  KIND     NAME  TEMPLATE  STATE</span>
-<span class="dim">127.0.0.1:18081  8000   machine  web   curl      open</span>
-<span class="dim">127.0.0.1:18090  8000   service  api   curl      at zero</span>
-snowglobe ports check 8080                       <span class="dim"># 127.0.0.1:8080 is free</span></pre>
-
-          <h2 class="h3" id="limits-lifecycle">Limits and lifecycle</h2>
-          <p><code>snowglobe daemon --memory 8G</code> caps what its template servers and machines take together.
-            A machine that doesn't fit waits up to <code>--wait</code> (30 s) for room, then is refused with the
-            reason. Linux measures each process's proportional share; macOS its resident memory, which counts
-            pages shared with the template in full, so the cap is reached sooner. No cap unless asked.
-            <code>up --ttl 1h</code> stops a machine after that long, whatever it is doing.
-            <code>template add --idle 30m</code> stops a template's server after that long without a machine; the
-            next <code>up</code> (or job) restores it first, in about a second.</p>
-          <pre>snowglobe daemon --memory 8G --wait 30s &amp;
-snowglobe template add dist/python --name py --idle 30m
-snowglobe up py --ttl 1h</pre>
-
-          <h2 class="h3" id="events-top">Events and top</h2>
-          <p><code>snowglobe top</code> shows the daemon live: memory against its budget, templates (awake or
-            asleep), services with their replicas and open connections, machines with what each takes and when it
-            stops, and the latest events. <code>snowglobe events</code> streams those events (machines up and
-            stopped, replicas started and stopped, templates asleep and awake, snapshots, admissions refused), the
-            last 200 first; <code>--json</code> for programs. The API is <code>/v1/events</code> (server-sent
-            events, <code>?after=SEQ</code> to resume) and <code>/v1/stats</code>.</p>
-          <pre>snowglobe top
-snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Flag</th><th scope="col">What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>--min 0</code></td><td>scale to zero: replicas with no connection or job for <code>--idle</code> stop, and the next request forks one again. Under <code>--min</code>, replicas that stop are replaced</td></tr>
+                <tr><td><code>--max</code></td><td>the most replicas</td></tr>
+                <tr><td><code>--concurrency</code></td><td>connections a replica takes before another is started, up to <code>--max</code></td></tr>
+                <tr><td><code>--idle</code></td><td>how long a replica may sit with no connection or job</td></tr>
+                <tr><td><code>--state discard</code></td><td>the default: every replica starts from the template</td></tr>
+                <tr><td><code>--state keep</code></td><td>saves the replica before it stops, and the next one carries on from that save (one replica)</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Made of a snapshot whose server was already listening, a service at zero answers its first request in
+            about 20 ms.</p>
 
           <h2 class="h3" id="fleets">Fleets: snowglobe apply</h2>
-          <p>A <code>snowglobe.toml</code> says what the daemon should have, and <code>snowglobe apply</code>
-            gets it there: templates (a built site, a URL, or a Dockerfile directory built first), snapshots (a
-            machine of a template set up by commands, saved once a readiness command succeeds), templates of those
-            snapshots, services and machines. <code>snowglobe diff</code> says what apply would do;
-            <code>snowglobe down</code> removes all of it. An entry that changed is replaced, with what is made
-            from it; one gone from the file is removed; names something else uses are refused. One file goes from
-            source to running services. A small one; <code>examples/fleet/</code> has a feed and a viewer on two machines, joined
-            by a link, and <a href="#fleet-page">runs in a browser tab</a> too:</p>
+          <p>A <code>snowglobe.toml</code> says what the daemon should have, and <code>snowglobe apply</code> gets it
+            there. One file goes from source to running services. It can hold:</p>
+          <ul>
+            <li>templates: a built site, a URL, or a Dockerfile directory built first;</li>
+            <li>snapshots: a machine of a template set up by commands, saved once a readiness command succeeds;</li>
+            <li>templates of those snapshots;</li>
+            <li>services and machines;</li>
+            <li>links, a network mode, and each template's egress (<a href="#links">below</a>).</li>
+          </ul>
+          <p>A small one:</p>
           <pre>[templates.py]
 build = "../python"                <span class="dim"># built first, for running natively</span>
 network = "fetch"
@@ -201,28 +154,74 @@ idle = "5m"
 [machines.scratch]
 template = "py"
 ttl = "24h"</pre>
-          <p>The daemon keeps a list of fleets, like compose projects: <code>/v1/fleets</code> adds a file from
-            where it is, or writes a new one in the daemon's own directory (checked before it is saved), and
-            plans, applies (all of it, or one step at a time by its key) and removes each by name.</p>
+          <ul>
+            <li><code>snowglobe diff</code> says what apply would do.</li>
+            <li><code>snowglobe down</code> removes all of it.</li>
+            <li>An entry that changed is replaced, with what is made from it. One gone from the file is removed.
+              Names something else uses are refused.</li>
+          </ul>
+          <p>The daemon keeps a list of fleets, like compose projects. <code>/v1/fleets</code> adds a file from where
+            it is, or writes a new one in the daemon's own directory (checked before it is saved). It plans, applies
+            (all of it, or one step at a time by its key) and removes each by name.</p>
+          <p>Two examples ship with snowglobe:</p>
+          <ul>
+            <li><code>examples/todo-fleet/</code>: an Elixir app and Postgres, each a machine of its own, joined by a
+              link. It is the fleet in the figure below.</li>
+            <li><code>examples/fleet/</code>: a Supabase machine that gets a row every second, and a node viewer that
+              follows it over Supabase Realtime, joined by a link. It
+              <a href="#fleet-page">runs in a browser tab</a> too.</li>
+          </ul>
+          <p>Run one, see it, and give it to an agent:</p>
+          <pre>snowglobe daemon --detach
+snowglobe apply -f examples/todo-fleet/snowglobe.toml
+curl localhost:8080/todos
+snowglobe ui                                     <span class="dim"># views: overview, network, fleets, machines, run, builds</span>
+claude mcp add snowglobe -- snowglobe mcp --daemon   <span class="dim"># fleets, links and the graph, over MCP</span></pre>
 
           <h2 class="h3" id="links">Links: what reaches what</h2>
-          <p>Nothing joins machines but a link. A link lets a machine, or every machine of a template (now and
-            later), reach a machine, a service (one of its replicas, started if none runs) or a template's
-            machines by a name: its guest connects to <code>db.internal:5432</code> and gets the target's guest
-            port. Links change while machines run; new connections follow them.</p>
+          <p>Nothing joins machines but a link. A link gives a machine a name to reach another by: its guest connects
+            to <code>db.internal:5432</code> and gets the target's guest port.</p>
+          <ul>
+            <li><strong>From:</strong> a machine, or every machine of a template, now and later.</li>
+            <li><strong>To:</strong> a machine, a service (one of its replicas, started if none runs), or a template's
+              machines.</li>
+            <li><strong>While running:</strong> links change while machines run, and new connections follow
+              them.</li>
+          </ul>
+
+          <figure class="shot">
+            <a href="../ui/network-light.webp" class="light"><img src="../ui/network-light.webp" width="900" height="820" loading="lazy" decoding="async"
+              alt="The Network view of snowglobe ui: the plan, app and db templates joined by a dotted db.internal:5432 link; below it instance main and instance 2 of the todo fleet, each with its own app and db machines, the app reaching its own db as db.internal:5432, and the host ports each opens."></a>
+            <a href="../ui/network-dark.webp" class="dark"><img src="../ui/network-dark.webp" width="900" height="820" loading="lazy" decoding="async"
+              alt="The Network view of snowglobe ui, in the dark theme: the plan, then instance main and instance 2 of the todo fleet, each app reaching its own db as db.internal:5432."></a>
+            <figcaption><code>examples/todo-fleet</code> in <code>snowglobe ui</code>: an Elixir app and Postgres, in two
+              instances. Instance 2's app reaches its own database as <code>db.internal:5432</code>, and nothing of main's.</figcaption>
+          </figure>
+
+          <p>In a fleet file a link is a <code>[links.NAME]</code> entry (<a href="#instances">below</a>). Over the
+            API:</p>
           <pre>curl --unix-socket "$SOCK" -X POST localhost/v1/links \
   -d '{"from": "app", "to": "db", "port": 5432, "as": "db.internal"}'
 curl --unix-socket "$SOCK" localhost/v1/graph      <span class="dim"># nodes and edges: forks, replicas, links, reaches, ports</span></pre>
-          <p>Each machine gets a Unix socket of its own for each of its links, in its template's socket
-            directory, which only that template's machines and the daemon reach. So the daemon knows which machine
-            connects, and no TCP port stays open on the host for anything else to use. A link is the host's own:
-            it needs no <code>allow_private</code>.</p>
+          <p>Each machine gets a Unix socket of its own for each of its links, in its template's socket directory.
+            Only that template's machines and the daemon reach it. So the daemon knows which machine connects, and
+            no TCP port stays open on the host for anything else to use. A link is the host's own: it needs no
+            <code>allow_private</code>, and works when the machine's egress is <code>none</code>.</p>
 
           <h2 class="h3" id="instances">Fleet instances and the network</h2>
-          <p>A fleet runs as instances, like <code>docker compose -p</code>. Templates and snapshots are shared
-            (built and restored once); services, machines and links are made per instance, labelled
-            <code>snowglobe.instance</code>. Instance <code>main</code> keeps the file's names; another carries its
-            own (<code>db-2</code>), and its host ports are picked by the system.</p>
+          <p>A fleet runs as instances, like <code>docker compose -p</code>. Start another and it gets an app and a
+            database of its own, beside the first.</p>
+          <ul>
+            <li>Templates and snapshots are shared: built and restored once.</li>
+            <li>Services, machines and links are made per instance, labelled <code>snowglobe.instance</code>.</li>
+            <li>Instance <code>main</code> keeps the file's names. Another carries its own (<code>db-2</code>), and the
+              system picks its host ports.</li>
+          </ul>
+          <p>Start and remove instances from the UI, the API (<code>POST /v1/fleets/NAME/instances</code>,
+            <code>DELETE /v1/fleets/NAME/instances/ID</code>) or MCP (<code>start_instance</code>,
+            <code>stop_instance</code>).</p>
+          <p>The file's <code>[network]</code> mode says what may cross between instances, and each template's
+            <code>egress</code> says where its machines' own connections may go:</p>
           <pre>[network]
 mode = "exclusive"        <span class="dim"># each instance reaches only its own machines (the default)</span>
 
@@ -239,38 +238,158 @@ from = "app"
 to = "db"                 <span class="dim"># a service or machine of the file</span>
 port = 5432
 as = "db.internal"</pre>
-          <ul>
-            <li><b>exclusive</b> (the default): a link stays inside its instance. Instance 2's app reaches instance 2's
-              db and nothing of instance main's.</li>
-            <li><b>inclusive</b>: every machine of the template reaches any machine of the target's template, across
-              instances.</li>
-            <li><b>all</b>: as inclusive, and every template also reaches every other one's <code>expose</code>d ports by
-              its name.</li>
-          </ul>
-          <p>A template's <code>egress</code> says where its machines' own connections may go: <code>none</code>
-            unless the file says otherwise (only links and forwarded ports), <code>internet</code> (public
-            addresses), or <code>private</code> (the host's loopback and private networks too, as
-            <code>allow_private</code> did). Start and remove instances from the UI, the API
-            (<code>POST /v1/fleets/NAME/instances</code>, <code>DELETE /v1/fleets/NAME/instances/ID</code>) or MCP
-            (<code>start_instance</code>, <code>stop_instance</code>).</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Network mode</th><th scope="col">What may cross</th></tr></thead>
+              <tbody>
+                <tr><td><code>exclusive</code></td><td>the default: a link stays inside its instance. Instance 2's app reaches instance 2's db and nothing of instance main's</td></tr>
+                <tr><td><code>inclusive</code></td><td>every machine of the template reaches any machine of the target's template, across instances</td></tr>
+                <tr><td><code>all</code></td><td>as inclusive, and every template also reaches every other one's <code>expose</code>d ports by its name</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Egress</th><th scope="col">Where a machine's own connections may go</th></tr></thead>
+              <tbody>
+                <tr><td><code>none</code></td><td>the default: nowhere. Only links and forwarded ports work</td></tr>
+                <tr><td><code>internet</code></td><td>public addresses</td></tr>
+                <tr><td><code>private</code></td><td>the host's loopback and private networks too, as <code>allow_private</code> did</td></tr>
+              </tbody>
+            </table>
+          </div>
 
           <h2 class="h3" id="fleet-page">The same file in a browser: /fleet/</h2>
           <p>The demo site's <a href="../../fleet/">/fleet/</a> runs a fleet file in one tab, on the machines of the
-            <a href="../agents/#in-the-page">agent page</a>: load or write the file, read the plan, Run each step or
-            Run all. It is another place to run the file, not another format: the same <code>snowglobe.toml</code> goes
-            to <code>snowglobe apply</code>.</p>
+            <a href="../agents/#in-the-page">agent page</a>. Load or write the file, read the plan, then Run each step
+            or Run all. It is another place to run the file, not another format: the same <code>snowglobe.toml</code>
+            goes to <code>snowglobe apply</code>.</p>
           <ul>
             <li><b>Steps.</b> A snapshot's <code>run</code> commands and <code>ready</code> check, each link, each machine
               woken, each service opened in a frame.</li>
             <li><b>Templates</b> name a site the page has: <code>build = "../python"</code> is the <code>python</code>
               machine. One site is one machine on the page, so templates of one site share its files and processes.</li>
-            <li><b>Links</b> are real. A guest on port 80 or 443 makes HTTP(S) requests; any other port
+            <li><b>Links</b> are real. A guest on port 80 or 443 makes HTTP(S) requests. Any other port
               (<code>as_port</code>, default <code>port</code>) is a raw TCP stream, which carries Postgres, Redis and
               WebSocket traffic alike. A guest's <code>ws://name/</code> on 80 or 443, and a page in the frame, can
               open WebSockets too. A machine reads its links when it wakes.</li>
             <li><b>Read, not applied:</b> <code>min</code>, <code>max</code>, <code>idle</code>, <code>concurrency</code>,
               <code>ttl</code>, <code>egress</code>, <code>network.mode</code> and host ports. The page lists them.</li>
           </ul>
+
+          <h2 class="h3" id="ui">In a browser: snowglobe ui</h2>
+          <p><code>snowglobe ui</code> shows the daemon in your browser, one view at a time:</p>
+          <pre>snowglobe ui                                     <span class="dim"># opens http://127.0.0.1:7777/?token=…</span>
+snowglobe ui --start-daemon                      <span class="dim"># starts a detached daemon first if none runs</span></pre>
+          <ul>
+            <li><b>Overview</b>: the last hour on one time axis (memory against the budget, templates running, jobs
+              and their latency, what happened), and a lane per template with each machine's life as a bar.</li>
+            <li><b>Network</b>: what reaches what. The templates and the links between them come first, dotted: the
+              plan. Under them is a group per fleet instance, its machines in their template's column. Solid edges
+              show where a machine really reaches another, labelled with the name it uses, and a tag on each shows
+              the host port it opens. Drag from a machine or template onto another to link them.</li>
+            <li><b>Fleets</b>: each fleet file, its instances, and its plan as steps that each have their own Apply.
+              Write a new one or add one you have.</li>
+            <li><b>Machines</b>: one control per task (add a template, up a machine, add a service, link), and the
+              templates, machines, services, ports and snapshots.</li>
+            <li><b>Run</b> a command on a fresh fork, and <b>Builds</b> from a directory, an image or a Dockerfile.</li>
+          </ul>
+          <p>Whatever you select shows its figures and actions, its terminal one click away. Everything the UI does
+            goes through the daemon's API, which the CLI and the MCP server use too.</p>
+          <p>It listens on 127.0.0.1 only. The link it prints carries a session token that becomes a cookie, and
+            every request needs it, so other pages you visit can't reach the daemon through it.</p>
+          <p>The terminal is <a href="https://github.com/coder/ghostty-web">ghostty-web</a>, Ghostty's terminal
+            compiled to WebAssembly, joined to the machine's console over a WebSocket. The page is Preact and htm
+            (about 7 KB gzipped), served gzipped from inside the binary, with no build step.</p>
+
+          <h2 class="h3" id="submit">Fire and forget: submit and runs</h2>
+          <p><code>snowglobe submit</code> runs a command once on a fresh fork of a template and returns at once with
+            the run's id. The fork is thrown away when the command ends. Its output and exit status are kept for
+            <code>snowglobe runs</code>. <code>--wait</code> waits for the end and exits with the command's
+            status.</p>
+          <pre>id=$(snowglobe submit py 'python3 report.py' --env DAY=monday --timeout 600)
+snowglobe runs                                   <span class="dim"># every run, newest first</span>
+snowglobe runs $id --wait                        <span class="dim"># its output; exits with its status</span></pre>
+
+          <h2 class="h3" id="ports-map">Ports</h2>
+          <ul>
+            <li><code>snowglobe ports</code> lists every host port the daemon holds and where it leads: the machine
+              or service, the guest port, and whether it is open now (a service's stays open at zero).</li>
+            <li><code>snowglobe ports check</code> says whether a host port is free, or which machine, service or
+              other program holds it. It exits 1 when the port is taken.</li>
+          </ul>
+          <p>The UI shows the same, and checks the ports you type as you type them.</p>
+          <pre>snowglobe ports
+<span class="dim">HOST             GUEST  KIND     NAME  TEMPLATE  STATE</span>
+<span class="dim">127.0.0.1:18081  8000   machine  web   curl      open</span>
+<span class="dim">127.0.0.1:18090  8000   service  api   curl      at zero</span>
+snowglobe ports check 8080                       <span class="dim"># 127.0.0.1:8080 is free</span></pre>
+
+          <h2 class="h3" id="limits-lifecycle">Limits and lifecycle</h2>
+          <pre>snowglobe daemon --memory 8G --wait 30s &amp;
+snowglobe template add dist/python --name py --idle 30m
+snowglobe up py --ttl 1h</pre>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Flag</th><th scope="col">What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>daemon --memory 8G</code></td><td>caps what its template servers and machines take together. No cap unless asked</td></tr>
+                <tr><td><code>daemon --wait 30s</code></td><td>how long a machine that doesn't fit waits for room before it is refused, with the reason</td></tr>
+                <tr><td><code>up --ttl 1h</code></td><td>stops a machine after that long, whatever it is doing</td></tr>
+                <tr><td><code>template add --idle 30m</code></td><td>stops a template's server after that long without a machine; the next <code>up</code> (or job) restores it first, in about a second</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>How memory is counted: Linux measures each process's proportional share. macOS measures its resident
+            memory, which counts pages shared with the template in full, so the cap is reached sooner.</p>
+
+          <h2 class="h3" id="events-top">Events and top</h2>
+          <ul>
+            <li><code>snowglobe top</code> shows the daemon live: memory against its budget, templates (awake or
+              asleep), services with their replicas and open connections, machines with what each takes and when it
+              stops, and the latest events.</li>
+            <li><code>snowglobe events</code> streams those events, the last 200 first: machines up and stopped,
+              replicas started and stopped, templates asleep and awake, snapshots, admissions refused.
+              <code>--json</code> is for programs.</li>
+          </ul>
+          <pre>snowglobe top
+snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
+
+          <h2 class="h3" id="api">The daemon's API</h2>
+          <p>The API is HTTP/JSON on a Unix socket in the user cache (<code>curl --unix-socket</code> works). The CLI,
+            the UI and the MCP server all use it.</p>
+          <ul>
+            <li><strong>Over TCP:</strong> <code>--listen ADDR --token-file F</code> also serves it over TCP, to
+              requests bearing the token. <code>SNOWGLOBE_DAEMON=http://HOST:PORT</code> with
+              <code>SNOWGLOBE_DAEMON_TOKEN</code> points the CLI at it.</li>
+            <li><strong>Builds:</strong> <code>POST /v1/builds</code> takes a directory with a Dockerfile (by its full
+              path), an image reference, or a Dockerfile's text. It runs <code>snowglobe build</code> (Docker when
+              it's there; an image builds natively without it) and makes the result a template.
+              <code>/v1/builds/{id}/log</code> streams its output (<code>?follow=1</code>).</li>
+            <li><strong>Terminals:</strong> a machine's terminal is a WebSocket at
+              <code>/v1/machines/{name}/attach?rows=R&amp;cols=C</code>.</li>
+            <li><strong>Metrics:</strong> <code>/v1/metrics</code> keeps a sample every 5 s for the last hour (memory,
+              machines, replicas, jobs and their latency). <code>/metrics</code> serves the same in Prometheus's
+              format.</li>
+          </ul>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">Path</th><th scope="col">What it serves</th></tr></thead>
+              <tbody>
+                <tr><td><code>/v1/templates</code>, <code>/v1/machines</code></td><td>templates and machines</td></tr>
+                <tr><td><code>/v1/machines/{name}/jobs</code></td><td>a job on a machine</td></tr>
+                <tr><td><code>/v1/templates/{name}/jobs</code></td><td>a job on a fresh fork</td></tr>
+                <tr><td><code>POST /v1/runs</code>, <code>GET /v1/runs/{id}</code></td><td>fire-and-forget runs</td></tr>
+                <tr><td><code>/v1/services</code>, <code>/v1/services/{name}/jobs</code></td><td>services, and a job on a replica</td></tr>
+                <tr><td><code>/v1/links</code>, <code>/v1/graph</code></td><td>links, and the graph of what reaches what</td></tr>
+                <tr><td><code>/v1/fleets</code></td><td>fleets and their instances</td></tr>
+                <tr><td><code>/v1/ports</code>, <code>/v1/ports/check?port=N&amp;ip=IP</code></td><td>host ports</td></tr>
+                <tr><td><code>/v1/events</code></td><td>events, as server-sent events (<code>?after=SEQ</code> to resume)</td></tr>
+                <tr><td><code>/v1/stats</code></td><td>the daemon's stats</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Every endpoint and its body is in <a href="../../llms.txt">llms.txt</a>.</p>
         </section>
 
         <nav class="pager" aria-label="Pages"><a class="prev" href="../agents/"><small>Previous</small>For agents and programs</a><a class="next" href="../isolation/"><small>Next</small>Isolation</a></nav>
@@ -291,7 +410,7 @@ as = "db.internal"</pre>
             <li><a href="../networking/">Networking</a></li>
             <li><a href="../running/">Running outside a browser</a></li>
             <li><a href="../agents/">For agents and programs</a></li>
-            <li><a href="../orchestration/" aria-current="page">Orchestration</a></li>
+            <li><a href="../orchestration/" aria-current="page">Orchestration and fleets</a></li>
             <li><a href="../isolation/">Isolation</a></li>
             <li><a href="../saving/">Saving your work</a></li>
             <li><a href="../how-it-works/">How it works</a></li>

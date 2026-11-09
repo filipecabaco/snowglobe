@@ -1,6 +1,6 @@
 ---
 name: snowglobe-agents
-description: Use when an agent drives snowglobe machines: `snowglobe mcp <site|url>`, `snowglobe mcp --daemon`, `snowglobe sh` as a sandbox, `--agent` sites, the /agent/ page and its WebMCP tools (run_command, write_files, run_sql, open_preview, preview_snapshot, preview_interact), consent, awake limit, building a React app on Supabase.
+description: Use when an agent drives snowglobe machines: `snowglobe mcp <site|url>`, `snowglobe mcp --daemon`, `snowglobe sh` as a sandbox, `--agent` sites, the /agent/ page and its WebMCP tools (run_command, write_files, run_sql, open_preview, preview_snapshot, preview_interact), awake limit, building a React app on Supabase.
 ---
 
 # Agents
@@ -63,8 +63,8 @@ Exact current names and schemas live in `internal/site/agent-webmcp.js`; the pag
 
 ## Gotchas
 
-- Consent: the first run, copy or preview asks the person at the page, once per page load.
-- A server must listen on `0.0.0.0`, not localhost, to be previewed. Preview is HTTP/1.1 only; Vite dev server and hot reload do not work, use `serve --watch dist 4173`.
+- No dialog: the machines run in the tab, so runs, copies and previews start at once. Only "Start fresh" and "Revert to starter" confirm, as they delete work.
+- A server must listen on `0.0.0.0`, not localhost, to be previewed. Preview carries HTTP/1.1 and WebSockets (up to 32); Vite's dev server and hot reload are untested there, use `serve --watch dist 4173`.
 - Jobs: one at a time per machine, as root from `/root`, default timeout 300 s (max 3600); timed out or cancelled kills everything started.
 - Few machines awake at once (2 by default, about 540 to 740 MB each); the least recently used idle one suspends. A machine with a job, copy or open preview is never suspended.
 - Only a suspended machine's state survives a reload. Awake work since the last suspend is lost.

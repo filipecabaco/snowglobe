@@ -1,11 +1,17 @@
 # snowglobe
 
-**Package a Docker image into a website that runs it in the browser.** snowglobe boots your
-image on real Linux inside [armless](https://github.com/filipecabaco/armless), a 64-bit ARM
-machine compiled to WebAssembly, snapshots it once your app is ready, and writes a folder of
-static files. Visitors get your program running in their tab in about a second, with no server
-behind it. The same site also runs headlessly, as one executable, as a sandbox an agent drives,
-and as machines a daemon forks, scales to zero and applies from a fleet file.
+**Run a Docker image where Docker isn't.** snowglobe turns an image into a folder of static files.
+Open it in a browser tab, run it from one binary on a laptop or CI box with no Docker, daemon, root or
+KVM, or hand it to an agent as a sandbox. It starts in about a second, because it restores a snapshot
+taken once your app was ready.
+
+- **Share a running app as a link.** Host the folder anywhere static (GitHub Pages works). Nothing runs on a server.
+- **Skip the local Docker setup.** The same image runs from the command line with nothing else installed.
+- **Give agents a safe place to work.** Machines are sandboxed and reach nothing unless you allow it.
+- **One format everywhere.** The same site and the same `snowglobe.toml` fleet file run in a tab, natively and hosted.
+
+The catch: guests are 64-bit ARM Alpine images, emulated by [armless](https://github.com/filipecabaco/armless)
+(ARM compiled to WebAssembly), so they run slower than native.
 
 **[▶ Try the demos](https://filipecabaco.github.io/snowglobe/)**: [Conduit + Supabase](examples/conduit/) (a blogging app and its backend in one VM), Supabase (its native stack and a small app on it), Elixir IEx, PostgreSQL, Elixir + Postgres, Python + Rich, TypeScript + Zod,
 Go + Bubble Tea, Rust + clap, Java + Gson, and curl + jq (plain Alpine tools, online through your browser), each a small

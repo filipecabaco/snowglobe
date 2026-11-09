@@ -6,7 +6,7 @@
   <title>Isolation · snowglobe docs</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/isolation/">
   <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta name="description" content="What keeps a snowglobe guest in: the emulator, the browser, native and Docker sandboxes, and how shared memory stays private.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="snowglobe docs">
@@ -28,6 +28,8 @@
       <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
       <nav aria-label="Site">
         <a href="../../#runs">Runs</a>
+        <a href="../../agent/">Agents</a>
+        <a href="../../fleet/">Fleets</a>
         <a href="../" aria-current="page">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -38,9 +40,10 @@
       <main class="doc">
         <section id="security" aria-labelledby="security-title">
           <h1 class="page-title" id="security-title">Isolation</h1>
-          <p class="intro">The first wall is the same everywhere: the guest is an emulated machine whose only ways
-            out are its terminal, its files and, if the site has one, the network relay. Guest code never runs as host
-            code.</p>
+          <p class="intro">Read this before you run code you don't trust. The first wall is the same everywhere: the
+            guest is an emulated machine. Its only ways out are its terminal, its files and, if the site has one,
+            the network relay. Guest code never runs as host code.</p>
+          <p>Around the emulator, each place a site runs adds its own wall:</p>
           <div class="table-wrap">
             <table class="compare">
               <thead><tr><th scope="col"></th><th scope="col">Browser</th><th scope="col">Native</th><th scope="col">Docker</th></tr></thead>
@@ -53,20 +56,36 @@
               </tbody>
             </table>
           </div>
-          <p>The native sandbox is strongest on Linux with Landlock (kernel 5.13 or later). A run says which parts it
-            got; <code>SNOWGLOBE_SANDBOX=strict</code> refuses to run without all of them, and
-            <code>snowglobe-vm sandbox-check</code> tries what a run must not be able to do and reports each.</p>
-          <p>Native runs of one site share its snapshot's memory: the first run writes it to the cache as a
-            read-only image (in <code>ram/</code>, which only you can open), and every run maps it copy-on-write. A page
-            a machine writes becomes its own, so one machine never sees another's memory, and each restore gets fresh
-            randomness (the guest kernel reseeds on it). The image is named by a hash of the whole snapshot and checked
-            before use (yours, read-only, one link); anything off and the run restores the usual way.
-            <code>SNOWGLOBE_RAM_IMAGE=off</code> always does.</p>
-          <p>What none of them do: hide a site's contents from whoever runs it (the snapshot is theirs to read), or
-            make network access safe beyond the rules above. Give a guest a network only when the work needs it.</p>
+          <h2 class="h3" id="native-sandbox">The native sandbox</h2>
+          <p>The native sandbox is strongest on Linux with Landlock (kernel 5.13 or later).</p>
+          <ul>
+            <li>A run says which parts of the sandbox it got.</li>
+            <li><code>SNOWGLOBE_SANDBOX=strict</code> refuses to run without all of them.</li>
+            <li><code>snowglobe-vm sandbox-check</code> tries what a run must not be able to do and reports
+              each.</li>
+          </ul>
+
+          <h2 class="h3" id="shared-memory-safety">Shared memory stays private</h2>
+          <p>Native runs of one site share its snapshot's memory (<a href="../running/#shared-memory">how</a>). The
+            first run writes it to the cache as a read-only image, in <code>ram/</code>, which only you can open.
+            Every run maps it copy-on-write.</p>
+          <ul>
+            <li>A page a machine writes becomes its own, so one machine never sees another's memory.</li>
+            <li>Each restore gets fresh randomness: the guest kernel reseeds on it.</li>
+            <li>The image is named by a hash of the whole snapshot and checked before use: yours, read-only, one
+              link. Anything off, and the run restores the usual way. <code>SNOWGLOBE_RAM_IMAGE=off</code> always
+              does.</li>
+          </ul>
+
+          <h2 class="h3" id="not-covered">What none of them do</h2>
+          <ul>
+            <li>Hide a site's contents from whoever runs it. The snapshot is theirs to read.</li>
+            <li>Make network access safe beyond the rules on <a href="../networking/">Networking</a>. Give a guest a
+              network only when the work needs it.</li>
+          </ul>
         </section>
 
-        <nav class="pager" aria-label="Pages"><a class="prev" href="../orchestration/"><small>Previous</small>Orchestration</a><a class="next" href="../saving/"><small>Next</small>Saving your work</a></nav>
+        <nav class="pager" aria-label="Pages"><a class="prev" href="../orchestration/"><small>Previous</small>Orchestration and fleets</a><a class="next" href="../saving/"><small>Next</small>Saving your work</a></nav>
       </main>
 
       <aside class="rail" aria-label="Docs">
@@ -84,7 +103,7 @@
             <li><a href="../networking/">Networking</a></li>
             <li><a href="../running/">Running outside a browser</a></li>
             <li><a href="../agents/">For agents and programs</a></li>
-            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../orchestration/">Orchestration and fleets</a></li>
             <li><a href="../isolation/" aria-current="page">Isolation</a></li>
             <li><a href="../saving/">Saving your work</a></li>
             <li><a href="../how-it-works/">How it works</a></li>
