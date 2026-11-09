@@ -1,14 +1,11 @@
 #!/bin/bash
 # The guest's console runs this as root; the stack runs as supa (Postgres refuses root)
 if [ "$(id -u)" = 0 ]; then
-  chmod 666 /dev/ttyS0
+  # A start that fails is reported on the kernel's console too (below), which a build's log shows
+  chmod o+w /dev/ttyS0 2>/dev/null
   exec su supa -s /bin/bash -c "cd ~/app && exec /usr/local/bin/supabase-demo"
 fi
 export SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 SUPABASE_NO_UPDATE_NOTIFIER=1 CI=1
-exec 2> >(tee -a /dev/ttyS0 >&2)
-export PS4='+DBG $(cut -d" " -f1 /proc/uptime) '
-set -x
-( while sleep 60; do { echo "=== DBG ps at $(cut -d" " -f1 /proc/uptime)"; ps -o pid,time,args | cut -c1-200; } > /dev/ttyS0; done ) &
 
 echo "Starting Supabase's native stack: Postgres, PostgREST, Auth and Realtime (no Docker) ..."
 # --runtime native: plain processes, no Docker. --eager: every service is up before this returns
@@ -21,12 +18,16 @@ echo "Starting Supabase's native stack: Postgres, PostgREST, Auth and Realtime (
 for attempt in 1 2 3; do
   supabase stack start --runtime native --eager --preparation on-demand \
     -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null 2>&1 |
-    grep -v -e "new version of Supabase CLI" -e "recommend updating" | tee -a /dev/ttyS0
+    grep -v -e "new version of Supabase CLI" -e "recommend updating" | tee "$HOME/.stack-start.log"
   # API_URL, DB_URL, ANON_KEY, SERVICE_ROLE_KEY, ... for the shell (the stack picks its own ports)
   eval "$(supabase status --env </dev/null 2>/dev/null)"
   [ -n "$API_URL" ] && break
   echo "The stack isn't up yet (attempt $attempt of 3), starting it again ..."
+  # What failed, on the console too: the terminal above isn't in a build's log
+  { echo "supabase-demo: stack start attempt $attempt of 3 failed:"; tail -n 40 "$HOME/.stack-start.log"; } \
+    2>/dev/null >/dev/ttyS0
 done
+rm -f "$HOME/.stack-start.log"
 # Never reach the prompt (and so the snapshot) without the stack
 [ -n "$API_URL" ] || { echo "Supabase's stack didn't start."; exit 1; }
 export API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY
