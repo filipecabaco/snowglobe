@@ -1,9 +1,14 @@
 #!/bin/bash
 # The guest's console runs this as root; the stack runs as supa (Postgres refuses root)
 if [ "$(id -u)" = 0 ]; then
+  chmod 666 /dev/ttyS0
   exec su supa -s /bin/bash -c "cd ~/app && exec /usr/local/bin/supabase-demo"
 fi
 export SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 SUPABASE_NO_UPDATE_NOTIFIER=1 CI=1
+exec 2> >(tee -a /dev/ttyS0 >&2)
+export PS4='+DBG $(cut -d" " -f1 /proc/uptime) '
+set -x
+( while sleep 60; do { echo "=== DBG ps at $(cut -d" " -f1 /proc/uptime)"; ps -o pid,time,args | cut -c1-200; } > /dev/ttyS0; done ) &
 
 echo "Starting Supabase's native stack: Postgres, PostgREST, Auth and Realtime (no Docker) ..."
 # --runtime native: plain processes, no Docker. --eager: every service is up before this returns
@@ -16,7 +21,7 @@ echo "Starting Supabase's native stack: Postgres, PostgREST, Auth and Realtime (
 for attempt in 1 2 3; do
   supabase stack start --runtime native --eager --preparation on-demand \
     -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null 2>&1 |
-    grep -v -e "new version of Supabase CLI" -e "recommend updating"
+    grep -v -e "new version of Supabase CLI" -e "recommend updating" | tee -a /dev/ttyS0
   # API_URL, DB_URL, ANON_KEY, SERVICE_ROLE_KEY, ... for the shell (the stack picks its own ports)
   eval "$(supabase status --env </dev/null 2>/dev/null)"
   [ -n "$API_URL" ] && break
