@@ -1,6 +1,6 @@
 # Builder implementation progress
 
-Updated November 8, 2026. This tracks the original
+Updated November 9, 2026. This tracks the original
 [implementation plan](../Snowglobe_Builder_Implementation_Plan.md). The complete
 plan is **not finished**. Builder remains excluded from public deployment.
 
@@ -855,3 +855,13 @@ forcing Connection: close made the drill deterministic. The live gateway was not
 restarted and the owner's browser workspace was not touched. Operational host
 rollback, off-host image backup, guest provenance/license/security review and
 owner/device approval remain open; this is an unapproved private candidate.
+
+### Owner reported successful Chrome app generation
+
+In Chrome on macOS, the owner connected ChatGPT and submitted one combined
+prompt requesting recipe categories, search and Supabase accounts with per-user
+recipes. The owner reported that the application built and appeared to work well.
+This is owner-reported generation success, not an independently observed browser
+run or confirmation of each requested feature. Account isolation, search,
+Save/reload, Stop/Retry, export and the actual Chrome version remain unconfirmed.
+The private candidate remains unapproved and the full walkthrough gate stays open.

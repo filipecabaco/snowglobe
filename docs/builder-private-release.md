@@ -55,7 +55,9 @@ No network configuration was changed for this scope decision.
   access does not close preview, credential, restore or filesystem safety gates.
 
 The owner selected Chrome on macOS for the final hands-on walkthrough. Its
-actual browser version and results remain pending. Desktop Chrome/Edge are the first target. Firefox/WebKit component tests do not
+owner report confirms ChatGPT connection and successful recipe-app generation.
+The remaining functional checks and actual Chrome version are pending.
+Desktop Chrome/Edge are the first target. Firefox/WebKit component tests do not
 establish full workflow support on physical Safari, iPhone or Android. Broader
 browser/device support is a separate qualification; unsupported devices must not
 be advertised as verified for this release.
