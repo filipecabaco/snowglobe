@@ -50,7 +50,10 @@ CMD ["/usr/local/bin/web-demo"]
 # One of the agent page's machines (/agent/ on the demo site): agents change the app here and see it
 # rebuilt in the page's preview. The network is on so the preview can reach its server (and the
 # machine can fetch through the browser, as the page's own requests). agent-watch: the directory
-# whose changes the agent page shows after each command (a diff of the files a command changed)
+# whose changes the agent page shows after each command (a diff of the files a command changed).
+# The npm install exercise puts npm's own files (and node's, for running it) in the warm pack:
+# without it, an agent's first `npm install` fetched them one by one from the live site, over five
+# minutes. It installs into a scratch directory, removed after, so the project is untouched.
 LABEL snowglobe.title="React + Vite in the browser" \
       snowglobe.memory="640" \
       snowglobe.network="fetch" \
@@ -60,4 +63,4 @@ LABEL snowglobe.title="React + Vite in the browser" \
       snowglobe.agent-sample="cd /root/app && sed -i 's/Nothing here yet/Hello/' src/App.jsx" \
       snowglobe.agent-watch="/root/app" \
       snowglobe.agent-exposed-to='["https://chatgpt.com"]' \
-      snowglobe.exercise='["node -e \"console.log(6 * 7)\"", "wget -qO- 127.0.0.1:4173/__build", "ls src"]'
+      snowglobe.exercise='["node -e \"console.log(6 * 7)\"", "wget -qO- 127.0.0.1:4173/__build", "ls src", "cd /tmp && rm -rf w && mkdir w && cd w && npm init -y >/dev/null && npm install ms@2; cd /root/app; rm -rf /tmp/w ~/.npm/_cacache"]'
