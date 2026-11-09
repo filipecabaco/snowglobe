@@ -1,0 +1,117 @@
+# Two machines feeding one viewer: alpha (Python) and beta (a Supabase machine, answering with socat and a
+# Postgres query) each serve a reading on port 9000, and a viewer (Node) reaches both, as alpha.internal and beta.internal, and shows them side by
+# side with their average. The viewer has a link to each and the sources have none to each other, so the
+# graph is a fork. A source that is down shows as "down" and the average is of the ones that answer.
+# (A page has one machine per site, so the two sources are two different sites. Natively, the same file
+# could run `count = 2` replicas of one template; the page can't, which is why they differ here.)
+name = "two-sources"
+
+[templates.python]
+build = "../../python"
+network = "fetch"
+
+[templates.supabase]
+build = "../../supabase"
+network = "fetch"
+
+[templates.node]
+build = "../../web"
+network = "fetch"
+
+# alpha: a reading a second, written to a file that Python's own web server hands out
+[snapshots.alpha]
+template = "python"
+run = [
+'''
+mkdir -p /root/site && cd /root/site
+(while true; do
+  echo "{\"source\":\"alpha\",\"value\":$((RANDOM % 50 + 50))}" > reading.json.tmp && mv reading.json.tmp reading.json
+  sleep 1
+done >/dev/null 2>&1 &)
+''',
+'''
+cd /root/site && python3 -m http.server 9000 --bind 0.0.0.0 >/tmp/alpha.log 2>&1 &
+''',
+]
+ready = "wget -q -O /dev/null http://127.0.0.1:9000/reading.json"
+timeout = "2m"
+
+# beta: a reading from a Postgres query on every request, answered by a script that socat runs per connection
+[snapshots.beta]
+template = "supabase"
+run = [
+'''
+cat > /root/answer.sh <<'SH'
+#!/bin/bash
+read -r request
+. /home/supa/.stack-env
+v=$(psql -tA "$DB_URL" -c "select (random() * 50)::int + 20" 2>/dev/null)
+body="{\"source\":\"beta\",\"value\":${v:-0}}"
+printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#body}" "$body"
+SH
+chmod +x /root/answer.sh
+(socat TCP-LISTEN:9000,reuseaddr,fork EXEC:/root/answer.sh >/tmp/beta.log 2>&1 &)
+''',
+]
+ready = "curl -sf http://127.0.0.1:9000/ >/dev/null"
+timeout = "4m"
+
+# the viewer: reads both on every request and says which it could reach
+[snapshots.viewer]
+template = "node"
+run = [
+'''
+cat > /root/app/viewer.mjs <<'JS'
+import http from 'node:http';
+const sources = { alpha: 'http://alpha.internal:9000/reading.json', beta: 'http://beta.internal:9000/reading.json' };
+const read = async (url) => {
+  try { return (await (await fetch(url, { signal: AbortSignal.timeout(3000) })).json()).value; } catch { return null; }
+};
+http.createServer(async (req, res) => {
+  if (req.url === '/health') return res.end('ok');
+  const got = Object.fromEntries(await Promise.all(Object.entries(sources).map(async ([name, url]) => [name, await read(url)])));
+  const up = Object.values(got).filter((v) => v !== null);
+  const avg = up.length ? Math.round((up.reduce((a, b) => a + b, 0) / up.length) * 10) / 10 : '...';
+  const cell = (name) => `<div style='flex:1'><small>${name}</small><div style='font-size:32px'>${got[name] ?? 'down'}</div></div>`;
+  res.setHeader('content-type', 'text/html');
+  res.end(`<meta http-equiv='refresh' content='1'><body style='font:16px/1.5 system-ui;margin:24px'><h3>Two sources, one viewer</h3><div style='display:flex;gap:24px'>${Object.keys(sources).map(cell).join('')}</div><p>average of ${up.length}: <b>${avg}</b></p><p><small>alpha.internal (Python) and beta.internal (Supabase), each a machine of its own</small></p>`);
+}).listen(8080, '0.0.0.0');
+JS
+''',
+'''
+cd /root/app && node viewer.mjs >/tmp/viewer.log 2>&1 &
+''',
+]
+ready = "wget -q -O /dev/null http://127.0.0.1:8080/health"
+timeout = "2m"
+
+[templates.alpha]
+snapshot = "alpha"
+
+[templates.beta]
+snapshot = "beta"
+
+[templates.viewer]
+snapshot = "viewer"
+
+[machines.alpha]
+template = "alpha"
+
+[machines.beta]
+template = "beta"
+
+[services.viewer]
+template = "viewer"
+ports = ["8080:8080"]
+
+[links.viewer-alpha]
+from = "viewer"
+to = "alpha"
+port = 9000
+as = "alpha.internal"
+
+[links.viewer-beta]
+from = "viewer"
+to = "beta"
+port = 9000
+as = "beta.internal"

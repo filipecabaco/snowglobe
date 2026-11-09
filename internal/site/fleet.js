@@ -25,31 +25,100 @@
 
   const ESCAPES = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\" };
 
-  /** One value from the start of `s` (after its key): { value, rest }. */
-  function readValue(s, line) {
+  /** The character an escape stands for, `i` being where the backslash after it ends: { ch, next }. */
+  function escapeAt(s, i, line) {
+    const e = s[i];
+    if (e === "u" || e === "U") {
+      const n = e === "u" ? 4 : 8;
+      const hex = s.slice(i + 1, i + 1 + n);
+      if (!new RegExp(`^[0-9a-fA-F]{${n}}$`).test(hex)) throw new TomlError("a bad \\u escape", line);
+      return { ch: String.fromCodePoint(parseInt(hex, 16)), next: i + n + 1 };
+    }
+    if (e === "x") {
+      const hex = s.slice(i + 1, i + 3);
+      if (!/^[0-9a-fA-F]{2}$/.test(hex)) throw new TomlError("a bad \\x escape", line);
+      return { ch: String.fromCodePoint(parseInt(hex, 16)), next: i + 3 };
+    }
+    if (e === "e") return { ch: "\x1b", next: i + 1 };
+    if (e in ESCAPES) return { ch: ESCAPES[e], next: i + 1 };
+    throw new TomlError(`a bad escape \\${e ?? ""}`, line);
+  }
+
+  /**
+   * A string of three quotes ("""...""" with escapes, '''...''' as written), from just after its opening
+   * quotes: it goes on over lines (`more()` gives the next one, or null at the end of the file). A
+   * newline right after the opening quotes is dropped, and so is a backslash at the end of a line in
+   * a basic string, with the white space that follows it.
+   */
+  function readMulti(s, quote, line, more) {
+    const basic = quote === '"';
+    const here = () => more.at?.() ?? line;
+    const open = () => { throw new TomlError("a string that doesn't end", line); };
+    let out = "";
+    let text = s;
+    if (text === "" && (text = more()) === null) open();
+    for (let i = 0; ;) {
+      if (i >= text.length) {
+        out += "\n";
+        if ((text = more()) === null) open();
+        i = 0;
+        continue;
+      }
+      const c = text[i];
+      if (c === quote) {
+        let run = 1;
+        while (text[i + run] === quote) run++;
+        if (run >= 3) {
+          if (run > 5) throw new TomlError("too many quotes together in a string", here());
+          return { value: out + quote.repeat(run - 3), rest: text.slice(i + run) };
+        }
+        out += quote.repeat(run);
+        i += run;
+      } else if (basic && c === "\\") {
+        if (/^\\[ \t]*$/.test(text.slice(i))) {
+          // A line-ending backslash: skip the white space and the blank lines after it
+          do { if ((text = more()) === null) open(); } while (text.trim() === "");
+          i = text.length - text.replace(/^[ \t]+/, "").length;
+        } else {
+          const e = escapeAt(text, i + 1, here());
+          out += e.ch;
+          i = e.next;
+        }
+      } else {
+        out += c;
+        i++;
+      }
+    }
+  }
+
+  /**
+   * One value from the start of `s` (after its key): { value, rest }. `more()`, where a value may
+   * run over lines (a multi-line string), gives the next line, or null at the end of the file.
+   */
+  function readValue(s, line, more) {
     s = s.replace(/^[ \t]+/, "");
     const c = s[0];
     if (c === '"') {
-      if (s.startsWith('"""')) throw new TomlError("multi-line strings aren't supported: use an array of lines", line);
+      if (s.startsWith('"""')) {
+        if (!more) throw new TomlError("a multi-line string can't be a key", line);
+        return readMulti(s.slice(3), '"', line, more);
+      }
       let out = "";
       for (let i = 1; i < s.length; i++) {
         if (s[i] === '"') return { value: out, rest: s.slice(i + 1) };
         if (s[i] === "\\") {
-          const e = s[++i];
-          if (e === "u" || e === "U") {
-            const n = e === "u" ? 4 : 8;
-            const hex = s.slice(i + 1, i + 1 + n);
-            if (!new RegExp(`^[0-9a-fA-F]{${n}}$`).test(hex)) throw new TomlError("a bad \\u escape", line);
-            out += String.fromCodePoint(parseInt(hex, 16));
-            i += n;
-          } else if (e in ESCAPES) out += ESCAPES[e];
-          else throw new TomlError(`a bad escape \\${e ?? ""}`, line);
+          const e = escapeAt(s, i + 1, line);
+          out += e.ch;
+          i = e.next - 1;
         } else out += s[i];
       }
       throw new TomlError("a string that doesn't end", line);
     }
     if (c === "'") {
-      if (s.startsWith("'''")) throw new TomlError("multi-line strings aren't supported: use an array of lines", line);
+      if (s.startsWith("'''")) {
+        if (!more) throw new TomlError("a multi-line string can't be a key", line);
+        return readMulti(s.slice(3), "'", line, more);
+      }
       const end = s.indexOf("'", 1);
       if (end < 0) throw new TomlError("a string that doesn't end", line);
       return { value: s.slice(1, end), rest: s.slice(end + 1) };
@@ -109,15 +178,19 @@
 
   /**
    * The fleet file's TOML. Tables ([a.b]), key = value with strings (basic and literal), integers,
-   * floats, booleans and arrays (across lines, with comments); not dates, inline tables, arrays of
-   * tables or multi-line strings, each of which says so. Tables and values have no prototype.
+   * floats, booleans and arrays (across lines, with comments), and multi-line strings (three quotes
+   * of either kind); not dates, inline tables or arrays of tables, each of which says so. Tables and
+   * values have no prototype.
    */
   function parse(text) {
     const lines = String(text).replace(/^﻿/, "").split(/\r?\n/);
     const out = Object.create(null);
     let table = out;
     const seen = new Set();
-    for (let i = 0; i < lines.length; i++) {
+    let i = 0;
+    const more = () => (i + 1 < lines.length ? lines[++i] : null);
+    more.at = () => i + 1; // the line it has got to, for errors inside a multi-line string
+    for (; i < lines.length; i++) {
       const n = i + 1;
       let s = lines[i].replace(/^[ \t]+/, "");
       if (!s || s[0] === "#") continue;
@@ -143,31 +216,31 @@
         // An array, across lines
         const items = [];
         let rest = first.slice(1);
-        let at = i;
+        let sep = false; // a value was read and its comma has not been
         for (;;) {
           rest = rest.replace(/^[ \t]+/, "");
+          if (sep && rest[0] === ",") { rest = rest.slice(1); sep = false; continue; }
           if (!rest || rest[0] === "#") {
-            if (++at >= lines.length) throw new TomlError("an array that doesn't end", n);
-            rest = lines[at];
+            if ((rest = more()) === null) throw new TomlError("an array that doesn't end", n);
             continue;
           }
           if (rest[0] === "]") { rest = rest.slice(1); break; }
-          if (rest[0] === "[" || rest[0] === "{") throw new TomlError("arrays of arrays and inline tables aren't supported", at + 1);
-          const r = readValue(rest, at + 1);
-          if (items.length && typeof r.value !== typeof items[0]) throw new TomlError("an array of one kind of value", at + 1);
+          if (rest[0] === "[" || rest[0] === "{") throw new TomlError("arrays of arrays and inline tables aren't supported", i + 1);
+          const r = readValue(rest, i + 1, more);
+          if (items.length && typeof r.value !== typeof items[0]) throw new TomlError("an array of one kind of value", i + 1);
           items.push(r.value);
+          sep = true;
           rest = r.rest.replace(/^[ \t]+/, "");
-          if (rest[0] === ",") rest = rest.slice(1);
-          else if (rest[0] !== "]" && rest[0] !== "#" && rest) throw new TomlError("expected , or ] in the array", at + 1);
+          if (rest[0] === ",") { rest = rest.slice(1); sep = false; }
+          else if (rest[0] !== "]" && rest[0] !== "#" && rest) throw new TomlError("expected , or ] in the array", i + 1);
         }
-        endOfValue(rest, at + 1);
-        i = at;
+        endOfValue(rest, i + 1);
         value = items;
       } else if (first[0] === "{") {
         throw new TomlError("inline tables aren't supported: use a [table]", n);
       } else {
-        const r = readValue(first, n);
-        endOfValue(r.rest, n);
+        const r = readValue(first, n, more);
+        endOfValue(r.rest, i + 1);
         value = r.value;
       }
       const parent = into(table, k.path.slice(0, -1), n);
@@ -177,6 +250,135 @@
       parent[last] = value;
     }
     return out;
+  }
+
+  // ---------------------------------------------------------------- highlight
+
+  /** The parts of a string's text that mean something to a shell: [class|null, text] pairs. */
+  function shellBits(t) {
+    const out = [];
+    const re = /(^[ \t]*#.*$)|(\$\{[^}\n]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\$[?$!@#*0-9]|\$\()/g;
+    let at = 0;
+    for (let m; (m = re.exec(t));) {
+      if (m.index > at) out.push(["str", t.slice(at, m.index)]);
+      out.push([m[1] ? "cmt" : "var", m[0]]);
+      at = m.index + m[0].length;
+    }
+    if (at < t.length) out.push(["str", t.slice(at)]);
+    return out;
+  }
+
+  /**
+   * A fleet file coloured, as [class, text] pairs that put end to end give the text back exactly:
+   * cmt (a comment), tbl (a table header), key, str (a string, with the shell's $variables and #
+   * comment lines inside a multi-line one picked out as var and cmt), num, bool, pun. A class of
+   * null is plain. It colours what it sees and refuses nothing (the parser says what is wrong).
+   */
+  function highlight(text) {
+    const out = [];
+    const push = (cls, t) => { if (t) out.push([cls, t]); };
+    let multi = null; // the quote of a multi-line string that is open
+    const TRIPLE = ['"""', "'''"];
+    /** The rest of a line of a multi-line string, from `i`: where it ends. */
+    const inMulti = (line, i) => {
+      let j = i;
+      for (; j < line.length; j++) {
+        if (multi === '"' && line[j] === "\\") { j++; continue; }
+        if (line[j] === multi && line[j + 1] === multi && line[j + 2] === multi) break;
+      }
+      j = Math.min(j, line.length);
+      for (const [c, t] of shellBits(line.slice(i, j))) push(c, t);
+      if (j >= line.length) return line.length;
+      let run = 3;
+      while (run < 5 && line[j + run] === multi) run++;
+      push("str", line.slice(j, j + run));
+      multi = null;
+      return j + run;
+    };
+    String(text).split("\n").forEach((line, n) => {
+      if (n) push(null, "\n");
+      let i = 0;
+      if (multi) i = inMulti(line, 0);
+      while (i < line.length) {
+        const rest = line.slice(i);
+        const atStart = /^\s*$/.test(line.slice(0, i));
+        let m;
+        if ((m = /^[ \t]+/.exec(rest))) { push(null, m[0]); i += m[0].length; continue; }
+        if (rest[0] === "#") { push("cmt", rest); break; }
+        if (atStart && (m = /^\[\[?[^\]\n]*\]\]?/.exec(rest))) { push("tbl", m[0]); i += m[0].length; continue; }
+        if (atStart && (m = /^(?:[A-Za-z0-9_-]+|"[^"\n]*"|'[^'\n]*')(?:[ \t]*\.[ \t]*(?:[A-Za-z0-9_-]+|"[^"\n]*"|'[^'\n]*'))*(?=[ \t]*=)/.exec(rest))) {
+          push("key", m[0]); i += m[0].length; continue;
+        }
+        if (TRIPLE.some((q) => rest.startsWith(q))) {
+          multi = rest[0];
+          push("str", rest.slice(0, 3));
+          i = inMulti(line, i + 3);
+          continue;
+        }
+        if (rest[0] === '"') {
+          let j = 1;
+          while (j < rest.length && rest[j] !== '"') j += rest[j] === "\\" ? 2 : 1;
+          const e = Math.min(j + 1, rest.length);
+          push("str", rest.slice(0, e));
+          i += e;
+          continue;
+        }
+        if (rest[0] === "'") {
+          const j = rest.indexOf("'", 1);
+          const e = j < 0 ? rest.length : j + 1;
+          push("str", rest.slice(0, e));
+          i += e;
+          continue;
+        }
+        if ((m = /^(?:true|false)(?![A-Za-z0-9_])/.exec(rest))) { push("bool", m[0]); i += m[0].length; continue; }
+        if ((m = /^[+-]?[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][+-]?[0-9]+)?/.exec(rest))) { push("num", m[0]); i += m[0].length; continue; }
+        if ("[],=".includes(rest[0])) { push("pun", rest[0]); i++; continue; }
+        push(null, rest[0]);
+        i++;
+      }
+    });
+    return out;
+  }
+
+  // ---------------------------------------------------------------- the graph
+
+  /**
+   * What a plan joins, as a graph: a node for each machine of the page the fleet uses (`names`: what
+   * the file calls the machines on it, `services`: the ports it opens in the frame), an edge for each
+   * link (from the machine that reaches to the one reached, labelled by the name and port it reaches it as).
+   * `rank` is a node's column (the longest chain of links that leads to it) and `row` its place in it.
+   */
+  function graph(thePlan) {
+    const nodes = new Map();
+    const node = (runtime) => {
+      if (!nodes.has(runtime)) nodes.set(runtime, { id: runtime, runtime, names: [], services: [], rank: 0, row: 0 });
+      return nodes.get(runtime);
+    };
+    for (const s of thePlan.steps) {
+      if (!s.runtime) continue;
+      const n = node(s.runtime);
+      if (s.kind === "link") node(s.to);
+      else if (s.kind === "machine") n.names.push(s.name);
+      else if (s.kind === "service") n.services.push({ name: s.name, port: s.port });
+    }
+    const edges = thePlan.links.map((l) => ({ from: l.from, to: l.to, port: l.port, label: l.asPort && l.asPort !== l.port ? `${l.as}:${l.asPort} → :${l.port}` : `${l.as}:${l.port}` }));
+    for (const e of edges) { node(e.from); node(e.to); }
+    // Longest chain first, capped so a cycle can't run away
+    for (let pass = 0; pass < nodes.size; pass++) {
+      let moved = false;
+      for (const e of edges) {
+        const to = nodes.get(e.to);
+        const rank = Math.min(nodes.get(e.from).rank + 1, nodes.size - 1);
+        if (e.from !== e.to && to.rank < rank) { to.rank = rank; moved = true; }
+      }
+      if (!moved) break;
+    }
+    const rows = new Map();
+    for (const n of nodes.values()) {
+      n.row = rows.get(n.rank) ?? 0;
+      rows.set(n.rank, n.row + 1);
+    }
+    return { nodes: [...nodes.values()], edges };
   }
 
   // ---------------------------------------------------------------- the plan
@@ -297,7 +499,8 @@
       const r = typeof s.template === "string" ? resolve(s.template) : { error: "it names no template" };
       if (r.error) { bad(where, r.error); continue; }
       if (r.snapshot) { bad(where, `its template ${s.template} is itself a snapshot's; the page can't stack them`); continue; }
-      const run = s.run === undefined ? [] : Array.isArray(s.run) ? s.run : [s.run];
+      if (s.run !== undefined && !Array.isArray(s.run)) { bad(where, "run: an array of commands (run = [...]), even for one"); continue; }
+      const run = s.run ?? [];
       if (run.some((c) => typeof c !== "string" || !c.trim())) { bad(where, "run: commands, each a string"); continue; }
       if (s.ready !== undefined && (typeof s.ready !== "string" || !s.ready.trim())) { bad(where, "ready: a command, as a string"); continue; }
       let timeout = 120000;
@@ -426,6 +629,7 @@
     const states = new Map(thePlan.steps.map((s) => [s.key, { status: "pending", detail: null, output: "", error: null }]));
     const byKey = new Map(thePlan.steps.map((s) => [s.key, s]));
     let chain = Promise.resolve();
+    let stopping = false; // stop() is waiting for what runs to end
     const changed = () => { try { onchange?.(); } catch {} };
     const set = (key, patch) => { Object.assign(states.get(key), patch); changed(); };
 
@@ -433,6 +637,10 @@
     async function exec(runtime, command, timeoutSeconds) {
       const { jobId } = await api.runCommand({ runtime, command, timeoutSeconds }, { source: "fleet" });
       for (;;) {
+        if (stopping) {
+          try { await api.cancelJob?.(jobId); } catch {}
+          throw new Error("stopped");
+        }
         const v = await api.readJob(jobId);
         if (v.state !== "running") return { exit: v.state === "exited" ? v.exitStatus : null, output: v.output ?? "", state: v.state, error: v.error ?? null };
         await sleep(pollMs);
@@ -459,6 +667,7 @@
             set(step.key, { detail: `waiting until it is ready (try ${tries})`, output: tail(log) });
             const r = await exec(step.runtime, step.ready, 10);
             if (r.exit === 0) break;
+            if (stopping) throw new Error("stopped");
             if (now() >= until) throw new Error(`not ready after ${Math.round(step.timeoutMs / 1000)}s`);
             await sleep(1000);
           }
@@ -487,12 +696,14 @@
         if (states.get(need).status !== "done") throw new Error(`${key} needs ${need} first`);
       }
       const run = chain.then(async () => {
-        if (states.get(key).status === "running") return;
+        if (stopping || states.get(key).status === "running") return;
         set(key, { status: "running", detail: null, error: null, output: "" });
         try {
           set(key, { status: "done", ...(await execute(step)) });
         } catch (e) {
-          set(key, { status: "failed", error: String(e?.message ?? e) });
+          // A step that stop() ended goes back to pending, not failed
+          if (stopping) set(key, { status: "pending", detail: null, error: null, output: "" });
+          else set(key, { status: "failed", error: String(e?.message ?? e) });
         }
       });
       chain = run.catch(() => {});
@@ -504,16 +715,52 @@
     async function runAll() {
       for (const step of thePlan.steps) {
         if (states.get(step.key).status === "done") continue;
+        if (stopping) return false;
         const r = await runStep(step.key);
         if (r.status !== "done") return false;
       }
-      return true;
+      return !stopping;
     }
 
-    return { state: (key) => states.get(key), runStep, runAll, steps: thePlan.steps };
+    /**
+     * Ends what the fleet is doing and undoes it: the step that runs is cancelled, the service's
+     * preview is closed, the links are cleared, and each machine the fleet uses goes back to its
+     * image (what it did is forgotten), so every step is pending again. A machine that can't go back
+     * (it is busy) is named in `problems`; the rest are done.
+     */
+    async function stop({ also = [] } = {}) {
+      stopping = true;
+      const problems = [];
+      try {
+        await chain;
+        try { await api.closePreview?.({ source: "fleet" }); } catch (e) { problems.push(String(e?.message ?? e)); }
+        try { await api.setLinks?.([]); } catch (e) { problems.push(String(e?.message ?? e)); }
+        for (const runtime of new Set([...thePlan.steps.map((st) => st.runtime).filter(Boolean), ...also])) {
+          try {
+            // A machine still closing its connections is busy for a moment
+            for (let tries = 0; ; tries++) {
+              try {
+                if (await api.startFresh(runtime) === false) problems.push(`${runtime}: not reset (it was not confirmed)`);
+                break;
+              } catch (e) {
+                if (tries >= 10 || !/busy/.test(String(e?.message))) throw e;
+                await sleep(300);
+              }
+            }
+          } catch (e) { problems.push(`${runtime}: ${String(e?.message ?? e)}`); }
+        }
+        for (const st of states.values()) Object.assign(st, { status: "pending", detail: null, output: "", error: null, url: undefined });
+      } finally {
+        stopping = false;
+        changed();
+      }
+      return { problems };
+    }
+
+    return { state: (key) => states.get(key), runStep, runAll, stop, steps: thePlan.steps };
   }
 
-  const SnowglobeFleet = { parse, plan, createRun, duration, siteOf, guestPort, TomlError, KEYS, TOP };
+  const SnowglobeFleet = { parse, plan, createRun, highlight, graph, duration, siteOf, guestPort, TomlError, KEYS, TOP };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeFleet;
   else root.SnowglobeFleet = SnowglobeFleet;
 })(typeof window !== "undefined" ? window : globalThis);

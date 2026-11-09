@@ -49,10 +49,44 @@
     .col + .col { padding: 18px 0 22px 22px; border-left: 1px solid var(--rule); }
     .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 10px; }
     .bar .grow { flex: 1; }
-    textarea { display: block; width: 100%; min-height: 420px; resize: vertical; box-sizing: border-box; padding: 12px 14px; font: 13px/1.5 var(--mono, ui-monospace, monospace);
-      color: var(--ink); background: transparent; border: 1px solid var(--rule); border-radius: 8px; tab-size: 2; }
-    textarea:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-    textarea[readonly] { opacity: .6; }
+    .pick { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--rule); border-radius: 6px; padding: 3px 6px; max-width: 11em; }
+    textarea { display: block; width: 100%; min-height: 420px; resize: vertical; }
+    .editor:has(textarea:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+    /* The file, coloured: a <pre> behind a textarea whose text is clear (the caret and selection still show) */
+    .editor { position: relative; border: 1px solid var(--rule); border-radius: 8px; --c-str: #0b6e4f; --c-num: #1d4ed8; --c-var: #a15c00; --c-key: var(--ink); }
+    :root[data-theme="dark"] .editor { --c-str: #7ad3a8; --c-num: #8ab4ff; --c-var: #e6b35c; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .editor { --c-str: #7ad3a8; --c-num: #8ab4ff; --c-var: #e6b35c; } }
+    .editor pre, .editor textarea { margin: 0; padding: 12px 14px; font: 13px/1.5 var(--mono, ui-monospace, monospace); tab-size: 2; white-space: pre; box-sizing: border-box; }
+    .editor pre { position: absolute; inset: 0; overflow: hidden; pointer-events: none; color: var(--ink); }
+    .editor pre code { display: block; font: inherit; will-change: transform; }
+    .editor textarea { position: relative; border: 0; border-radius: 8px; background: transparent; color: transparent; caret-color: var(--ink); overflow: auto; }
+    .editor textarea::selection { background: color-mix(in srgb, var(--signal) 28%, transparent); }
+    .editor[data-readonly] { opacity: .6; }
+    .hl-cmt { color: var(--ink-2); font-style: italic; }
+    .hl-tbl { font-weight: 700; }
+    .hl-key { color: var(--c-key); font-weight: 600; }
+    .hl-str { color: var(--c-str); }
+    .hl-num, .hl-bool { color: var(--c-num); }
+    .hl-var { color: var(--c-var); }
+    .hl-pun { color: var(--ink-2); }
+    /* Forced colours (high contrast) drop the backgrounds and colours: show the textarea's own text */
+    @media (forced-colors: active) { .editor textarea { color: CanvasText; } .editor pre { display: none; } }
+
+    /* The graph of the fleet */
+    .graph { margin: 0 0 18px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 8px; overflow-x: auto; }
+    .graph svg { display: block; max-width: 100%; height: auto; font: 13px var(--sans); }
+    .graph .node rect { fill: var(--bg); stroke: var(--ink); stroke-width: 1.2; }
+    .graph .node[data-state="running"] rect, .graph .node[data-state="busy"] rect { stroke: var(--signal); stroke-width: 2; }
+    .graph .node[data-state="asleep"] rect { stroke-dasharray: 4 3; stroke: var(--ink-2); }
+    .graph .node .t { fill: var(--ink); font-weight: 620; }
+    .graph .node .s { fill: var(--ink-2); font-size: 12px; }
+    .graph .node .dot { fill: var(--ink-2); }
+    .graph .node[data-state="running"] .dot, .graph .node[data-state="busy"] .dot { fill: var(--signal); }
+    .graph .edge { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+    .graph .edge.live { stroke: var(--signal); }
+    .graph .head { fill: var(--ink); }
+    .graph .lbl { fill: var(--ink-2); font: 12px var(--mono, ui-monospace, monospace); text-anchor: middle; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
 
     ol.steps, ul.plain { margin: 0; padding: 0; list-style: none; }
     ol.steps > li { padding: 12px 0; border-top: 1px solid var(--rule); }
@@ -104,17 +138,30 @@
           <div class="bar">
             <h2 id="file-title" class="grow">File</h2>
             <button type="button" class="link" id="fleet-example">Load the example</button>
+            <select id="fleet-template" class="pick" aria-label="Load a template">
+              <option value="">Templates…</option>
+              <option value="api-and-client.toml">A page fetching an API over a link</option>
+              <option value="tcp-echo.toml">Raw TCP between two machines</option>
+              <option value="two-sources.toml">Two sources converging on one viewer</option>
+            </select>
             <label class="link">Open a file<input type="file" id="fleet-file" accept=".toml,text/plain" hidden></label>
           </div>
-          <textarea id="fleet-text" spellcheck="false" aria-labelledby="file-title" autocapitalize="off" autocomplete="off"></textarea>
+          <div class="editor" id="fleet-editor">
+            <pre id="fleet-hl" aria-hidden="true"><code></code></pre>
+            <textarea id="fleet-text" spellcheck="false" wrap="off" aria-labelledby="file-title" autocapitalize="off" autocomplete="off"></textarea>
+          </div>
         </section>
 
         <section class="col" aria-labelledby="plan-title">
           <div class="bar">
             <h2 id="plan-title" class="grow">Plan <span id="fleet-name"></span></h2>
+            <button type="button" class="btn sm" id="fleet-stop" disabled title="Ends what runs, closes the frame, and sends the machines back to their image">Stop</button>
             <button type="button" class="btn go sm" id="fleet-run-all" disabled>Run all</button>
           </div>
           <ul id="fleet-problems" class="plain problems" hidden></ul>
+          <figure class="graph" id="fleet-graph-box" hidden>
+            <svg id="fleet-graph" role="img" aria-label="The machines of the fleet and the links between them"></svg>
+          </figure>
           <p id="fleet-plan-empty" class="lede" hidden></p>
           <ol id="fleet-steps" class="steps"></ol>
 

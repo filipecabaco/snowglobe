@@ -485,7 +485,10 @@ on the landing page, not on the agent page.
 
 A `snowglobe.toml` run in one tab, on the agent page's machines: https://filipecabaco.github.io/snowglobe/fleet/
 The file is read in the browser (`fleet.js`) into steps: a snapshot's `run` commands and `ready` check, a `[links.*]` entry,
-a `[machines.*]` wake, a `[services.*]` opened in a frame; each has its own Run, or Run all. A template names a site the
+a `[machines.*]` wake, a `[services.*]` opened in a frame; each has its own Run, or Run all, and Stop ends the run, closes the
+frame, clears the links and sends the machines back to their image. The page draws the machines and links as a graph and
+colours the file; a `run` command may be a multi-line string (three single quotes as written, three double quotes with escapes;
+heredoc terminators need column 0). Small fleets to try are in `examples/fleet/templates/`, in the page's Templates menu. A template names a site the
 page has (`build = "../python"` is the `python` machine). One site is one machine on the page. Links are real, both ends
 need a network, and a machine reads its links when it wakes. The guest of `from` that connects to `as` on port 80 or 443
 makes an HTTP(S) request, which the page answers from `to`'s server on `port` (machine-core.js sends it to

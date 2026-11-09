@@ -83,13 +83,33 @@ test('parse: what it refuses says the line', () => {
     ['a = [1,', /array that doesn't end/],
     ['a = {b = 1}', /inline tables/],
     ['[[a]]', /arrays of tables/],
-    ['a = """x"""', /multi-line/],
+    ['a = """x', /doesn't end/],
+    ["a = '''x\ny", /doesn't end/],
+    ['"""k""" = 1', /can't be a key/],
+    ['a = """x""""""', /too many quotes/],
     ['a = 1979-05-27', /can't read/],
     ['[__proto__]\nx = 1', /isn't allowed/],
     ['__proto__ = 1', /isn't allowed/],
     ['a = 1\n[a]', /not a table/],
   ];
   for (const [text, re] of cases) assert.throws(() => F.parse(text), re, text);
+});
+
+test('parse: multi-line strings', () => {
+  const v = (t) => F.parse(t).a;
+  assert.equal(v('a = """x"""'), 'x');
+  // the newline right after the opening quotes is dropped; the rest is kept as written
+  assert.equal(v('a = """\none\n  two\n"""'), 'one\n  two\n');
+  assert.equal(v("a = '''\ncat <<'X'\n\\n stays\n'''"), "cat <<'X'\n\\n stays\n");
+  assert.equal(v('a = """tab\\there \\u00e9"""'), 'tab\there \u00e9');
+  // a line-ending backslash joins lines and drops the white space after it
+  assert.equal(v('a = """one \\\n   two \\\n\n   three"""'), 'one two three');
+  // one or two quotes inside, and up to two at the end
+  assert.equal(v('a = """say "hi" and ""yo"""""'), 'say "hi" and ""yo""');
+  // in an array, with more after it, and the line numbers still right
+  assert.deepEqual(F.parse('a = [\n  """\nx\ny\n""", \'\'\'z\'\'\'  # c\n]\nb = 1').a, ['x\ny\n', 'z']);
+  assert.equal(F.parse('a = """\nx\n"""\nb = 1').b, 1);
+  assert.throws(() => F.parse('a = """\nx\n"""\nb = ?'), /line 4: /);
 });
 
 test('parse: nothing leaks to Object.prototype', () => {
@@ -442,10 +462,23 @@ labels = { x = "y" }
   assert.deepEqual(F.plan(F.parse(live), runtimes).problems, [], 'the repository example is clean');
 });
 
+test('the fleet templates plan cleanly on the page, each with its machines and links', () => {
+  const t = (name) => ({ name, network: 'fetch' });
+  const dir = path.join(__dirname, '../../examples/fleet/templates');
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.toml'));
+  assert.ok(files.length >= 3);
+  for (const f of files) {
+    const p = F.plan(F.parse(fs.readFileSync(path.join(dir, f), 'utf8')), [t('python'), t('web'), t('supabase')]);
+    assert.deepEqual(p.problems, [], f);
+    assert.ok(p.steps.some((s) => s.kind === 'service') && p.links.length, f);
+  }
+});
+
 test('format: the Go planner and this one see the same entries in the repository examples', () => {
   const { execFileSync } = require('node:child_process');
   const repo = path.join(__dirname, '../..');
-  for (const file of ['examples/fleet/snowglobe.toml', 'examples/todo-fleet/snowglobe.toml']) {
+  const templates = fs.readdirSync(path.join(repo, 'examples/fleet/templates')).map((f) => `examples/fleet/templates/${f}`);
+  for (const file of ['examples/fleet/snowglobe.toml', 'examples/todo-fleet/snowglobe.toml', ...templates]) {
     const text = fs.readFileSync(path.join(repo, file), 'utf8');
     const f = F.parse(text);
     // Go's view: its own loader's names (a tiny program in the fleet package's tests prints them)
@@ -463,4 +496,138 @@ test('format: the Go planner and this one see the same entries in the repository
     assert.deepEqual(go.links, names('links'), file);
     assert.equal(go.name, f.name ?? go.name, file);
   }
+});
+
+test('run: stop cancels what runs, closes the preview, clears links, sends machines back to their image', async () => {
+  const api = fakeApi();
+  api.closePreview = async (o) => { api.log.push(`closePreview ${o.source}`); };
+  api.setLinks = async (l) => { api.log.push(`setLinks ${l.length}`); return []; };
+  api.startFresh = async (rt) => { api.log.push(`fresh ${rt}`); return true; };
+  api.cancelJob = async (id) => { api.log.push(`cancel ${id}`); };
+  const run = F.createRun(api, F.plan(F.parse(example), runtimes), fast);
+  assert.equal(await run.runAll(), true);
+  const r = await run.stop();
+  assert.deepEqual(r.problems, []);
+  assert.deepEqual(api.log.slice(-3), ['closePreview fleet', 'setLinks 0', 'fresh python']);
+  for (const s of run.steps) assert.equal(run.state(s.key).status, 'pending', s.key);
+  // and it can run again
+  assert.equal(await run.runAll(), true);
+});
+
+test('run: stop in the middle of a step ends the step as pending and runAll with it', async () => {
+  const api = fakeApi();
+  api.startFresh = async () => true;
+  api.cancelJob = async (id) => { api.log.push(`cancel ${id}`); };
+  let run;
+  let stopped;
+  const readJob = api.readJob;
+  api.readJob = async (id) => { if (!stopped) stopped = run.stop(); return readJob(id); };
+  run = F.createRun(api, F.plan(F.parse(example), runtimes), fast);
+  assert.equal(await run.runAll(), false);
+  await stopped;
+  assert.ok(api.log.some((l) => l.startsWith('cancel ')));
+  for (const s of run.steps) assert.equal(run.state(s.key).status, 'pending', s.key);
+  assert.ok(!api.log.some((l) => l.startsWith('preview')));
+});
+
+test('run: stop names a machine that stays busy, and still resets the steps', async () => {
+  const api = fakeApi();
+  api.startFresh = async () => { throw new Error('python is busy; wait for it'); };
+  const run = F.createRun(api, F.plan(F.parse(example), runtimes), fast);
+  await run.runAll();
+  const r = await run.stop();
+  assert.match(r.problems[0], /python: python is busy/);
+  assert.equal(run.state('service/web').status, 'pending');
+});
+
+test('highlight: gives the text back exactly, with the parts named', () => {
+  const text = [
+    '# a comment',
+    'name = "x"  # trailing',
+    '[snapshots.db]',
+    "run = [",
+    "'''",
+    '# a shell comment',
+    'echo "$HOME" ${X} $(date)',
+    "''',",
+    '  "one", 2, 3.5, true',
+    ']',
+    "a.b = 'lit'",
+  ].join('\n');
+  const parts = F.highlight(text);
+  assert.equal(parts.map((p) => p[1]).join(''), text);
+  const has = (cls, t) => assert.ok(parts.some((p) => p[0] === cls && p[1] === t), `${cls} ${t}`);
+  has('cmt', '# a comment');
+  has('cmt', '# trailing');
+  has('tbl', '[snapshots.db]');
+  has('key', 'name');
+  has('key', 'a.b');
+  has('str', '"x"');
+  has('cmt', '# a shell comment');
+  has('var', '$HOME');
+  has('var', '${X}');
+  has('var', '$(');
+  has('num', '2');
+  has('num', '3.5');
+  has('bool', 'true');
+  has('str', "'lit'");
+  // after a multi-line string closes, the line goes on as normal
+  assert.deepEqual(F.highlight("a = '''x''' # c").slice(-2), [[null, ' '], ['cmt', '# c']]);
+  // odd text is returned whole: it only colours
+  for (const t of ['a = "open', '[bad', '"""', "a = '''\n\\", '= = =\n\n']) assert.equal(F.highlight(t).map((p) => p[1]).join(''), t, t);
+});
+
+test('graph: a node for each machine used, an edge for each link, columns by chain (a fork here)', () => {
+  const t = (name) => ({ name, network: 'fetch' });
+  const file = F.parse(fs.readFileSync(path.join(__dirname, '../../examples/fleet/templates/two-sources.toml'), 'utf8'));
+  const g = F.graph(F.plan(file, [t('python'), t('web'), t('supabase')]));
+  const by = Object.fromEntries(g.nodes.map((n) => [n.id, n]));
+  assert.deepEqual(g.nodes.map((n) => n.id).sort(), ['python', 'supabase', 'web']);
+  // a fork: the viewer on its own, the two sources beside each other behind it
+  assert.deepEqual([by.web.rank, by.python.rank, by.supabase.rank], [0, 1, 1]);
+  assert.notEqual(by.python.row, by.supabase.row);
+  assert.deepEqual(by.python.names, ['alpha']);
+  assert.deepEqual(by.web.services, [{ name: 'viewer', port: 8080 }]);
+  assert.deepEqual(g.edges.map((e) => `${e.from}>${e.to} ${e.label}`).sort(), ['web>python alpha.internal:9000', 'web>supabase beta.internal:9000']);
+});
+
+test('graph: a fleet without links is its machines in one column; a cycle does not run away', () => {
+  const g = F.graph({ steps: [{ kind: 'machine', runtime: 'a', name: 'a1' }, { kind: 'machine', runtime: 'b', name: 'b1' }], links: [] });
+  assert.deepEqual(g.nodes.map((n) => [n.rank, n.row]), [[0, 0], [0, 1]]);
+  const c = F.graph({ steps: [], links: [{ from: 'a', to: 'b', port: 1, as: 'x' }, { from: 'b', to: 'a', port: 2, as: 'y', asPort: 3 }] });
+  assert.ok(c.nodes.every((n) => n.rank <= 1));
+  assert.equal(c.edges[0].label, 'x:1');
+  assert.equal(c.edges[1].label, 'y:3 → :2');
+});
+
+test('plan: a multi-line command reaches the machine as the file says it, like the CLI', () => {
+  const file = F.parse("name = 'x'\n[templates.t]\nsite = 'python'\n[snapshots.s]\ntemplate = 't'\nrun = [\n'''\nls\necho hi\n''',\n]\n");
+  const step = F.plan(file, runtimes).steps.find((s) => s.kind === 'snapshot');
+  assert.deepEqual(step.run, ['ls\necho hi\n']);
+  // run is an array, even for one command: the CLI refuses a bare string
+  const bare = F.parse("name = 'x'\n[templates.t]\nsite = 'python'\n[snapshots.s]\ntemplate = 't'\nrun = 'ls'\n");
+  assert.match(F.plan(bare, runtimes).problems[0].message, /array of commands/);
+});
+
+test('parse: what Go reads that this once refused (\\e, \\xHH, a comma that starts a line), and the line of an error in a string', () => {
+  assert.equal(F.parse('a = "\\e[31m\\x41"').a, '\x1b[31mA');
+  assert.equal(F.parse('a = """\\e\\x41"""').a, '\x1bA');
+  assert.deepEqual(F.parse('a = [\n  "x"\n  , "y"\n]').a, ['x', 'y']);
+  assert.throws(() => F.parse('a = [, "y"]'), /value is missing/);
+  assert.throws(() => F.parse('a = """\nok\n\\q\n"""'), /line 3: a bad escape/);
+});
+
+test('run: stop also stops what Run all would do next, and says a machine that was not reset', async () => {
+  const api = fakeApi();
+  api.closePreview = async () => {};
+  api.startFresh = async () => false;
+  let run;
+  let stopped;
+  api.setLinks = async () => { api.log.push('setLinks'); if (!stopped) stopped = run.stop(); return []; };
+  run = F.createRun(api, F.plan(F.parse(live), runtimes), fast);
+  assert.equal(await run.runAll(), false);
+  const r = await stopped;
+  assert.ok(!api.log.some((l) => /^(wake|preview)/.test(l)), api.log.join(' | '));
+  assert.match(r.problems.join(), /not reset/);
+  for (const st of run.steps) assert.equal(run.state(st.key).status, 'pending', st.key);
 });

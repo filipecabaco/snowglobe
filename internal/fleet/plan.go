@@ -401,7 +401,11 @@ func describe(o Object) string {
 		}
 		return what + ", egress " + s.egress()
 	case SnapshotSpec:
-		return fmt.Sprintf("of %s, %d commands", s.Template, len(s.Run))
+		n := "commands"
+		if len(s.Run) == 1 {
+			n = "command"
+		}
+		return fmt.Sprintf("of %s, %d %s", s.Template, len(s.Run), n)
 	case ServiceSpec:
 		return fmt.Sprintf("%s, %s, %d to %d", s.Template, strings.Join(s.Ports, " "), s.Min, max(s.Max, s.Min, 1))
 	case MachineSpec:
@@ -588,13 +592,13 @@ func (p *Plan) snapshot(api API, o Object, s SnapshotSpec, logf func(string, ...
 	}
 	defer api.RemoveMachine(setup)
 	for _, cmd := range s.Run {
-		logf("  %s: %s", setup, cmd)
+		logf("  %s: %s", setup, brief(cmd))
 		res, err := api.Job(setup, control.JobRequest{Cmd: cmd, Timeout: 600})
 		if err != nil {
 			return err
 		}
 		if res.Status == nil || *res.Status != 0 {
-			return fmt.Errorf("%q failed (%s): %s", cmd, status(res), strings.TrimSpace(string(res.Output)))
+			return fmt.Errorf("%q failed (%s): %s", brief(cmd), status(res), strings.TrimSpace(string(res.Output)))
 		}
 	}
 	if s.Ready != "" {
@@ -611,12 +615,22 @@ func (p *Plan) snapshot(api API, o Object, s SnapshotSpec, logf func(string, ...
 				break
 			}
 			if time.Now().After(deadline) {
-				return fmt.Errorf("not ready within %s: %q: %s", timeout, s.Ready, strings.TrimSpace(string(res.Output)))
+				return fmt.Errorf("not ready within %s: %q: %s", timeout, brief(s.Ready), strings.TrimSpace(string(res.Output)))
 			}
 		}
 	}
 	_, err := api.SnapshotWith(setup, o.Name, p.labels(o, nil))
 	return err
+}
+
+// brief is a command for a log line or an error: a multi-line one (a script in a ”' string) by its first
+// line and how many more it has, not all of it with its newlines.
+func brief(cmd string) string {
+	lines := strings.Split(strings.TrimSpace(cmd), "\n")
+	if len(lines) == 1 {
+		return lines[0]
+	}
+	return fmt.Sprintf("%s … (+%d lines)", strings.TrimSpace(lines[0]), len(lines)-1)
 }
 
 func status(res *control.JobResult) string {

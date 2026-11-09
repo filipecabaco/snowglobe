@@ -265,6 +265,19 @@ as = "db.internal"</pre>
             or Run all. It is another place to run the file, not another format: the same <code>snowglobe.toml</code>
             goes to <code>snowglobe apply</code>.</p>
           <ul>
+            <li><b>The file</b> is coloured as you type. A <code>run</code> command can be a multi-line string
+              (three single quotes, as written, or three double quotes, with escapes), which reads like a shell
+              script. Heredoc terminators need column 0, since TOML keeps the indentation. <code>run</code> stays an array, even
+              for one command, and a file kept on Windows should have LF line endings (the repo's <code>.gitattributes</code>
+              sets that for <code>.toml</code>; <code>snowglobe apply</code> also reads CRLF as LF).</li>
+            <li><b>The graph</b> above the steps draws the machines the file uses, and an arrow for each link labelled
+              with the name and port the guest uses. A dashed box is asleep, a red one is busy.</li>
+            <li><b>Stop</b> ends what runs, closes the frame, clears the links and sends every machine the file uses back
+              to its image, so each step is pending again. What the machines did is forgotten.</li>
+            <li><b>How many machines</b> are awake at once is raised to the number the file uses (up to 8) when you
+              run it, since a viewer linked to two sources needs all three awake. Stop puts it back to 2.</li>
+            <li><b>The Templates menu</b> next to <q>Load the example</q> holds small fleets to try, which are
+              <code>examples/fleet/templates/</code> in the repo.</li>
             <li><b>Steps.</b> A snapshot's <code>run</code> commands and <code>ready</code> check, each link, each machine
               woken, each service opened in a frame.</li>
             <li><b>Templates</b> name a site the page has: <code>build = "../python"</code> is the <code>python</code>
@@ -385,7 +398,7 @@ snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
                 <tr><td><code>/v1/fleets</code></td><td>fleets and their instances</td></tr>
                 <tr><td><code>/v1/ports</code>, <code>/v1/ports/check?port=N&amp;ip=IP</code></td><td>host ports</td></tr>
                 <tr><td><code>/v1/events</code></td><td>events, as server-sent events (<code>?after=SEQ</code> to resume)</td></tr>
-                <tr><td><code>/v1/stats</code></td><td>the daemon's stats</td></tr>
+                <tr><td><code>/v1/stats</code></td><td>counts of templates, machines, services and snapshots, and memory used against the budget</td></tr>
               </tbody>
             </table>
           </div>

@@ -69,7 +69,7 @@ A fleet runs as instances, like `docker compose -p`: templates and snapshots are
 
 ## The same file at /fleet/ (a browser tab)
 
-https://filipecabaco.github.io/snowglobe/fleet/ reads the file in the page and turns it into steps, each with its own Run, or Run all: a snapshot's `run` and `ready`, a link, a machine wake, a service opened in a frame.
+https://filipecabaco.github.io/snowglobe/fleet/ reads the file in the page and turns it into steps, each with its own Run, or Run all: a snapshot's `run` and `ready`, a link, a machine wake, a service opened in a frame. Stop ends the run and sends the machines back to their image; a graph shows the machines and links. A `run` command can be a multi-line string (three single quotes; heredoc terminators at column 0). Small fleets to try: `examples/fleet/templates/`.
 
 | File | In the tab |
 |---|---|

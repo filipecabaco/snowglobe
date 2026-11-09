@@ -175,6 +175,17 @@ func Load(path string) (*File, error) {
 	if f.Name == "" {
 		f.Name = filepath.Base(f.Dir)
 	}
+	// A file saved with CRLF line endings (a Windows editor, or git's autocrlf) keeps them inside a
+	// multi-line string, and a \r at the end of a shell line is part of its last word: the commands
+	// get LF endings, as the browser page's reader gives them
+	for n, s := range f.Snapshots {
+		run := make([]string, len(s.Run))
+		for i, c := range s.Run {
+			run[i] = strings.ReplaceAll(c, "\r\n", "\n")
+		}
+		s.Run, s.Ready = run, strings.ReplaceAll(s.Ready, "\r\n", "\n")
+		f.Snapshots[n] = s
+	}
 	return &f, f.check()
 }
 
