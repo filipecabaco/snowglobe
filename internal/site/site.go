@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -42,8 +44,13 @@ type Page struct {
 	Title string
 	// Name is the site's directory name (default: the output directory's): the agent page (/agent/)
 	// knows the site's machine by it
-	Name     string
-	BuildID  string // fingerprint of runtime, base filesystem and initial snapshot
+	Name    string
+	BuildID string // fingerprint of runtime, base filesystem and initial snapshot
+	// Assets is the version of every build-specific file the page fetches (BuildID's, the warm
+	// pack's, the replayed screen's, the terminal's and the page's scripts'), added to their URLs
+	// (?v=) so the service worker can serve them from its cache first. Default: assetVersion's
+	// 16 hex digits, the only form the PWA's worker takes for a version (others: network first)
+	Assets   string
 	MemoryMB int    // must match the snapshot
 	Network  string // "none" or "fetch"; must match the snapshot
 	CPUs     int    // must match the snapshot; more than one needs cross-origin isolation
@@ -96,11 +103,49 @@ func Fingerprint(out string, p Page) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// assetVersion covers what BuildID does plus the build's other files the page fetches: the warm
+// pack, the replayed screen, the terminal and the page's scripts. It is kept apart from BuildID,
+// which saved workspaces are bound to: a change to a script must not make their saves incompatible.
+func assetVersion(out, buildID string) (string, error) {
+	h := sha256.New()
+	fmt.Fprintf(h, "snowglobe-assets-v1:%s\n", buildID)
+	for _, script := range [][]byte{sessionsJS, sessionUIJS, machineCoreJS, machineHostJS} {
+		fmt.Fprintf(h, "%d\n", len(script))
+		h.Write(script)
+	}
+	for _, name := range []string{"system/warm.pack", "system/console.bin", "xterm/xterm.js", "xterm/xterm.css", "xterm/addon-fit.js"} {
+		f, err := os.Open(filepath.Join(out, name))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		info, err := f.Stat()
+		if err == nil {
+			fmt.Fprintf(h, "%s:%d\n", name, info.Size())
+			_, err = io.Copy(h, f)
+		}
+		f.Close()
+		if err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16], nil
+}
+
 // Render writes the page and its scripts and marks the site for GitHub Pages.
 func Render(out string, p Page) error {
 	if p.BuildID == "" {
 		var err error
 		p.BuildID, err = Fingerprint(out, p)
+		if err != nil {
+			return err
+		}
+	}
+	if p.Assets == "" {
+		var err error
+		p.Assets, err = assetVersion(out, p.BuildID)
 		if err != nil {
 			return err
 		}

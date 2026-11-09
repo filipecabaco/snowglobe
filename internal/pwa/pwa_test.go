@@ -38,11 +38,30 @@ func TestRun(t *testing.T) {
 	}
 
 	sw, _ := os.ReadFile(filepath.Join(dir, "sw.js"))
-	if !strings.Contains(string(sw), `"snowglobe-20261009T120000"`) || !strings.Contains(string(sw), `"armless/armless.wasm"`) {
+	if !strings.Contains(string(sw), `"snowglobe-20261009T120000"`) || !strings.Contains(string(sw), `"manifest.webmanifest"`) {
 		t.Error("sw.js should name the build's cache and precache the shell files that exist")
 	}
-	if strings.Contains(string(sw), "armless-smp.wasm") {
-		t.Error("sw.js should skip shell files the site doesn't have")
+	// The page asks for the machine, the terminal and its scripts with its build's version (?v=):
+	// precaching their bare URLs would download them twice, and only versioned URLs are served
+	// cache first
+	for _, unwanted := range []string{`"armless/armless.wasm"`, `"armless/armless.js"`, `"machine-core.js"`, `"machine-host.js"`, `"xterm/xterm.js"`} {
+		if strings.Contains(string(sw), unwanted) {
+			t.Errorf("sw.js precaches %s, which the page versions", unwanted)
+		}
+	}
+	// A versioned file: the cache first, matched with its version (not ignoreSearch)
+	if !strings.Contains(string(sw), `if (versioned(url)) {
+    event.respondWith(caches.match(request).then((hit) => hit || fetch(request).then(keep)));`) {
+		t.Error("sw.js should serve versioned files cache first, matched with their version")
+	}
+	// Only a build's version (site.Page.Assets: 16 hex digits), not any ?v= on this origin
+	if !strings.Contains(string(sw), `url.origin === location.origin && /^[0-9a-f]{16}$/.test(url.searchParams.get("v") ?? "")`) {
+		t.Error("sw.js should take only the page's own version for one")
+	}
+	// What the page fetched before the worker was in control: a versioned URL is kept unless that
+	// exact version is cached
+	if !strings.Contains(string(sw), `cache.match(url, { ignoreSearch: !exact })`) {
+		t.Error("sw.js should keep a versioned file the page hands over unless that version is cached")
 	}
 	if !strings.Contains(string(sw), "const ISOLATE = false;") {
 		t.Error("a one-CPU site needs no cross-origin isolation")
@@ -65,9 +84,15 @@ func TestSessionAssetsAndCacheIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	sw, _ := os.ReadFile(filepath.Join(dir, "sw.js"))
-	for _, want := range []string{`"sessions.js"`, `"session-ui.js"`, `self.registration.scope`, `k.endsWith(":" + self.registration.scope)`} {
+	for _, want := range []string{`self.registration.scope`, `k.endsWith(":" + self.registration.scope)`} {
 		if !strings.Contains(string(sw), want) {
 			t.Errorf("PWA lacks session asset/cache isolation %q", want)
+		}
+	}
+	// The session scripts are versioned by the page and cached as it fetches them, not precached
+	for _, unwanted := range []string{`"sessions.js"`, `"session-ui.js"`} {
+		if strings.Contains(string(sw), unwanted) {
+			t.Errorf("sw.js precaches %s, which the page versions", unwanted)
 		}
 	}
 }

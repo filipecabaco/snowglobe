@@ -3,6 +3,7 @@ package site
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -83,7 +84,7 @@ func TestFingerprintBindsMachineAndBaseAssets(t *testing.T) {
 
 func TestOneCPUOffline(t *testing.T) {
 	page, dir := render(t, Page{Title: "Demo <1>", MemoryMB: 256, Network: "none", CPUs: 1, ConsoleCols: 90, ConsoleRows: 30})
-	for _, want := range []string{`<script src="armless/armless.js">`, "memory_mb: 256", "const cpus = 1 ;",
+	for _, want := range []string{`<script src="armless/armless.js?v=`, "memory_mb: 256", "const cpus = 1 ;",
 		"Demo &lt;1&gt;", "term.resize( 90 , 30 )"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q", want)
@@ -101,7 +102,7 @@ func TestOneCPUOffline(t *testing.T) {
 
 func TestSessionControlsAndSafeReload(t *testing.T) {
 	page, dir := render(t, Page{Title: "Session demo", MemoryMB: 256, Network: "none", CPUs: 1})
-	for _, want := range []string{`src="sessions.js"`, `src="session-ui.js"`, `id="sessions"`, `id="session-save"`, `id="session-export"`, `id="session-import"`, `id="session-folder"`, `id="session-delete"`, `SnowglobeSessionUI`, `await sessions.prepare()`, `sessions.initialState`, `sessions.attach(emulator, term`, `new ResizeObserver(() => resize())`, `sessions.message("Workspace could not start"`} {
+	for _, want := range []string{`src="sessions.js?v=`, `src="session-ui.js?v=`, `id="sessions"`, `id="session-save"`, `id="session-export"`, `id="session-import"`, `id="session-folder"`, `id="session-delete"`, `SnowglobeSessionUI`, `await sessions.prepare()`, `sessions.initialState`, `sessions.attach(emulator, term`, `new ResizeObserver(() => resize())`, `sessions.message("Workspace could not start"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks persistence integration %q", want)
 		}
@@ -144,7 +145,7 @@ func TestWorkspaceShowsSaveControlsAndExplicitMethods(t *testing.T) {
 
 func TestSeveralCPUsWithNetwork(t *testing.T) {
 	page, dir := render(t, Page{Title: "Demo", MemoryMB: 512, Network: "fetch", CPUs: 4})
-	for _, want := range []string{"const cpus = 4 ;", `network: { tls: "system/tls.json" }`, `register("sw.js")`} {
+	for _, want := range []string{"const cpus = 4 ;", `network: { tls: versioned("system/tls.json") }`, `register("sw.js")`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q", want)
 		}
@@ -169,7 +170,7 @@ func TestTunnels(t *testing.T) {
 		{Port: 6379, URL: "ws://127.0.0.1:7000"},
 	}})
 	// A JSON array in the script: the URL escaped so it can't end the script
-	want := `network: { tls: "system/tls.json", tunnels: [{"host":"db.internal","port":5432,"url":"wss://proxy.example.com/db?a=1\u0026b=\u003c/script\u003e"},{"port":6379,"url":"ws://127.0.0.1:7000"}] }`
+	want := `network: { tls: versioned("system/tls.json"), tunnels: [{"host":"db.internal","port":5432,"url":"wss://proxy.example.com/db?a=1\u0026b=\u003c/script\u003e"},{"port":6379,"url":"ws://127.0.0.1:7000"}] }`
 	if !strings.Contains(page, want) {
 		i := strings.Index(page, "network:")
 		t.Errorf("page lacks %s\ngot: %s", want, page[i:min(i+300, len(page))])
@@ -214,9 +215,9 @@ func lacks(t *testing.T, what, page string, wants ...string) {
 // The machine is made by the same factory the agent page uses (machine-host.js), in the page
 func TestThePageMakesItsMachineWithTheFactory(t *testing.T) {
 	page, dir := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none"})
-	lacks(t, "the page", page, `<script src="machine-core.js">`, `<script src="machine-host.js">`,
+	lacks(t, "the page", page, `<script src="machine-core.js?v=`, `<script src="machine-host.js?v=`,
 		`SnowglobeHost.createMachine({ base: document.baseURI, transport: "inline"`, `baseurl: "system/filesystem/"`,
-		`warm: "system/warm.pack"`, `host.boot(sessions.initialState ?? "system/state.bin.zst")`, `await host.run()`)
+		`warm: versioned("system/warm.pack")`, `host.boot(sessions.initialState ?? versioned("system/state.bin.zst"))`, `await host.run()`)
 	for _, f := range []string{"machine-core.js", "machine-host.js"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("the site lacks %s", f)
@@ -255,4 +256,69 @@ func TestAgentSiteLinksToTheAgentPage(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "agent.html")); err == nil {
 		t.Error("there is no per-site agent page any more: /agent/ is the one")
 	}
+}
+
+// A build's own files carry its asset version, so the PWA's service worker can serve them from its
+// cache first (internal/pwa/sw.js): a newer page asks for other URLs, never an older build's copy
+func TestBuildFilesCarryTheAssetVersion(t *testing.T) {
+	page, dir := render(t, Page{MemoryMB: 256, CPUs: 2, Network: "fetch"})
+	version, err := assetVersion(dir, "test-build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lacks(t, "the page", page, `const assets = "`+version+`";`)
+	// The PWA's service worker takes only this form for a version (internal/pwa/sw.js)
+	if !regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(version) {
+		t.Errorf("asset version %q isn't 16 hex digits", version)
+	}
+	// Every script and stylesheet the page loads
+	tags := regexp.MustCompile(`(?:src|href)="([^"]+)"`).FindAllStringSubmatch(page, -1)
+	for _, m := range tags {
+		if strings.HasPrefix(m[1], "../agent/") {
+			continue // another page
+		}
+		if !strings.HasSuffix(m[1], "?v="+version) {
+			t.Errorf("%s isn't versioned", m[1])
+		}
+	}
+	if len(tags) < 8 {
+		t.Errorf("want the stylesheet and seven scripts, got %d", len(tags))
+	}
+	// Every file the machine and the page fetch
+	for _, url := range []string{`versioned("armless/armless.wasm")`, `versioned("armless/armless-smp.wasm")`,
+		`versioned("system/filesystem.json")`, `initial_state: versioned("system/state.bin.zst")`,
+		`versioned("system/warm.pack")`, `versioned("system/tls.json")`, `fetch(versioned("system/console.bin"))`,
+		`host.boot(sessions.initialState ?? versioned("system/state.bin.zst"))`} {
+		lacks(t, "the page", page, url)
+	}
+	for _, bare := range []string{`"armless/armless.wasm"`, `"system/state.bin.zst"`, `"system/filesystem.json"`, `"system/warm.pack"`,
+		`"system/console.bin"`, `"system/tls.json"`} {
+		if strings.Count(page, bare) != strings.Count(page, "versioned("+bare+")") {
+			t.Errorf("the page asks for %s without its version", bare)
+		}
+	}
+	// The blobs are named by their content, and snowglobe pool repoints them by this exact text
+	lacks(t, "the page", page, `baseurl: "system/filesystem/"`)
+
+	// The warm pack, the replayed screen and the terminal change the version; BuildID (saved
+	// workspaces are bound to it) is not computed from them
+	for _, name := range []string{"system/warm.pack", "system/console.bin", "xterm/xterm.js", "xterm/xterm.css", "xterm/addon-fit.js"} {
+		file := filepath.Join(dir, name)
+		os.MkdirAll(filepath.Dir(file), 0o755)
+		os.WriteFile(file, []byte(name), 0o644)
+		changed, err := assetVersion(dir, "test-build")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changed == version {
+			t.Errorf("%s doesn't change the asset version", name)
+		}
+		version = changed
+	}
+	if other, _ := assetVersion(dir, "other-build"); other == version {
+		t.Error("BuildID doesn't change the asset version")
+	}
+	// Render computes it unless given
+	given, _ := render(t, Page{MemoryMB: 256, CPUs: 1, Network: "none", Assets: "fixed"})
+	lacks(t, "the page", given, `const assets = "fixed";`, `<script src="sessions.js?v=fixed">`)
 }
