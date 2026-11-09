@@ -1,5 +1,5 @@
 // Same server-independent regression set locally and in CI. This does not replace
 // actual guest/live-provider/device or participant acceptance.
 import {spawn} from 'node:child_process';import {fileURLToPath} from 'node:url';
-const checks=[['pi-browser.mjs'],['extensions-browser.mjs','chromium'],['extensions-browser.mjs','webkit'],['persistence-browser.mjs','chromium'],['persistence-browser.mjs','webkit'],['preview-readiness-browser.mjs'],['backend-preview-browser.mjs'],['preview-assets-browser.mjs'],['vm-backup-browser.mjs']];
+const checks=[['pi-browser.mjs'],['extensions-browser.mjs','chromium'],['extensions-browser.mjs','webkit'],['persistence-browser.mjs','chromium'],['persistence-browser.mjs','webkit'],['preview-readiness-browser.mjs'],['preview-forms-browser.mjs'],['backend-preview-browser.mjs'],['preview-assets-browser.mjs'],['vm-backup-browser.mjs']];
 for(const [file,engine] of checks){console.log('Running',file,engine||'all configured engines');const child=spawn(process.execPath,[fileURLToPath(new URL(file,import.meta.url))],{stdio:'inherit',env:{...process.env,BUILDER_BROWSER:engine||'chromium'}});const code=await new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>resolve(signal?1:code));});if(code!==0){process.exitCode=code||1;break;}}

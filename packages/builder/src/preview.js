@@ -1,3 +1,4 @@
+// Form handlers may run; form-action CSP still forbids native submission/navigation.
 // Only project data and render/error notifications cross this bridge. No VM or credential access.
 export function previewBootstrap(config){
  const send=(type,value)=>parent.postMessage({channel:'snowglobe-preview-v1',token:config.token,type,value},'*');
@@ -57,7 +58,7 @@ export function previewDocument(html,token,storage,backend){
 export function validPreviewStorage(value){return value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.entries(value).length<=1000&&Object.values(value).every(v=>typeof v==='string')&&JSON.stringify(value).length<=262144;}
 export function mountPreview({container,html,storage={},backend,onBackendRequest,onStorage=()=>{},onRuntimeError=()=>{},signal,timeoutMs=20000}){
  if(!validPreviewStorage(storage))storage={};
- const frame=document.createElement('iframe');frame.title='Your application';frame.setAttribute('sandbox','allow-scripts');frame.setAttribute('credentialless','');
+ const frame=document.createElement('iframe');frame.title='Your application';frame.setAttribute('sandbox','allow-scripts allow-forms');frame.setAttribute('credentialless','');
  const token=crypto.randomUUID(),requests=new Map();let settled=false,disposed=false,ready=false,booted=false,pendingStorage=storage,objectUrl;
  frame.style.cssText='position:absolute;inset:0;width:100%;height:100%;opacity:0;pointer-events:none';
  let resolve,reject;const result=new Promise((yes,no)=>{resolve=yes;reject=no;});

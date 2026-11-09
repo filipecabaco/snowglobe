@@ -257,3 +257,12 @@ logins, and their correct isolated row histories. Temporary sensitive downloads
 were removed. See [the acceptance record](../../docs/builder-backup-acceptance.json).
 Repeat without the longer interrupted-capture scenario with
 `BUILDER_BACKUP_ONLY=1 node packages/builder/test/supabase-browser.mjs`.
+
+### Client-side preview forms
+
+Preview forms support JavaScript submit handlers, including asynchronous Supabase
+saves. Handlers should prevent native submission. The opaque sandbox continues
+to deny host access and popups, and CSP blocks native form network/navigation.
+Chromium/WebKit regression coverage is in `test/preview-forms-browser.mjs` and the
+standard browser regression runner. Reload Builder after saving your work to
+load this preview fix into an already-open page.

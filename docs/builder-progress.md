@@ -762,3 +762,25 @@ roadmap is not marked complete by this decision. Live listeners were observed on
 application and its returned configuration had no enabled Funnel entries. No
 network, tailnet ACL or public deployment settings were changed. Live profile
 acceptance still awaits fresh user-approved subscription sign-in.
+
+### Profile-save failure exposed a preview form bug
+
+A user-approved live profile run generated its schema, enabled RLS, built the app
+and signed into a synthetic account, but timed out waiting for its save
+confirmation. It disconnected cleanly; live profile acceptance remains open.
+A deterministic form-based profile app reproduced that failure without AI
+credentials. Diagnostics showed no submit-handler effects or application errors.
+
+A focused browser regression then reproduced the cause: sandbox `allow-scripts`
+without `allow-forms` suppresses submit events before application handlers run.
+Adding `allow-forms` enables client-side form handling while retaining the opaque
+origin and CSP `form-action 'none'`. The regression failed before the fix and
+passes Chromium/WebKit afterward, including async backend relay, zero native form
+network requests/navigation, blocked popups and denied parent/storage access.
+The full fast browser regression set and native suite pass. A fresh real-VM
+profile fixture is running; the full live profile workflow is not yet marked passed.
+
+The local, uncommitted profile harness now captures source and redacted UI
+failure diagnostics before cleanup and supports one bounded functional repair in
+the same live session. Diagnostic files stay private under the ignored local-dev
+directory and are not part of the pushed source.

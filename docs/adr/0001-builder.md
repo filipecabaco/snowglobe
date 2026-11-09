@@ -11,3 +11,15 @@ For the static development slice, preview output is a self-contained HTML docume
 Pi core runs in the host page. A separately run local gateway uses Pi's streamProxy wire protocol with API keys held in server memory, an HttpOnly session cookie, strict Origin checks and bounded requests. The gateway is development-only and binds loopback. No subscription sign-in is advertised. Public authentication, encrypted custody, abuse controls and production origin isolation remain release blockers.
 
 Source export is a ZIP source archive, separate from VM Save. Save suspends and checkpoints the actual VM using the existing IndexedDB mechanism. Source-only history is not database rollback. No automatic claim of completed M0–M6: see packages/builder/README.md for measured status.
+
+## November 9: client-side form handlers
+
+The preview sandbox now includes `allow-forms` alongside `allow-scripts`, without
+`allow-same-origin`, popup or top-navigation permissions. The HTML submission
+algorithm checks the sandboxed-forms flag before firing the submit event, so the
+previous setting prevented React/DOM form handlers from running at all:
+[HTML form submission algorithm](https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm).
+The preview retains CSP `form-action 'none'`. Chromium and WebKit regressions
+verify that client-side submit handlers can use the explicit backend bridge,
+while native form network/navigation, popup creation and parent/storage access
+remain denied. This does not close the broader adversarial release matrix.
