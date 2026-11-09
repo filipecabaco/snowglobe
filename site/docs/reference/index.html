@@ -6,7 +6,7 @@
   <title>CLI reference · snowglobe docs</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/reference/">
   <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="How to use snowglobe: package a Docker image into a static site that runs it in the browser, run it headlessly or as one executable, and drive it from agents and programs.">
+  <meta name="description" content="The snowglobe CLI reference: every command, build flag and label, run flag and environment variable.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="snowglobe docs">
@@ -28,6 +28,8 @@
       <a class="mark" href="../../">snowglobe<i aria-hidden="true"></i></a>
       <nav aria-label="Site">
         <a href="../../#runs">Runs</a>
+        <a href="../../agent/">Agents</a>
+        <a href="../../fleet/">Fleets</a>
         <a href="../" aria-current="page">Docs</a>
         <a href="https://github.com/filipecabaco/snowglobe">GitHub</a>
         <button class="theme" type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark</button>
@@ -38,7 +40,8 @@
       <main class="doc">
         <section id="reference" aria-labelledby="reference-title">
           <h1 class="page-title" id="reference-title">CLI reference</h1>
-          <p class="intro"><code>snowglobe help</code> prints all of this.</p>
+          <p class="intro">Look things up here: every command, build flag and label, run flag and environment
+            variable, one line each. The guides explain them. <code>snowglobe help</code> prints all of this.</p>
 
           <h2 class="h3" id="commands">Commands</h2>
           <div class="table-wrap">
@@ -111,11 +114,11 @@
               <tbody>
                 <tr><td>--name N · --detach</td><td class="wrap-cell">name the instance · run it in the background</td></tr>
                 <tr><td>--runtime docker|native</td><td class="wrap-cell">in a container (default) or natively</td></tr>
-                <tr><td>--fork</td><td class="wrap-cell">every <code>sh</code> on a fresh copy of the machine (see <a href="../../agents/#fork">--fork</a>)</td></tr>
+                <tr><td>--fork</td><td class="wrap-cell">every <code>sh</code> on a fresh copy of the machine (see <a href="../agents/#fork">--fork</a>)</td></tr>
                 <tr><td>-p [IP:]HOST:GUEST</td><td class="wrap-cell">forward a host port to a guest port (needs <code>--network fetch</code>)</td></tr>
                 <tr><td>--record-reads FILE</td><td class="wrap-cell">write every file the guest reads, for <code>warm</code></td></tr>
                 <tr><td>--tunnel · --allow-private</td><td class="wrap-cell">replace the site's tunnels · let the guest reach this machine</td></tr>
-                <tr><td>--max-runtime · --stop-file · --log-dir</td><td class="wrap-cell">see <a href="../../agents/#limits">limits, stopping and logs</a></td></tr>
+                <tr><td>--max-runtime · --stop-file · --log-dir</td><td class="wrap-cell">see <a href="../agents/#limits">limits, stopping and logs</a></td></tr>
               </tbody>
             </table>
           </div>
@@ -160,7 +163,7 @@
             <li><a href="../networking/">Networking</a></li>
             <li><a href="../running/">Running outside a browser</a></li>
             <li><a href="../agents/">For agents and programs</a></li>
-            <li><a href="../orchestration/">Orchestration</a></li>
+            <li><a href="../orchestration/">Orchestration and fleets</a></li>
             <li><a href="../isolation/">Isolation</a></li>
             <li><a href="../saving/">Saving your work</a></li>
             <li><a href="../how-it-works/">How it works</a></li>

@@ -487,3 +487,23 @@ func TestLinksJoinTheFleetsMachinesAndAStepAppliesOnItsOwn(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadCRLFCommandsGetLF(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "snowglobe.toml")
+	text := "name = \"x\"\r\n[templates.t]\r\nsite = \"/sites/t\"\r\n[snapshots.s]\r\ntemplate = \"t\"\r\nrun = [\r\n'''\r\nmkdir -p /a\r\ncat <<EOF\r\nhi\r\nEOF\r\n''',\r\n]\r\nready = '''\r\ntrue\r\n'''\r\n"
+	if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := Load(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.Snapshots["s"]
+	if strings.Contains(strings.Join(got.Run, "")+got.Ready, "\r") {
+		t.Fatalf("a command kept its CR: %q %q", got.Run, got.Ready)
+	}
+	if want := "mkdir -p /a\ncat <<EOF\nhi\nEOF\n"; len(got.Run) != 1 || got.Run[0] != want {
+		t.Fatalf("run = %q, want %q", got.Run, want)
+	}
+}

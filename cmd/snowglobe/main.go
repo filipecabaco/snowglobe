@@ -45,7 +45,7 @@ func moduleVersion() string {
 	return "dev"
 }
 
-const usage = `snowglobe packages a Docker image into a static website that runs it in the browser.
+const usage = `snowglobe runs a Docker image where Docker isn't: in a browser tab, from one binary, or as an agent's sandbox.
 
 Usage:
   snowglobe build <dockerfile dir | image> [flags]   build the site

@@ -56,7 +56,7 @@ as = "db.internal"    # name the source uses
 - Native and daemon: ordinary; a guest speaks them over TCP.
 - Browser tab with `--network fetch`: the guest's `ws://` and `wss://` open browser WebSockets.
 - Browser fleet page: on any port except 80 and 443 the guest speaks WebSocket over the raw TCP link; `ws://<link name>/` on 80 or 443 works too (no permessage-deflate); a page in the preview can open `new WebSocket("<page>/preview/<machine>/<port>/...")` (up to 32 at once, while the preview is open).
-- Browser agent page preview: HTTP/1.1 only for the app's own requests; Vite's dev server and hot reload need a WebSocket there, so use a build in watch mode (snowglobe-agents).
+- Browser agent page preview: HTTP/1.1 for the app's requests, plus WebSockets (up to 32); Vite's dev server and hot reload are untested there, so use a build in watch mode (snowglobe-agents).
 
 ## Refused or not carried
 
