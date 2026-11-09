@@ -50,7 +50,7 @@
      * URL). `Armless` the class; `emit(event, payload)` where what it says goes.
      */
     constructor({ config, Armless = root.Armless, emit = () => {}, agent = root.SnowglobeAgent, transfer = root.SnowglobeTransfer,
-      sessions = root.SnowglobeSessions, uploadWindow = 1 }) {
+      sessions = root.SnowglobeSessions, uploadWindow = 1, blobRetryDelays = [250, 1000] }) {
       this.config = config;
       this.Armless = Armless;
       this.emit = emit;
@@ -60,6 +60,8 @@
       this.capturing = false;
       this.xfers = new Map();
       this.controller = null;
+      this.failedBlobs = new Set();
+      this.blobRetryDelays = blobRetryDelays;
       // The job runner for any machine with agent.js loaded (its Controller says what it supports)
       if (agent) {
         const core = this;
@@ -111,30 +113,60 @@
       return true;
     }
 
-    /**
-     * One of the guest's files from the blob store (as armless would fetch it). A failure is said
-     * once, as a `blobs` event { ok: false, url, message } (url: the store), until a fetch
-     * succeeds again ({ ok: true }); it still fails the guest's read, as armless's own would.
-     */
+    /** Retry transient download failures before handing an I/O failure to the guest filesystem. */
+    async _fetchBytes(url, timeoutMs = 15000) {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const r = await (this.fetch ?? fetch)(url, { signal: AbortSignal.timeout(timeoutMs), ...(attempt ? { cache: "reload" } : {}) });
+          if (!r.ok) {
+            const error = new Error(`${r.status} ${r.statusText ?? ""}`.trim());
+            error.retryable = r.status >= 500 || r.status === 408 || r.status === 429;
+            throw error;
+          }
+          return new Uint8Array(await r.arrayBuffer());
+        } catch (e) {
+          if (e.retryable === false || attempt >= this.blobRetryDelays.length) throw e;
+          await new Promise(resolve => setTimeout(resolve, this.blobRetryDelays[attempt]));
+        }
+      }
+    }
+
+    /** A final failure emits `blobs` once until another file succeeds, and remains repairable. */
     async fetchBlob(name) {
       const base = this.config.filesystem?.baseurl ?? "";
       const url = new URL(name, typeof location !== "undefined" ? new URL(base, location.href) : base).href;
       try {
-        const r = await (this.fetch ?? fetch)(url);
-        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`.trim());
-        const bytes = new Uint8Array(await r.arrayBuffer());
+        const bytes = await this._fetchBytes(url);
+        this.failedBlobs.delete(name);
         if (this.blobsDown) {
           this.blobsDown = false;
           this.emit("blobs", { ok: true });
         }
         return bytes;
       } catch (e) {
+        this.failedBlobs.add(name);
         if (!this.blobsDown) {
           this.blobsDown = true;
           this.emit("blobs", { ok: false, url: base, message: String(e?.message ?? e) });
         }
         throw e;
       }
+    }
+
+    /** Repair failed immutable image downloads in place. Project files and VM state stay intact.
+     * A restored machine can have uncached image files without any JS failure records;
+     * when no failed names are known, refill its missing warm-pack files. */
+    async recoverFiles() {
+      const vm = this.vm;
+      if (!vm || this.state !== "ready") throw new Error("the machine is not ready to restore its files");
+      const failed = [...this.failedBlobs];
+      for (const name of failed) {
+        const bytes = await this.fetchBlob(name);
+        if (vm !== this.vm) throw new Error("the machine changed while restoring files");
+        vm.provide_blob(name, bytes);
+      }
+      const warmed = failed.length ? 0 : await this.warm({ required: true });
+      return { repaired: failed.length + warmed };
     }
 
     /** Run it, and fill its file cache in the background. */
@@ -192,25 +224,37 @@
     // The guest's files are fetched one blocking request at a time the first time each is read.
     // warm.pack bundles the files the app is most likely to need so they arrive in a single
     // background download and are in the machine before the guest asks for them.
-    async warm() {
+    async warm({ required = false } = {}) {
       const vm = this.vm;
-      if (!this.config.warm || !vm) return;
-      const response = await fetch(this.config.warm);
-      if (!response.ok) return;
-      const pack = new Uint8Array(await response.arrayBuffer());
+      if (!this.config.warm || !vm) {
+        if (required) throw new Error("no environment file pack is configured");
+        return 0;
+      }
+      const pack = await this._fetchBytes(this.config.warm, 60000);
       const indexSize = new DataView(pack.buffer).getUint32(0, true);
       const index = JSON.parse(new TextDecoder().decode(pack.subarray(4, 4 + indexSize)));
       let offset = 4 + indexSize;
+      let supplied = 0;
       for (const [name, , length] of index) {
         // A machine stopped (suspended) meanwhile takes no more
-        if (vm.stopped || vm !== this.vm) return;
+        if (vm.stopped || vm !== this.vm) {
+          if (required) throw new Error("the machine stopped while restoring files");
+          return supplied;
+        }
         const blob = pack.subarray(offset, offset + length);
         offset += length;
         if (vm.has_blob(name)) continue; // the guest already loaded it
         vm.provide_blob(name, blob);
+        this.failedBlobs.delete(name);
+        supplied++;
         // Yield between files so the machine (and a page sharing this thread) stays responsive
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
+      if (this.blobsDown && !this.failedBlobs.size) {
+        this.blobsDown = false;
+        this.emit("blobs", { ok: true });
+      }
+      return supplied;
     }
 
     // ------------------------------------------------------------------ jobs and files

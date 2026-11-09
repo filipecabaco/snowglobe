@@ -403,6 +403,24 @@ test('a save slot that could not open (another tab held it) is tried again at th
   }
 });
 
+test('image file recovery holds the machine awake without replacing it or changing its dirty state', async () => {
+  const { api, host } = setup();
+  await api.wake('python');
+  const m = api._get('python'), original = m.host, dirty = m.dirty;
+  let finish, started;
+  const entered = new Promise(resolve => { started = resolve; });
+  host('python').recoverFiles = () => new Promise(resolve => { finish = resolve; started(); });
+  const recovering = api.recoverFiles('python');
+  await entered;
+  assert.equal(m.busy(), true);
+  assert.equal(await api.suspend('python'), false);
+  finish({ repaired: 1 });
+  assert.deepEqual(await recovering, { repaired: 1 });
+  assert.equal(m.host, original);
+  assert.equal(m.dirty, dirty);
+  assert.equal(m.busy(), false);
+});
+
 test('a blob store that can\'t be reached is said, and cleared once it answers', async () => {
   const { api, host } = setup();
   await api.wake('python');
@@ -897,4 +915,13 @@ test("the guest's fetch drops npm's and the cache's hints, so a registry GET nee
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test('a Builder project chooses independent checkpoint scopes without changing runtime asset resolution',()=>{
+ const a=setup({options:{saveScope:name=>'/builder/projects/first/'+name}});
+ const b=setup({options:{saveScope:name=>'/builder/projects/second/'+name}});
+ const name=manifest.runtimes[0].name;
+ assert.notEqual(a.api._get(name).slot.scope,b.api._get(name).slot.scope);
+ assert.equal(a.api._get(name).base,b.api._get(name).base);
+ assert.match(a.api._get(name).slot.scope,/\/first\//);
 });

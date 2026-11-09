@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "version": "1.0.0",
+      "runtime": "node",
+      "toolchain": {
+        "minimumNodeMajor": 22,
+        "packageManager": "npm"
+      },
+      "workspace": "/workspace",
+      "install": {
+        "strategy": "npm-ci-from-lockfile",
+        "registry": "https://registry.npmjs.org",
+        "lifecycleScripts": false
+      },
+      "preview": {
+        "kind": "vite-static",
+        "outputDirectory": "dist"
+      },
+      "backend": {
+        "supabase": "optional"
+      },
+      "capabilities": [
+        "static-preview",
+        "agent-skills",
+        "source-export"
+      ],
+      "devDependencies": {
+        "vite": "8.3.6",
+        "typescript": "5.9.3",
+        "@types/react": "19.3.0",
+        "@types/react-dom": "19.3.0",
+        "esbuild": "0.28.2"
+      },
+      "dependencies": {
+        "@supabase/supabase-js": "2.119.0",
+        "@tailwindcss/vite": "4.3.5",
+        "clsx": "2.1.1",
+        "react": "19.3.1",
+        "react-dom": "19.3.1",
+        "react-router": "7.18.5",
+        "tailwindcss": "4.3.5",
+        "zustand": "5.1.0"
+      },
+      "scripts": {
+        "build": "vite",
+        "check": "tsc"
+      },
+      "id": "react-vite",
+      "displayName": "React + Vite",
+      "status": "verified-development",
+      "source": "examples/web/app",
+      "entry": "src/App.jsx",
+      "usesImageStarter": true,
+      "files": {}
+    },
+    {
+      "version": "1.0.0",
+      "runtime": "node",
+      "toolchain": {
+        "minimumNodeMajor": 22,
+        "packageManager": "npm"
+      },
+      "workspace": "/workspace",
+      "install": {
+        "strategy": "npm-ci-from-lockfile",
+        "registry": "https://registry.npmjs.org",
+        "lifecycleScripts": false
+      },
+      "preview": {
+        "kind": "vite-static",
+        "outputDirectory": "dist"
+      },
+      "backend": {
+        "supabase": "optional"
+      },
+      "capabilities": [
+        "static-preview",
+        "agent-skills",
+        "source-export"
+      ],
+      "devDependencies": {
+        "vite": "8.3.6",
+        "typescript": "5.9.3"
+      },
+      "dependencies": {},
+      "scripts": {
+        "build": "vite",
+        "check": "tsc"
+      },
+      "id": "vanilla-vite",
+      "displayName": "Vanilla TypeScript + Vite",
+      "status": "verified-development",
+      "entry": "src/main.ts",
+      "files": {
+        "index.html": "<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>My Snowglobe app</title></head><body><div id=\"app\"></div><script type=\"module\" src=\"/src/main.ts\"></script></body></html>\n",
+        "src/main.ts": "import './style.css';\ndocument.querySelector<HTMLDivElement>('#app')!.innerHTML='<main><h1>A little idea. A real app.</h1><p>Built with TypeScript in your browser VM.</p><button id=\"counter\">Count: 0</button></main>';\nlet count=0;const button=document.querySelector<HTMLButtonElement>('#counter')!;button.addEventListener('click',()=>{button.textContent='Count: '+(++count);});\n",
+        "src/style.css": "body{margin:0;background:#f6f8f3;color:#1d392b;font:16px system-ui}main{max-width:720px;margin:8vh auto;padding:36px}button{padding:12px 20px;background:#245d48;color:white;border:0;border-radius:9px;font:inherit;cursor:pointer}",
+        "vite.config.js": "export default {base:'./'};\n",
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"lib\": [\n      \"ES2022\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"module\": \"ESNext\",\n    \"moduleResolution\": \"bundler\",\n    \"strict\": true,\n    \"noEmit\": true,\n    \"allowJs\": true,\n    \"checkJs\": false,\n    \"skipLibCheck\": true,\n    \"isolatedModules\": true,\n    \"types\": [\n      \"vite/client\"\n    ]\n  },\n  \"include\": [\n    \"src\"\n  ]\n}\n"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "runtime": "node",
+      "toolchain": {
+        "minimumNodeMajor": 22,
+        "packageManager": "npm"
+      },
+      "workspace": "/workspace",
+      "install": {
+        "strategy": "npm-ci-from-lockfile",
+        "registry": "https://registry.npmjs.org",
+        "lifecycleScripts": false
+      },
+      "preview": {
+        "kind": "vite-static",
+        "outputDirectory": "dist"
+      },
+      "backend": {
+        "supabase": "optional"
+      },
+      "capabilities": [
+        "static-preview",
+        "agent-skills",
+        "source-export"
+      ],
+      "devDependencies": {
+        "vite": "8.3.6",
+        "typescript": "5.9.3",
+        "@sveltejs/vite-plugin-svelte": "7.3.1",
+        "svelte-check": "4.7.8"
+      },
+      "dependencies": {
+        "svelte": "5.57.3"
+      },
+      "scripts": {
+        "build": "vite",
+        "check": "svelte-check"
+      },
+      "id": "svelte-vite",
+      "displayName": "Svelte + Vite",
+      "status": "verified-development",
+      "entry": "src/App.svelte",
+      "files": {
+        "index.html": "<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>My Snowglobe app</title></head><body><div id=\"app\"></div><script type=\"module\" src=\"/src/main.js\"></script></body></html>\n",
+        "src/main.js": "import {mount} from 'svelte';\nimport App from './App.svelte';\nimport './style.css';\nmount(App,{target:document.getElementById('app')});\n",
+        "src/App.svelte": "<script>let count=$state(0);</script>\n<main><h1>A little idea. A real app.</h1><p>Built with Svelte in your browser VM.</p><button onclick={()=>count++}>Count: {count}</button></main>\n",
+        "src/style.css": "body{margin:0;background:#f6f8f3;color:#1d392b;font:16px system-ui}main{max-width:720px;margin:8vh auto;padding:36px}button{padding:12px 20px;background:#245d48;color:white;border:0;border-radius:9px;font:inherit;cursor:pointer}",
+        "vite.config.js": "import {svelte} from '@sveltejs/vite-plugin-svelte';\nexport default {base:'./',plugins:[svelte()]};\n",
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"lib\": [\n      \"ES2022\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"module\": \"ESNext\",\n    \"moduleResolution\": \"bundler\",\n    \"strict\": true,\n    \"noEmit\": true,\n    \"allowJs\": true,\n    \"checkJs\": false,\n    \"skipLibCheck\": true,\n    \"isolatedModules\": true,\n    \"types\": [\n      \"vite/client\"\n    ]\n  },\n  \"include\": [\n    \"src\"\n  ]\n}\n"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "runtime": "node",
+      "toolchain": {
+        "minimumNodeMajor": 22,
+        "packageManager": "npm"
+      },
+      "workspace": "/workspace",
+      "install": {
+        "strategy": "npm-ci-from-lockfile",
+        "registry": "https://registry.npmjs.org",
+        "lifecycleScripts": false
+      },
+      "preview": {
+        "kind": "sveltekit-static",
+        "outputDirectory": "build"
+      },
+      "backend": {
+        "supabase": "optional"
+      },
+      "capabilities": [
+        "static-preview",
+        "agent-skills",
+        "source-export"
+      ],
+      "devDependencies": {
+        "vite": "8.3.6",
+        "typescript": "6.0.2",
+        "@sveltejs/vite-plugin-svelte": "7.3.1",
+        "@sveltejs/kit": "3.1.1",
+        "@sveltejs/adapter-static": "4.0.1",
+        "@opentelemetry/api": "1.9.0",
+        "svelte-check": "4.7.8"
+      },
+      "dependencies": {
+        "svelte": "5.57.3"
+      },
+      "scripts": {
+        "build": "sveltekit-static",
+        "check": "svelte-check"
+      },
+      "id": "sveltekit-spa",
+      "displayName": "SvelteKit SPA",
+      "status": "verified-development",
+      "entry": "src/routes/+page.svelte",
+      "files": {
+        "src/routes/+page.svelte": "<script>let count=$state(0);</script>\n<main><h1>A little idea. A real app.</h1><button onclick={()=>count++}>Count: {count}</button><a href=\"#/about\">About this app</a></main>\n<style>main{font-family:system-ui;padding:40px}button{padding:12px;background:#245d48;color:white}</style>\n",
+        "src/app.html": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">%sveltekit.head%</head><body><div style=\"display:contents\">%sveltekit.body%</div></body></html>\n",
+        "vite.config.js": "import {sveltekit} from '@sveltejs/kit/vite';\nimport adapter from '@sveltejs/adapter-static';\nexport default {plugins:[sveltekit({adapter:adapter({fallback:'index.html',strict:false}),router:{type:'hash'},paths:{relative:false}})],build:{modulePreload:false,reportCompressedSize:false}};\n",
+        "tsconfig.json": "{\n  \"extends\": \"$app/tsconfig\",\n  \"include\": [\n    \"src\",\n    \"test\",\n    \"*\"\n  ],\n  \"exclude\": [\n    \"src/service-worker\"\n  ],\n  \"compilerOptions\": {\n    \"allowJs\": true,\n    \"checkJs\": false,\n    \"strict\": true,\n    \"moduleResolution\": \"bundler\"\n  }\n}\n",
+        "src/routes/about/+page.svelte": "<h1>About this SvelteKit app</h1><a href=\"#/\">Home</a>\n"
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "name": "@snowglobe/builder",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "gateway": "node gateway.mjs",
+    "test:browser:extensions": "node test/extensions-browser.mjs",
+    "test:browser:persistence": "node test/persistence-browser.mjs",
+    "test:browser:workspace": "node test/workspace-browser.mjs",
+    "test:browser:supabase": "node test/supabase-browser.mjs",
+    "test:browser:vm": "node test/browser.mjs",
+    "audit:provenance": "node audit.mjs",
+    "test:browser:readiness": "node test/preview-readiness-browser.mjs",
+    "test:browser:pi": "node test/pi-browser.mjs",
+    "test:browser:backend-preview": "node test/backend-preview-browser.mjs",
+    "test:browser:assets": "node test/preview-assets-browser.mjs",
+    "audit:vulnerabilities": "node audit-vulnerabilities.mjs",
+    "test:browser:vm-backup": "node test/vm-backup-browser.mjs",
+    "test:browser:project-deletion": "node test/project-deletion-browser.mjs",
+    "test:browser:onboarding": "node test/onboarding-browser.mjs",
+    "provenance": "node build-provenance.mjs",
+    "test:browser:regressions": "node test/browser-regressions.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0",
+    "fflate": "0.8.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "rolldown": "1.2.16",
+    "vite": "8.3.6"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

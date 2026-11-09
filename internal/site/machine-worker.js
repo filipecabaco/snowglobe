@@ -13,7 +13,7 @@
 
 let core = null;
 const OPS = new Set(["boot", "run", "input", "resize", "capture", "destroy", "memory", "runCommand", "readJob", "cancelJob", "status",
-  "readFile", "writeFile", "abort", "tcpOpen", "tcpWrite", "tcpEnd", "tcpAbort"]);
+  "readFile", "writeFile", "abort", "recoverFiles", "tcpOpen", "tcpWrite", "tcpEnd", "tcpAbort"]);
 
 function emit(event, payload) {
   if (event === "console" && payload instanceof Uint8Array) {

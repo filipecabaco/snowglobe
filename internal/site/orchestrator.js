@@ -74,6 +74,7 @@
         encoding: packed.encoding, state: packed.state, console: new Blob([]) };
       await this.store.put(c);
       this.saved = S().metadata(c);
+      this.error = null;
     }
 
     async clear() {
@@ -97,7 +98,7 @@
    * CPUs need it); crossOriginIsolated when not given. `granted()`: the person has allowed it in
    * this page load (preview requests are answered only then; ask.granted when not given).
    */
-  function createAgents(manifest, { pageUrl, scheduler, Machine, createMachine, ask = notAsked, confirmFresh, onchange, onactivity, now = () => Date.now(),
+  function createAgents(manifest, { pageUrl, scheduler, Machine, createMachine, ask = notAsked, confirmFresh, onchange, onactivity, saveScope, now = () => Date.now(),
     transport = "worker", hidden = false, machineOptions = {}, hostOptions = {}, isolated = root.crossOriginIsolated === true,
     granted = () => !!ask.granted?.(), preview: Preview = root.SnowglobePreview } = {}) {
     const page = new URL("./", pageUrl);
@@ -126,7 +127,7 @@
         name: r.name, title: r.title, purpose: r.purpose, sample: r.sample, base, cpus, network: r.network === "fetch",
         // The directory whose changes each command reports (builder.js), if its site has one
         watch: r.watch && B() ? B().checkWatch(r.watch) : null,
-        slot: new SaveSlot(new URL(r.name, page).pathname, config, r.title),
+        slot: new SaveSlot(saveScope ? saveScope(r.name) : new URL(r.name, page).pathname, config, r.title),
         host: null, job: null, xfers: 0, starting: 0, lastUsed: 0, tape: [], tapeBytes: 0,
         loading: null, memoryBytes: 0, inMemory: null, discard: false, error: null,
         // Changed since its last save (a run, a copy into it, a key in its terminal): a reload loses it
@@ -302,9 +303,10 @@
         try {
           await m.slot.save(packed);
           m.dirty = false;
-        } catch {
+        } catch (error) {
           // No storage (another tab holds it, or none at all): kept in this tab for the wake, and
           // the store is tried again at the next suspend
+          m.slot.error = String(error?.message ?? error);
           m.inMemory = packed;
         }
       } else {
@@ -941,6 +943,22 @@
       },
       async suspend(runtime) { return scheduler.suspend(get(runtime), "asked"); },
       async wake(runtime) { await awake(get(runtime)); return true; },
+      async recoverFiles(runtime) {
+        const m = get(runtime);
+        return serial(m, async () => {
+          if (m.busy()) throw new Error("wait for the active operation before restoring environment files");
+          m.starting++;
+          changed();
+          try {
+            await awake(m);
+            return await m.host.recoverFiles();
+          } finally {
+            m.starting = down(m.starting);
+            m.lifecycle.touch();
+            changed();
+          }
+        });
+      },
       async retry(runtime) {
         const m = get(runtime);
         m.lifecycle.retry();

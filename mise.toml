@@ -38,7 +38,12 @@ done
 # The agent page's machines (/agent/runtimes.json and its scripts), once the sites' pages are final
 ./snowglobe agent-pages dist
 # The index page, its font, and a copy of xterm.js it renders the recorded transcripts with
+if [ "${SNOWGLOBE_BUILDER:-0}" = 1 ]; then
+  npm ci --prefix packages/builder
+  npm run build --prefix packages/builder
+fi
 cp -R site/. dist/
+if [ "${SNOWGLOBE_BUILDER:-0}" != 1 ]; then rm -rf dist/builder; fi
 cp -R dist/elixir/xterm dist/xterm
 '''
 

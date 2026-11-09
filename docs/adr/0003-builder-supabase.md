@@ -1,0 +1,11 @@
+# Browser-local Supabase for Builder
+
+Supersedes ADR 0001's initial restriction on database tools and Supabase preview access. Builder reuses the existing Supabase runtime as a separate browser VM instead of provisioning a hosted project. Both supported model engines can enable Auth/Data and apply named SQL migrations. The source VM receives a controlled SDK module; migration files remain in the canonical source workspace and source export.
+
+Keep the preview opaque and retain its network-denying CSP. Bridge only fixed local Supabase Auth and public-schema Data API routes through the existing guest HTTP transport. Bind requests and responses to the owning frame and nonce, constrain methods/headers/payloads, and propagate cancellation. Never expose a generic network, SQL, VM or model-gateway interface to generated code. Only the public anon key and the app's user session enter the preview. Administrative stack configuration stays inside the database guest.
+
+Run migration SQL using a separate limited PostgreSQL login role, not a superuser connection followed by SET ROLE. It owns application tables in public, can reference auth.users(id) and call Auth identity functions, and cannot read guest files or alter Auth records. Reject psql metacommands. Record migration hashes and require repair migrations rather than editing applied migrations. Application RLS policies and grants are explicit migration responsibilities.
+
+Save drains requests and checkpoints both VMs before binding matching source/database checkpoint identifiers, preview state and conversation metadata. Restore refuses a mismatched pair. This is sequential checkpointing, not atomic database rollback. Source export includes migrations and hosted-project environment instructions but excludes database data and accounts.
+
+Actual two-VM Chromium acceptance passed real signup/password login, dice inserts, row-level isolation between two users, migration idempotence and restricted-role file-read denial, then saved/reloaded Auth and database history. Chromium and iPhone-emulated WebKit separately passed the opaque HTTP relay and isolation tests. Hosted sharing, Storage, Realtime, Edge Functions and physical-phone two-VM performance remain outside this development slice.
