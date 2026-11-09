@@ -147,7 +147,7 @@
         // The directory whose changes each command reports (builder.js), if its site has one
         watch: r.watch && B() ? B().checkWatch(r.watch) : null,
         slot: new SaveSlot(saveScope ? saveScope(r.name) : new URL(r.name, page).pathname, config, r.title),
-        host: null, job: null, xfers: 0, starting: 0, lastUsed: 0, tape: [], tapeBytes: 0,
+        host: null, job: null, xfers: 0, starting: 0, holds: 0, lastUsed: 0, tape: [], tapeBytes: 0,
         loading: null, memoryBytes: 0, inMemory: null, discard: false, error: null,
         // Changed since its last save (a run, a copy into it, a key in its terminal): a reload loses it
         dirty: false,
@@ -165,7 +165,7 @@
         // preview's do, so the machine it connects to is woken beside it even at the awake limit)
         linksIn: 0,
         linksOut: 0,
-        busy() { return !!this.job || this.xfers > 0 || this.starting > 0 || this.previews.size > 0 || this.linksIn > 0; },
+        busy() { return !!this.job || this.xfers > 0 || this.starting > 0 || this.holds > 0 || this.previews.size > 0 || this.linksIn > 0; },
         // Held by the preview: the scheduler counts the preview's machines as one
         previewHeld() { return this.previews.size > 0 || this.linksIn > 0 || this.linksOut > 0; },
       };
@@ -1345,6 +1345,14 @@
     };
     Object.defineProperty(api, "_machines", { value: machines });
     Object.defineProperty(api, "_get", { value: get });
+    // Parent-owned interactive tools hold a running VM while their connection is open.
+    Object.defineProperty(api, "_hold", { value(runtime) {
+      const m = get(runtime);
+      if (!m.host || m.lifecycle.state !== "running") throw new Error("Wake the VM before holding it");
+      m.holds++;
+      let released = false;
+      return () => { if (released) return; released = true; m.holds = down(m.holds); if (m.lifecycle.state === "running") m.lifecycle.touch(); scheduler.notify(); changed(); };
+    } });
     Object.defineProperty(api, "_status", { value: status });
     Object.defineProperty(api, "_describe", { value: describe });
     return api;

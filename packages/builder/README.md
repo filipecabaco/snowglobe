@@ -299,3 +299,43 @@ packages omit their repository-root MIT text; the vendored snapshot is
 checksummed and links to the matching upstream commit. A changed version or
 license declaration keeps the missing-notice review visible. This completes
 browser notice text, not the separate guest inventory/license approval.
+
+## Builder, Preview and Console views
+
+The top mode switch offers Builder, a full-window Preview and Console. The preview
+bar's Full preview button opens the same view as the top Preview button; Exit full
+preview or Builder returns to editing. Switching views preserves the existing
+preview iframe and its state. The floating mode switch stays available in full
+preview. Escape also returns when focus is in Builder's controls.
+
+Console opens an independent interactive shell inside the selected project's VM.
+Choose a machine and Connect console: Source VM runs Linux commands in `/workspace`,
+or Database VM opens the actual
+Supabase instance backing the app. PostgreSQL opens `psql "$DB_URL"` in that VM;
+use `\dt` to list tables and `SELECT * FROM public.recipes LIMIT 50;` to inspect a
+recipe table. The shell supports terminal resizing, Ctrl+C, interactive programs
+and normal Linux commands. This is the owner's VM access: commands and SQL change
+it directly. It does not add shell access to AI tools or generated previews.
+
+Opening the source console prepares the project's framework; opening the database
+console enables the normal optional backend when allowed by project settings.
+Console connection is available after an active Builder task finishes. Leaving Console, disconnecting,
+or starting a Builder action closes its interactive session; a psql prompt does
+not capture subsequent Builder jobs. Save VM closes the session before capturing
+source/database checkpoints. Console input marks its VM as changed; use Save VM
+to preserve manual changes. Manual SQL is not automatically added to exported
+migration files. Terminal output stays in the current page and is not
+automatically added to the AI conversation or source export.
+
+The package build needs the repository's Go toolchain as well as Node. It
+cross-compiles a small Linux/arm64 PTY bridge, includes its project/Go license
+texts, and fingerprints both the bridge source and generated asset. Set
+`BUILDER_GO_BIN` if Go is not on PATH. The helper is uploaded once per VM generation
+over an authenticated, checksummed TCP transfer. The owner page keeps the VM awake
+while connected. Guest networking retains the existing npm-registry policy.
+Preview Auth/Data relay permissions remain unchanged; neither
+console port is available to the app iframe. Native Go tests exercise PTY input,
+resize, interrupt and authentication; the fast Chromium/WebKit view test checks
+layout, iframe retention and console controls. The optional
+`node packages/builder/test/console-vm-browser.mjs` exercises real source/database
+VM consoles and psql without any model credentials.

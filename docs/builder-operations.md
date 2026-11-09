@@ -113,6 +113,17 @@ behind the local proxy all users share its loopback address limit.
 
 ## Release and rollback
 
+Builder's top switch selects the editing view, full-window app preview or Console.
+Console connects to the current project's source VM (`/workspace`) or Supabase VM.
+In the latter, PostgreSQL opens `psql "$DB_URL"`; `\dt` lists tables. This is
+direct owner access to the local VM, including its database access, rather than
+an AI tool. Manual SQL is retained in a VM checkpoint but is not automatically
+added to exported migration files. Terminal output stays in the current page.
+Return to Builder or Disconnect ends the interactive shell. Save VM first closes
+the terminal connection, then performs the existing paired checkpoint flow.
+The build cross-compiles the guest PTY helper using the repository's Go toolchain;
+`BUILDER_GO_BIN` can select it. Provider credentials remain on the model gateway.
+
 Before release, record the repository commit, clean build output hashes, Node/Pi
 versions, guest image hashes, template/lockfile hashes, target browser versions,
 and final acceptance logs. `node packages/builder/audit.mjs` emits the npm

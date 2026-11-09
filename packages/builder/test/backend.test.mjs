@@ -10,6 +10,7 @@ test('Supabase preview relay permits only fixed local Auth/Data routes and publi
  assert.equal(validateBackendRequest(request('/rest/v1/rolls?select=*&order=created_at.desc'),publicKey).method,'GET');
  for(const path of ['/builder-api/status','/auth/v1/admin/users','/storage/v1/object','/rest/v1/../../auth/users','/rest/v1/%2ftokens','/rest/v1/rolls?apikey=secret'])assert.throws(()=>validateBackendRequest(request(path),publicKey));
  assert.throws(()=>validateBackendRequest({...request('/auth/v1/token'),url:'https://outside.invalid/auth/v1/token'},publicKey));
+ for(const port of [54323,54324])assert.throws(()=>validateBackendRequest({...request('/rest/v1/recipes'),url:SUPABASE_ORIGIN+':'+port+'/bridge'},publicKey),'preview cannot reach owner console or upload ports');
  assert.throws(()=>validateBackendRequest(request('/auth/v1/user',{headers:[['authorization','Bearer '+jwt('service_role')]]}),publicKey),/Administrative/);
  assert.throws(()=>validateBackendRequest(request('/rest/v1/rolls',{headers:[['accept-profile','auth']]}),publicKey),/public/);
  assert.throws(()=>validateBackendRequest(request('/rest/v1/rolls',{headers:[['apikey','admin']]}),publicKey),/public/);

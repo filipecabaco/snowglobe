@@ -893,3 +893,40 @@ provenance scanner) were corrected without weakening either test. The prior
 live-model and real-VM acceptance records remain tied to their original archived
 artifact; they were not repeated against the merged runtime. The old private
 candidate needs requalification before release. No PR was created.
+
+### Full preview and owner VM consoles
+
+Added a top Builder / Preview / Console switch and a full-preview toggle. Preview
+fills the browser content viewport with floating mode/exit controls; returning
+keeps the same iframe and app state. Console lets the owner choose the source VM
+or the actual project database VM before connecting. The PostgreSQL button opens
+interactive psql using the VM's own DB_URL. No model credentials or DevTools paste
+step is needed.
+
+A separate authenticated PTY service runs inside each selected VM. It supports
+Linux commands, interactive psql, resize and Ctrl+C independently of Builder's
+serial job transport. The small bootstrap uses the existing job channel; a
+checksummed TCP upload transfers the compiled helper. An explicit VM hold prevents
+suspension during a console session. Leaving Console or starting a Builder action
+closes the shell and releases the hold before job execution or Save. Manual input
+marks the VM changed, and console output stays outside model conversations.
+The existing app preview relay rejects both owner-console ports. The build
+includes project/Go license texts and fingerprints the helper source/binary.
+
+Chromium/WebKit fixtures passed full-window layout, state/iframe retention,
+mode controls, busy gating and database selection. The terminal transport tests
+passed authenticated setup, UTF-8 input, resize, cancellation, failed uploads,
+malformed frames, reconnection and hold cleanup. Native Go tests passed actual
+PTY authentication, input, sizing and Ctrl+C. The real Chromium VM test passed
+source-shell interaction and a subsequent Builder rebuild, then interactive
+psql, a manual table/row write, Save VM, reload and reconnect with the row intact.
+The sanitized `builder-console-acceptance.json` retains artifact hashes and scope;
+private browser-control/diagnostic files are excluded.
+
+Validation: 112 Builder tests passed with one optional skip, all 234 shared Node
+tests passed, Go `test ./...` passed, and the complete fast browser regression set
+passed, including the new views fixture. The final updated views fixture passed
+both engines again. An acceptance-script expectation was corrected: the counter
+retains state across view changes, while a deliberate rebuild resets its React
+state. Physical macOS acceptance, the final immutable release candidate and the
+previous security/license/provenance gates remain open. No PR was created.

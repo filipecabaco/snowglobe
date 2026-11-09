@@ -15,6 +15,17 @@ const manifest = {
   armless: { js: '../python/armless/armless.js', wasm: '../python/armless/armless.wasm' }, xterm: '../python/xterm/', exposed_to: [],
 };
 
+test('a parent-owned console hold prevents suspension and releases once', async () => {
+  const {api} = setup();
+  assert.throws(() => api._hold('python'), /Wake/);
+  await api.wake('python');
+  const release = api._hold('python');
+  assert.equal(await api.suspend('python'), false);
+  release(); release();
+  assert.equal(api._get('python').holds, 0);
+  assert.equal(await api.suspend('python'), true);
+});
+
 // Hosts that pretend: each boot, capture and job is logged; a job ends when the test says so
 function setup({ budget = 2, confirm = true, man = manifest, options = {}, tcp = null } = {}) {
   const log = [];
