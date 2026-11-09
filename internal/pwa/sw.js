@@ -1,10 +1,15 @@
 // snowglobe's service worker: the site keeps working offline once it has run.
 //
-// The shell (page, machine, terminal) is cached on install. Everything else (the snapshot, the warm
-// pack, the guest's file blobs) is cached the first time the page fetches it, so installing doesn't
-// download it a second time. Blobs are named by their content and served from the cache first;
-// the rest changes with every build, so it comes from the network first and the cache offline.
+// The shell (the page, its manifest and icons) is cached on install. Everything else (the machine,
+// the terminal, the snapshot, the warm pack, the guest's file blobs) is cached the first time the
+// page fetches it, so installing doesn't download it a second time. What can't change under its URL
+// comes from the cache first: blobs, named by their content, and the build's own files, which the
+// page asks for with its build's version (?v=), so a newer page asks for other URLs. The rest (the
+// page itself, anything unversioned) comes from the network first and the cache offline.
 const CACHE = "__CACHE__" + ":" + self.registration.scope;
+// A build's version, as the page puts it on its files (site.Page.Assets): only that is taken for
+// one, not any ?v= a request to this origin happens to have (the guest's own, say)
+const versioned = (url) => url.origin === location.origin && /^[0-9a-f]{16}$/.test(url.searchParams.get("v") ?? "");
 const SHELL = __SHELL__;
 // Several CPUs share memory between Web Workers, which needs a cross-origin isolated page: add
 // the headers for that to the page (static hosts can't send them)
@@ -42,7 +47,8 @@ self.addEventListener("message", (event) => {
   event.waitUntil(
     caches.open(CACHE).then((cache) =>
       Promise.all(urls.map(async (url) => {
-        if (!cacheable(url) || (await cache.match(url, { ignoreSearch: true }))) return;
+        const exact = versioned(new URL(url, location.href));
+        if (!cacheable(url) || (await cache.match(url, { ignoreSearch: !exact }))) return;
         try {
           const response = await fetch(url);
           if (response.ok && response.status === 200) await cache.put(url, response);
@@ -78,14 +84,21 @@ self.addEventListener("fetch", (event) => {
     return response;
   };
 
+  // A versioned file is one build's copy and never changes under its URL: the cache first,
+  // matched with its version, so a newer page (other URLs) never gets an older build's copy
+  if (versioned(url)) {
+    event.respondWith(caches.match(request).then((hit) => hit || fetch(request).then(keep)));
+    return;
+  }
+
   // The guest's file blobs are named by their content, so they never change: the cache first
   if (blob(request.url)) {
     event.respondWith(caches.match(request, { ignoreSearch: true }).then((hit) => hit || fetch(request).then(keep)));
     return;
   }
 
-  // Everything else (the snapshot, the warm pack, the filesystem tree, the runtime) changes with
-  // each build and must match the page: the network first, the cache when offline
+  // Everything else (the page's unversioned files, and every file of a page built before ?v=)
+  // may change with each build and must match the page: the network first, the cache when offline
   event.respondWith(fetch(request).then(keep).catch(() => caches.match(request, { ignoreSearch: true })));
 });
 

@@ -9,7 +9,7 @@
   <meta property="og:title" content="{{.Title}}">
   <meta property="og:description" content="A real program on Linux, running on a 64-bit ARM CPU emulated in WebAssembly in your browser tab. No server.">
   <meta name="twitter:card" content="summary">
-  <link rel="stylesheet" href="xterm/xterm.css">
+  <link rel="stylesheet" href="xterm/xterm.css?v={{.Assets}}">
   <style>
     html, body { height: 100%; margin: 0; background: #000; overscroll-behavior: none; }
     /* Pinned to the visual viewport, so the on-screen keyboard shrinks the terminal instead of
@@ -127,13 +127,13 @@
     /* ?embed: the page hosting this run already says what it is */
     .embed #strip { display: none; }
   </style>
-  <script src="xterm/xterm.js"></script>
-  <script src="xterm/addon-fit.js"></script>
-  <script src="armless/armless.js"></script>
-  <script src="sessions.js"></script>
-  <script src="session-ui.js"></script>
-  <script src="machine-core.js"></script>
-  <script src="machine-host.js"></script>
+  <script src="xterm/xterm.js?v={{.Assets}}"></script>
+  <script src="xterm/addon-fit.js?v={{.Assets}}"></script>
+  <script src="armless/armless.js?v={{.Assets}}"></script>
+  <script src="sessions.js?v={{.Assets}}"></script>
+  <script src="session-ui.js?v={{.Assets}}"></script>
+  <script src="machine-core.js?v={{.Assets}}"></script>
+  <script src="machine-host.js?v={{.Assets}}"></script>
 </head>
 <body>
   <header id="strip">
@@ -219,26 +219,31 @@
       return t.url.replaceAll("{token}", encodeURIComponent((await r.text()).trim()));
     } });
     {{- end}}
+    // This build's own files carry its version (?v=), so the service worker serves them from its
+    // cache first: a newer page asks for other URLs and never gets an older build's copy. The
+    // blobs (baseurl) stay as they are: named by their content, and snowglobe pool repoints them
+    const assets = {{.Assets}};
+    const versioned = (path) => `${path}?v=${assets}`;
     // The machine (machine-host.js), in this page's thread: the same factory the agent page makes
     // its machines with. Its files are absolute URLs against the document's base
     const host = SnowglobeHost.createMachine({ base: document.baseURI, transport: "inline", config: {
-      wasm: "armless/armless.wasm",
-      wasm_smp: "armless/armless-smp.wasm",
+      wasm: versioned("armless/armless.wasm"),
+      wasm_smp: versioned("armless/armless-smp.wasm"),
       memory_mb: {{.MemoryMB}},
       cpus,
-      filesystem: { json: "system/filesystem.json", baseurl: "system/filesystem/" },
-      initial_state: "system/state.bin.zst",
+      filesystem: { json: versioned("system/filesystem.json"), baseurl: "system/filesystem/" },
+      initial_state: versioned("system/state.bin.zst"),
       // The files the app is most likely to need, in one background download once it runs
-      warm: "system/warm.pack",
+      warm: versioned("system/warm.pack"),
       {{- if eq .Network "fetch"}}
       // The guest's HTTP(S) and WebSockets end in the machine (HTTPS with a CA made for this
       // site) and go out as this page's own fetch() and WebSocket; its TCP to the tunnels'
       // destinations goes out as WebSockets too
-      network: { tls: "system/tls.json"{{if .Tunnels}}, tunnels: {{if .TunnelToken}}withTokens({{.Tunnels}}){{else}}{{.Tunnels}}{{end}}{{end}} },
+      network: { tls: versioned("system/tls.json"){{if .Tunnels}}, tunnels: {{if .TunnelToken}}withTokens({{.Tunnels}}){{else}}{{.Tunnels}}{{end}}{{end}} },
       {{- end}}
     } });
     // The terminal is set up (and the screen replayed) before the guest runs
-    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? "system/state.bin.zst");
+    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"));
     const emulator = host.emulator;
     // For tests and benchmarks: the machine (console_input, the console event)
     window.snowglobe = { get emulator() { return host.emulator; } };
@@ -283,7 +288,7 @@
 
     // What the machine says about itself. A failure starts the page over (once)
     host.on("progress", (e) => {
-      if (e.file.endsWith("state.bin.zst") && e.total) {
+      if (e.file.includes("state.bin.zst") && e.total) {
         run.progress = Math.round((e.loaded / e.total) * 100);
         setStatus("loading", `loading ${run.progress}%`);
       }
@@ -307,7 +312,7 @@
     host.on("stop", ({ reason }) => setStatus("stopped", reason === "poweroff" ? "powered off" : `stopped (${reason})`));
 
     // The app's console output up to the snapshot, so the terminal shows what it printed
-    const screen = sessions.replay ? Promise.resolve(null) : fetch("system/console.bin")
+    const screen = sessions.replay ? Promise.resolve(null) : fetch(versioned("system/console.bin"))
       .then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
 
     booted?.then(async () => {

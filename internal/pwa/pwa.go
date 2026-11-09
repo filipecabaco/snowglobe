@@ -37,11 +37,10 @@ const (
 	marker     = "snowglobe:pwa"
 )
 
-// The files a run can't start without; everything else is cached as the page fetches it
-var shell = []string{"./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png",
-	"armless/armless.js", "armless/armless.wasm", "armless/armless-smp.wasm",
-	"xterm/xterm.js", "xterm/xterm.css", "xterm/addon-fit.js", "sessions.js", "session-ui.js",
-	"machine-core.js", "machine-host.js"}
+// The files a run can't start without that the page doesn't version; everything else (the
+// machine, the terminal, the page's scripts, the snapshot) the page asks for with its build's
+// version (?v=), and it is cached as the page fetches it
+var shell = []string{"./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"}
 
 // Run writes the PWA files into the site and ties them into index.html. Running it again
 // replaces what an earlier run wrote.
