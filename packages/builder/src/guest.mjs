@@ -13,7 +13,7 @@ import {catalog} from './template-catalog.mjs';
 import {templateFor} from './frameworks.js';
 import {buildKit,kitPreview} from './static-preview.mjs';
 const LIMIT = 256 * 1024;
-const excluded = new Set(['node_modules','dist','build','.svelte-kit','.git','.env','.env.local','__proto__','prototype','constructor']);
+const excluded = new Set(['snowglobe-project.json','.snowglobe','node_modules','dist','build','.svelte-kit','.git','.env','.env.local','__proto__','prototype','constructor']);
 export const hash = text => createHash('sha256').update(text).digest('hex');
 export async function matchesStarter(root,template='/root/app') {
   async function sources(base,dir='src') {
@@ -112,7 +112,7 @@ export function dispatcher(root = '/workspace', onProgress = ()=>{}) {
     const provision=createProvisioner({onProgress:progress});
     const messages={'project.initialize':'Preparing your project files','fs.read':'Reading your source file','fs.write':'Saving your source change','fs.list':'Inspecting your project files','project.export':'Collecting your source for export','preview.build':'Starting the build inside your environment'};
     progress('guest-'+req.op,messages[req.op]||'Your environment is responding');
-    if(!['project.initialize','project.info','project.templates'].includes(req.op)){const st=await fs.lstat(root);if(!st.isDirectory()||st.isSymbolicLink())throw new Error('Initialize a framework before using project tools');await provision.recover(root);await recoverRestore();}
+    if(!['project.initialize','project.info','project.templates'].includes(req.op)){let st;try{st=await fs.lstat(root);}catch(error){if(error.code==='ENOENT')throw new Error('Initialize a framework before using project tools');throw error;}if(!st.isDirectory()||st.isSymbolicLink())throw new Error('Initialize a framework before using project tools');await provision.recover(root);await recoverRestore();}
     switch(req.op) {
       case 'project.initialize': {
         result=await provision.initialize(root,p.template||'react-vite',{experimental:p.experimental===true});break;

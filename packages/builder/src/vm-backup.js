@@ -1,3 +1,4 @@
+import {folderWorkspace} from './storage-context.js';
 import {projectStore,projectScope,projectName} from './projects.js';
 import {checkpointStore} from './checkpoint.js';
 import {requireApproval} from './approvals.js';
@@ -43,14 +44,15 @@ export async function importVmBackupSet(manifest,files,configs,sessions,{approve
  const id=crypto.randomUUID(),stores=[],releases=[];
  try{
   for(const [runtime,checkpoint] of Object.entries(validated.checkpoints)){
-   signal?.throwIfAborted();const scope=projectScope(id,runtime);releases.push(await sessions.acquireLock(scope));const store=await sessions.BrowserStore.open(scope);stores.push(store);await store.put({...checkpoint,id:'machine'});
+   signal?.throwIfAborted();const scope=projectScope(id,runtime);releases.push(await sessions.acquireLock(scope));const store=folderWorkspace()?folderWorkspace().runtimeStore(id,runtime):await sessions.BrowserStore.open(scope);stores.push(store);await store.put({...checkpoint,id:'machine'});
   }
   signal?.throwIfAborted();await checkpointStore('readwrite',{savedAt:validated.metadata.snapshotSavedAt,metadata:{...validated.metadata,messages:[],preview:'',previewData:{}}},id);
   signal?.throwIfAborted();await projectStore('put',{id,name,createdAt:Date.now(),template:validated.project.template,backend:validated.project.backend});
   return id;
  }catch(error){
+  if(folderWorkspace()){try{await folderWorkspace().projects('delete',{id});}catch{throw new Error('Backup import failed; incomplete folder data may remain under new project '+id+'. Existing projects were kept.');}throw error;}
   const cleanup=await Promise.allSettled([...stores.map(store=>store.remove('machine')),checkpointStore('readwrite',null,id)]);
   if(cleanup.some(result=>result.status==='rejected'))throw new Error('Backup import failed; incomplete data may remain under new project '+id+'. Existing projects were kept.');
   throw error;
- }finally{for(const store of stores)store.db.close();for(const release of releases.reverse())await release();}
+ }finally{for(const store of stores)store.db?.close();for(const release of releases.reverse())await release();}
 }

@@ -414,19 +414,46 @@
     }
 
     /** Retry transient download failures before handing an I/O failure to the guest filesystem. */
-    async _fetchBytes(url, timeoutMs = 15000) {
+    async _fetchBytes(url, timeoutMs = 30000) {
       for (let attempt = 0; ; attempt++) {
+        const controller = new AbortController();
+        let timer, reader;
+        // A large warm pack can take minutes over a device/VPN connection. Time
+        // out stalled I/O, rather than aborting a download that is progressing.
+        const arm = () => {
+          clearTimeout(timer);
+          timer = setTimeout(() => controller.abort(new DOMException(`Environment download stalled: ${new URL(url, "https://runtime.invalid/").pathname}`, "TimeoutError")), timeoutMs);
+        };
+        const aborted = new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true }));
         try {
-          const r = await (this.fetch ?? fetch)(url, { signal: AbortSignal.timeout(timeoutMs), ...(attempt ? { cache: "reload" } : {}) });
+          arm();
+          const r = await Promise.race([(this.fetch ?? fetch)(url, { signal: controller.signal, ...(attempt ? { cache: "reload" } : {}) }), aborted]);
           if (!r.ok) {
             const error = new Error(`${r.status} ${r.statusText ?? ""}`.trim());
             error.retryable = r.status >= 500 || r.status === 408 || r.status === 429;
             throw error;
           }
-          return new Uint8Array(await r.arrayBuffer());
+          arm();
+          if (!r.body?.getReader) return new Uint8Array(await Promise.race([r.arrayBuffer(), aborted]));
+          reader = r.body.getReader();
+          const chunks = [];
+          let length = 0;
+          for (;;) {
+            const { value, done } = await Promise.race([reader.read(), aborted]);
+            if (done) break;
+            if (value.byteLength) { arm(); chunks.push(value); length += value.byteLength; }
+          }
+          const bytes = new Uint8Array(length);
+          let offset = 0;
+          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+          return bytes;
         } catch (e) {
           if (e.retryable === false || attempt >= this.blobRetryDelays.length) throw e;
           await new Promise(resolve => setTimeout(resolve, this.blobRetryDelays[attempt]));
+        } finally {
+          clearTimeout(timer);
+          if (controller.signal.aborted) reader?.cancel().catch(() => {});
+          else reader?.releaseLock();
         }
       }
     }
@@ -536,6 +563,21 @@
         if (required) throw new Error("no environment file pack is configured");
         return 0;
       }
+      if (required && vm.stopped) throw new Error("the machine stopped while restoring files");
+      this.warmedVms ??= new WeakSet();
+      if (this.warmedVms.has(vm)) return 0;
+      let warming = this.warming;
+      if (!warming || warming.vm !== vm) {
+        warming = { vm, promise: this._warm(vm) };
+        this.warming = warming;
+        warming.promise.finally(() => { if (this.warming === warming) this.warming = null; }).catch(() => {});
+      }
+      const supplied = await warming.promise;
+      if (required && (vm.stopped || vm !== this.vm)) throw new Error("the machine stopped while restoring files");
+      return supplied;
+    }
+
+    async _warm(vm) {
       const pack = await this._fetchBytes(this.config.warm, 60000);
       const indexSize = new DataView(pack.buffer).getUint32(0, true);
       const index = JSON.parse(new TextDecoder().decode(pack.subarray(4, 4 + indexSize)));
@@ -544,7 +586,6 @@
       for (const [name, , length] of index) {
         // A machine stopped (suspended) meanwhile takes no more
         if (vm.stopped || vm !== this.vm) {
-          if (required) throw new Error("the machine stopped while restoring files");
           return supplied;
         }
         const blob = pack.subarray(offset, offset + length);
@@ -556,6 +597,7 @@
         // Yield between files so the machine (and a page sharing this thread) stays responsive
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
+      this.warmedVms.add(vm);
       if (this.blobsDown && !this.failedBlobs.size) {
         this.blobsDown = false;
         this.emit("blobs", { ok: true });

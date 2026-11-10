@@ -61,3 +61,11 @@ test('reviewed skill bundle pins persist across registries and changed reference
  reopened.approve=async()=>{const current=await client.call('fs.read',{path});await client.call('fs.write',{path,text:'Concurrent guidance',version:current.version});return true;};await assert.rejects(reopened.read('search'),/changed during review/);
  reopened.approve=async request=>{assert.match(request.content,/Concurrent guidance/);return true;};assert.equal((await reopened.read('search')).text,text);reopened.approve=undefined;assert.equal((await reopened.read('search')).text,text);
 });
+
+test('a fresh VM reports an uninitialized workspace without creating a partial project',async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'builder-fresh-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));
+ const root=path.join(dir,'workspace'),dispatch=dispatcher(root),call=(op,params={})=>dispatch({protocol:'snowglobe-builder-rpc-v1',id:'fresh',projectId:'fixture',vmGeneration:1,op,params});
+ assert.deepEqual((await call('project.info')).result,{initialized:false});
+ for(const op of ['fs.list','fs.read','project.export','compiler.stop','compiler.quiesce'])await assert.rejects(call(op,{path:'src/App.jsx'}),error=>/Initialize a framework/.test(error.message)&&!error.message.includes('ENOENT'));
+ await assert.rejects(fs.lstat(root),{code:'ENOENT'});
+});

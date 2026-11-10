@@ -1,0 +1,28 @@
+// Actual Builder startup/send controls with a fresh VM protocol fixture. No AI
+// credentials or VM image boot: the fixture rejects workspace access until init.
+import {chromium} from '../../../bench/node_modules/playwright/index.mjs';import fs from 'node:fs/promises';import assert from 'node:assert/strict';
+const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+try{
+ const context=await browser.newContext(),page=await context.newPage();
+ await context.route('https://builder.test/**',async route=>{
+  const pathname=new URL(route.request().url()).pathname;if(pathname.startsWith('/builder-api/'))return route.fulfill({status:503,contentType:'application/json',body:'{"error":"No provider in fixture"}'});
+  const file=pathname==='/builder/'?'site/builder/index.html':pathname.startsWith('/builder/')?'site'+pathname:pathname==='/agent/runtimes.json'?'dist/agent/runtimes.json':null;if(!file)return route.fulfill({status:404,body:'Not found'});
+  let body=await fs.readFile(new URL('../../../'+file,import.meta.url));
+  if(file.endsWith('/app.js'))body=body.toString()+`\nwindow.firstProjectFixture=(backendMode='supabase')=>{
+   let initialized=false;const calls=[];
+   client.call=async(op)=>{calls.push(op);sessionStorage.setItem('first-project-calls',JSON.stringify(calls));if(op==='project.info')return initialized?{initialized:true,id:'react-vite'}:{initialized:false};if(op==='project.initialize'){initialized=true;return {id:'react-vite'};}if(!initialized)throw Error("ENOENT: no such file or directory, lstat '/workspace'");if(op==='fs.list')return {files:[]};if(op==='project.export')return {files:{'src/App.jsx':'fixture'}};return {};};
+   backend.enable=async()=>{calls.push('backend.enable');if(!initialized)throw Error('backend before workspace');return {};};
+   currentProject={...currentProject,template:'auto',backend:backendMode};document.getElementById('backend').value=backendMode;
+   connectedModel={id:'fixture'};agent={state:{messages:[]},async prompt(){calls.push('agent.prompt');if(backendMode==='auto')await projectTool('enable_supabase',{},()=>backend.enable(abort.signal));throw Error('Fixture turn reached after initialization');}};
+   return {calls,send,earlyRead:()=>projectTool('read_file',{},()=>client.call('fs.read'))};
+  };`;
+  return route.fulfill({headers:{'Content-Type':file.endsWith('.js')?'text/javascript':file.endsWith('.json')?'application/json':file.endsWith('.css')?'text/css':'text/html','Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'},body});
+ });
+ await page.goto('https://builder.test/builder/');await page.waitForFunction(()=>window.firstProjectFixture&&document.getElementById('stop').disabled);
+ const result=await page.evaluate(async()=>{const f=firstProjectFixture();let earlyError;try{await f.earlyRead();}catch(error){earlyError=error.message;}await f.send('Build a Supabase app');return {calls:f.calls,earlyError,status:document.getElementById('status').textContent};});
+ assert.match(result.earlyError,/initialize_framework/);assert(!result.calls.includes('fs.read'));assert(result.calls.indexOf('project.initialize')<result.calls.indexOf('backend.enable'));assert(result.calls.includes('agent.prompt'));assert.equal(result.status,'Fixture turn reached after initialization');console.log('PASS first AI prompt with Supabase initializes the source workspace before backend/agent work; premature file tools return an initialization instruction');
+ await page.evaluate(()=>new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase('snowglobe-builder-recovery');r.onsuccess=resolve;r.onerror=()=>reject(r.error);}));await page.reload();await page.waitForFunction(()=>window.firstProjectFixture&&document.getElementById('stop').disabled);
+ await page.locator('.project details').evaluate(el=>el.open=true);await page.locator('#project-new-name').fill('ToDo');await page.locator('#project-rename').click();await page.waitForFunction(()=>document.getElementById('status').textContent==='Project renamed');
+ const automatic=await page.evaluate(async()=>{const f=firstProjectFixture('auto');await f.send('Create a ToDo app with login and account registration');return {calls:f.calls,status:document.getElementById('status').textContent};});assert(automatic.calls.indexOf('agent.prompt')<automatic.calls.indexOf('project.initialize'));assert(automatic.calls.indexOf('project.initialize')<automatic.calls.indexOf('backend.enable'));assert.equal(automatic.status,'Fixture turn reached after initialization');console.log('PASS first prompt for a renamed ToDo project with Automatic backend: AI-triggered Supabase initializes the workspace before backend installation');
+ await page.evaluate(()=>new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase('snowglobe-builder-recovery');r.onsuccess=resolve;r.onerror=()=>reject(r.error);}));await page.reload();await page.waitForFunction(()=>window.firstProjectFixture&&document.getElementById('stop').disabled);await page.evaluate(()=>{firstProjectFixture();document.querySelector('.project details').open=true;document.getElementById('project-new-name').value='Empty project copy';});await page.locator('#project-duplicate').click();await page.locator('#approval [data-approve]').click();await page.waitForURL(/project=/);const duplicateCalls=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('first-project-calls')));assert(duplicateCalls.indexOf('project.initialize')>=0&&duplicateCalls.indexOf('project.initialize')<duplicateCalls.indexOf('project.export'));console.log('PASS duplicating an unprepared first project initializes its workspace before exporting source');
+}finally{await browser.close();}

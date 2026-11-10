@@ -29,6 +29,7 @@ supabase.auth.onAuthStateChange=callback=>{
 export function validateBackendRequest(request,anonKey){
  if(!request||typeof request.url!=='string'||request.url.length>8192)throw new Error('Invalid backend request');
  const url=new URL(request.url);const path=url.pathname;
+ if(url.origin===SUPABASE_ORIGIN&&!url.username&&!url.password&&path==='/auth/v1/recover')throw new Error('Password recovery emails are not configured for this browser-local preview. Use a hosted Supabase project with email delivery to enable password recovery.');
  if(url.origin!==SUPABASE_ORIGIN||url.username||url.password||url.searchParams.has('apikey')||/%(?:2f|5c|00)/i.test(path)||!(/^\/auth\/v1\/(health|settings|signup|token|logout|user)$/.test(path)||/^\/rest\/v1\/(?:[a-zA-Z_][\w]*(?:\/[a-zA-Z_][\w]*)?)?$/.test(path)))throw new Error('Only this project’s Supabase Auth and Data API are available');
  const method=String(request.method||'GET').toUpperCase();if(!['GET','HEAD','POST','PATCH','PUT','DELETE'].includes(method))throw new Error('Unsupported backend method');
  if(typeof request.body!=='string'||new TextEncoder().encode(request.body).length>131072)throw new Error('Backend request body exceeds 128 KiB');
@@ -54,7 +55,7 @@ export class SupabaseBackend{
   const info=await this.client.call('backend.info',{},signal);this.config={url:SUPABASE_ORIGIN,anonKey:info.anonKey};this.enabled=true;
   await this.installClient(signal,true);
   await this.ready(signal);const health=await this.http({url:SUPABASE_ORIGIN+'/auth/v1/health',method:'GET',headers:[],body:''},signal);if(health.status!==200)throw new Error('Supabase Auth did not pass its health check');
-  this.onEnabled();return {enabled:true,scope:info.scope,services:info.services,module:'src/supabase.js',instructions:'Import {supabase} from ./supabase.js. Apply migrations before querying tables. Email/password signup is local development, with no email delivery. Use RLS auth.uid() policies.'};
+  this.onEnabled();return {enabled:true,scope:info.scope,services:info.services,module:'src/supabase.js',instructions:'Import {supabase} from ./supabase.js. Apply migrations before querying tables. Email/password signup is local development, with no email delivery. Password recovery email is unavailable in this preview; never claim an email was sent. Use RLS auth.uid() policies.'};
  }
  async installClient(signal,initialize=false){
   if(!this.sourceClient)return;

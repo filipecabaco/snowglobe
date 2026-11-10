@@ -201,5 +201,8 @@ Individually authenticated users are limited to three gateway sessions by defaul
 (factory option `userMaxSessions`, validated from 1 to 10). Creating another
 session without its existing cookie is refused at capacity; rotation using the
 existing session remains available. Disconnect unused sessions or wait for their
-one-hour expiry. The gateway also retains its total-session and Codex-runtime
+one-hour idle expiry. Active Codex tasks are kept until completion, cancellation
+or the explicit task deadline; ordinary authenticated requests renew the idle
+lease. Saved authorization is resumed on direct Codex requests when the hourly
+session cookie expires. The gateway also retains its total-session and Codex-runtime
 caps. These controls do not replace operator monitoring or provider-side limits.

@@ -45,13 +45,13 @@ try{
   await frame.getByRole('button',{name:'Sign out',exact:true}).click();await frame.getByRole('button',{name:'Log in',exact:true}).waitFor();await auth(alice,'Log in');await frame.getByText('Rolls: 1',{exact:true}).waitFor();console.log('PASS real password login restores the account roll log');
   if(!backupOnly){
   await page.evaluate(()=>{const original=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key==='snowglobe-builder-checkpoint-v1')throw new DOMException('Storage full','QuotaExceededError');return original.call(this,key,value);};});
-  await page.getByRole('button',{name:'Save VM',exact:true}).click();await page.waitForFunction(()=>document.getElementById('status').textContent==='Source and Supabase checkpoints saved in this browser',null,{timeout:720000});console.log('PAIRED_CHECKPOINT_SAVED');
+  await page.locator('#save').click();await page.waitForFunction(()=>document.getElementById('status').textContent==='Source and Supabase checkpoints saved in this browser',null,{timeout:720000});console.log('PAIRED_CHECKPOINT_SAVED');
   await page.reload();await page.waitForFunction(()=>window.testBuilder?.().backend);frame=page.frameLocator('#preview iframe');await frame.getByText(alice,{exact:true}).waitFor();await frame.getByText('Rolls: 1',{exact:true}).waitFor();
   assert.deepEqual(errors,[]);console.log('PASS paired VM reload preserves real Auth session and database roll history with localStorage quota exhausted');
   // A failed source capture after the database is saved must recover newer source,
   // not silently restore the older VM checkpoint or initialize the starter.
   await page.evaluate(async()=>{const {api,client}=testBuilder();await client.call('project.initialize');const file=await client.call('fs.read',{path:'src/App.jsx'});await client.call('fs.write',{path:file.path,version:file.version,text:file.text.replace('Supabase dice','Recovered dice work')});const suspend=api.suspend;api.suspend=runtime=>{if(runtime==='web')throw new Error('Injected source capture failure');return suspend(runtime);};});
-  await page.getByRole('button',{name:'Save VM',exact:true}).click();await page.waitForFunction(()=>document.getElementById('stop').disabled);
+  await page.locator('#save').click();await page.waitForFunction(()=>document.getElementById('stop').disabled);
   assert.match(await page.locator('#status').textContent(),/source recovery copy is saved/);
   await page.reload();await page.waitForFunction(()=>document.getElementById('status').textContent.includes('Source recovered'));
   await page.getByRole('button',{name:'Rebuild preview'}).click();await page.locator('#approval').waitFor({state:'visible'});await page.waitForFunction(()=>document.querySelector('#approval [data-title]').textContent==='Recover saved source');assert.match(await page.locator('#approval [data-content]').textContent(),/Recovered dice work/);await page.locator('#approval [data-approve]').click();await page.waitForFunction(()=>document.querySelector('#approval').open&&document.querySelector('#approval [data-title]').textContent!=='Recover saved source');assert.match(await page.locator('#approval [data-content]').textContent(),/20261108000000_dice_rolls.sql/);await page.locator('#approval [data-approve]').click();await page.waitForFunction(()=>document.getElementById('stop').disabled,null,{timeout:720000});
@@ -59,7 +59,7 @@ try{
   console.log('PASS failed source capture recovers latest source, account and roll history after reload');
   }
   // Restore actual downloaded source/database VM files into an isolated project.
-  await page.getByRole('button',{name:'Save VM',exact:true}).click();await page.waitForFunction(()=>document.getElementById('status').textContent==='Source and Supabase checkpoints saved in this browser',null,{timeout:720000});
+  await page.locator('#save').click();await page.waitForFunction(()=>document.getElementById('status').textContent==='Source and Supabase checkpoints saved in this browser',null,{timeout:720000});
   async function downloadBackup(selector,review=false){console.log('BACKUP_DOWNLOAD_START',selector);const download=page.waitForEvent('download');await page.locator(selector).click();if(review){await page.locator('#approval').waitFor({state:'visible'});await page.locator('#approval [data-approve]').click();}const result=await download;await page.waitForFunction(()=>document.getElementById('stop').disabled);const destination=path.join(backupDirectory,path.basename(result.suggestedFilename()));await result.saveAs(destination);console.log('BACKUP_DOWNLOAD_SAVED',selector,(await fs.stat(destination)).size);return destination;}
   await page.locator('#vm-backups').evaluate(element=>element.open=true);
   const manifestPath=await downloadBackup('#backup-manifest'),sourcePath=await downloadBackup('#backup-web',true),databasePath=await downloadBackup('#backup-supabase',true),originalUrl=page.url();

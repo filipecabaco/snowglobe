@@ -1,3 +1,4 @@
+import {folderWorkspace} from './storage-context.js';
 import {requireApproval} from './approvals.js';
 // A small source/preview recovery record is committed before capturing either large VM.
 // Separate IndexedDB storage avoids localStorage's small string quota.
@@ -11,6 +12,7 @@ export function needsSourceRecovery(recovery,slot){
 }
 export async function checkpointStore(mode, value, projectId='local-builder'){
  validProjectId(projectId);
+ if(folderWorkspace())return folderWorkspace().checkpoint(mode,value,projectId);
  const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('snowglobe-builder-recovery',1);request.onupgradeneeded=()=>request.result.createObjectStore('checkpoints');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
  try{return await new Promise((resolve,reject)=>{const tx=db.transaction('checkpoints',mode),store=tx.objectStore('checkpoints'),key=projectId==='local-builder'?'latest':projectId;const request=mode==='readonly'?store.get(key):value===null?store.delete(key):store.put(value,key);let result;request.onsuccess=()=>result=request.result;tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('Source recovery save was aborted'));});}finally{db.close();}
 }

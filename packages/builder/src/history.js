@@ -1,3 +1,4 @@
+import {folderWorkspace} from './storage-context.js';
 import {fileBytes,sameFile,fileDescription} from './source-files.js';
 import {requireApproval} from './approvals.js';
 import {validProjectId} from './projects.js';
@@ -24,6 +25,7 @@ export async function restoreVersion(client,before,target,{approve,signal}={}){
 }
 export async function historyStore(projectId,entry){
  validProjectId(projectId);
+ if(folderWorkspace())return folderWorkspace().history(projectId,entry);
  const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('snowglobe-builder-history',1);r.onupgradeneeded=()=>r.result.createObjectStore('versions');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
  try{return await new Promise((resolve,reject)=>{
   const tx=db.transaction('versions',entry!==undefined?'readwrite':'readonly'),store=tx.objectStore('versions');let versions=[];

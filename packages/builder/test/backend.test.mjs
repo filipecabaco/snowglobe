@@ -76,3 +76,5 @@ test('Backend None rejects setup, SQL and preview requests before any guest work
  await assert.rejects(backend.http(request('/rest/v1/profiles')),/disabled/);
  assert.equal(operations,0);assert.equal(approvals,0);assert.equal(backend.enabled,false);
 });
+
+test('local password recovery explains the missing email capability without allowing a new backend route',()=>{assert.throws(()=>validateBackendRequest(request('/auth/v1/recover',{method:'POST',body:'{}'}),jwt('anon')),/Password recovery emails are not configured/);});

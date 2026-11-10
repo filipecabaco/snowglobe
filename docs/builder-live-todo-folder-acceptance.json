@@ -1,0 +1,129 @@
+{
+  "status": "passed-with-limitations",
+  "completedAt": "2026-11-10T17:41:16.700Z",
+  "prompt": "Build a ToDo app.  users should be able to create an account, log in, log out, recover lost password, etc.  once logged in a user should be able to add, edit, delete todo items, mark them done, etc. Make the UI very simple but professional looking",
+  "inference": {
+    "engine": "official Codex",
+    "model": "gpt-6.1-sol",
+    "billing": "user-approved ChatGPT subscription",
+    "apiKeyFallback": false
+  },
+  "folder": {
+    "kind": "native showDirectoryPicker FileSystemDirectoryHandle",
+    "platform": "development-machine Linux filesystem",
+    "opfsSubstitute": false,
+    "sharedRoot": true,
+    "projectSubfolders": 2,
+    "filesRemainAfterBrowserShutdown": true
+  },
+  "checks": [
+    "exact-prompt-generation-with-Automatic-framework-and-backend",
+    "real-signup-login-logout",
+    "todo-create-edit-complete",
+    "delete-cancel-and-confirm-after-one-live-repair",
+    "two-user-read-isolation",
+    "cross-user-write-denial",
+    "source-and-database-checkpoint-checksums",
+    "signed-in-account-and-completed-todo-restored-after-reload",
+    "second-project-created-without-another-folder-picker",
+    "switch-back-restored-signed-in-account-and-task",
+    "saved-ChatGPT-authorization-restored-after-gateway-restart-and-hourly-cookie-removal",
+    "explicit-test-disconnect-and-subsequent-401-confirmed"
+  ],
+  "repairs": [
+    {
+      "issue": "Initial generated app used blocked native confirm(), making Delete a no-op",
+      "resolution": "One live follow-up replaced it with an in-app confirmation; Builder generation instructions now prohibit native dialogs"
+    },
+    {
+      "issue": "Image downloads used fixed total deadlines and recovery could duplicate a warm-pack request",
+      "resolution": "Use stalled-I/O deadlines, share warming and retain bounded retries; covered by download regressions"
+    },
+    {
+      "issue": "Absolute session expiry could stop active Codex work and direct requests did not restore saved authorization",
+      "resolution": "Rolling idle leases, active-turn protection, direct saved-session restoration, SSE heartbeats and explicit 30-minute task timeout; clock-driven regressions and live credential resumption passed"
+    }
+  ],
+  "limitations": [
+    "Password recovery email is not configured in browser-local Supabase; the generated UI discloses no email delivery and the request is unavailable",
+    "Native folder testing was on the development machine, not the user device",
+    "Initial exact-prompt output required one Delete UI repair; it was not a first-attempt full-feature pass",
+    "The live run began before subsequent generation-instruction, status-message and gateway-session fixes; focused regression suites cover those changes"
+  ],
+  "cleanup": {
+    "explicitDisconnectConfirmed": true,
+    "subsequentCodexStatus": 401,
+    "isolatedBrowserClosed": true
+  },
+  "checkpoints": [
+    {
+      "runtime": "web",
+      "bytes": 100381324,
+      "build": "487b22319fbb60ae0fda3214577e1ec7663cab396cf02d376a85536be994e231",
+      "checksumVerified": true
+    },
+    {
+      "runtime": "supabase",
+      "bytes": 91633024,
+      "build": "e54829bbc5e657ae4ae58fd3300602970a24c7420ae475d4dbb08ebce04a6fd3",
+      "checksumVerified": true
+    }
+  ],
+  "source": [
+    {
+      "path": ".gitignore",
+      "bytes": 18,
+      "sha256": "c8015948b6eaefde5eaa3862f2fe5ce0245fcde4d6e66f7441dcdcbbed46e652"
+    },
+    {
+      "path": "index.html",
+      "bytes": 267,
+      "sha256": "194dc25eb4f613fd5c3a72fb1e76e715d99f2a507f8865a96b837a1842475d4d"
+    },
+    {
+      "path": "package-lock.json",
+      "bytes": 62431,
+      "sha256": "bfc6dd0f5b869bf6a76e2f9d87e5c1c99d6383149b2d706cc1e336e96f12a861"
+    },
+    {
+      "path": "package.json",
+      "bytes": 639,
+      "sha256": "b727fff348e34ef80d2c1dc890871bb4f916b7b51e23aa93f732f3d3d1c20011"
+    },
+    {
+      "path": "src/App.jsx",
+      "bytes": 15360,
+      "sha256": "817b47614fe06878b02be236c73e3e04baec9b4bbc1e24d6179b7db50ead7cb4"
+    },
+    {
+      "path": "src/main.jsx",
+      "bytes": 235,
+      "sha256": "9cf42fcf2e81adc14e3b2ef2164f3d1f9d38cce49082c97c5bb3267a6154eff5"
+    },
+    {
+      "path": "src/styles.css",
+      "bytes": 11155,
+      "sha256": "8d9b0dd4d22a715d612f952f2a454b6b4b58d93c18e9d3dbd327fa4a3ea112ad"
+    },
+    {
+      "path": "src/supabase.js",
+      "bytes": 1265,
+      "sha256": "6d470c9b2a1bf566015a1e874177ee82fcf96dce2c9f8f83d052bd11f5c93e56"
+    },
+    {
+      "path": "supabase/migrations/20261110000100_create_todos.sql",
+      "bytes": 700,
+      "sha256": "162f08197815e413cb0c5404f4701ddbaf45183b5b4ccd14b8f553243f5ba504"
+    },
+    {
+      "path": "tsconfig.json",
+      "bytes": 413,
+      "sha256": "ead7c9726843643c19fa3738a26fb21ee4bbb55149b35036d34535869110db22"
+    },
+    {
+      "path": "vite.config.js",
+      "bytes": 722,
+      "sha256": "38628e782728a33761d26294000f1bd4afa8e76c885ce85d6a5aba92d0c98b3b"
+    }
+  ]
+}

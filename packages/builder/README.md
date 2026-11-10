@@ -333,3 +333,94 @@ resize, interrupt and authentication; the fast Chromium/WebKit view test checks
 layout, iframe retention and console controls. The optional
 `node packages/builder/test/console-vm-browser.mjs` exercises real source/database
 VM consoles and psql without any model credentials.
+
+### Shared Builder folder
+
+In **Projects**, choose **Choose / reconnect Builder folder…** once. Builder
+creates `snowglobe-builder.json` and a stable `project-<id>/` subfolder for each
+project. **New project**, rename, source duplication and the project selector use
+that root without asking for a new location. Switching saves the current prepared
+project before navigating; the page reload releases its VM memory and locks.
+Project IDs keep folder paths stable across renames. Connecting an empty folder
+copies the current browser project; it does not move or delete other browser-only
+projects. Connecting an existing Builder folder discovers its projects.
+**Use browser storage** returns to browser-only projects and keeps folder files.
+
+Each project has a visible `snowglobe-project.json` naming the app and framework.
+The storage indicator shows its exact subfolder path. Project folders contain
+ordinary source/assets/manifests/migrations, with private
+project metadata, bounded source history, chat/preview state and VM checkpoints
+under `.snowglobe/`. Source changes save automatically after changed Builder
+tasks. **Save project** captures source and database VMs and publishes their
+matching checkpoint references together. Incomplete captures leave the last
+published VM pair available. Checkpoints are immutable checksummed `.snowglobe`
+files; alternating checksummed project records retain recovery generations.
+Unreferenced checkpoint files are cleaned after successful source/project saves.
+There is no hosted database, continuous background database backup or logical
+SQL/CSV export in this feature. Database records made after the last completed
+Save project require another Save; closing the browser stops the VMs.
+
+The selected directory handle is remembered in IndexedDB; project content is
+read from the folder on reopen, independently of browser project records.
+Clearing site data requires choosing the folder again. Lost permission, missing
+files, invalid metadata and incompatible VM builds report errors instead of
+silently switching to browser storage. One tab owns a connected workspace at a
+time. Folder access targets browsers supporting `showDirectoryPicker` (desktop
+Chrome/Edge); unsupported browsers retain browser saves and ZIP/VM downloads.
+Tests inject the chooser with real OPFS directory handles: they exercise storage
+and UI behavior, not the OS picker or platform-specific permission persistence.
+
+External source edits are read when a project reopens and reviewed through the
+existing source recovery flow before changing the VM. Edits made on disk while
+Builder has the project open block subsequent source saves. There is no live
+filesystem watcher or automatic conflict merge. Source writes span individual
+files, not a directory-wide atomic transaction; after interruption the complete
+source recovery/history records in `.snowglobe/` remain available. Existing
+Builder limits apply: 500 files, 256 KiB per file and 600 KiB total source. Caches,
+Git and conventional credential files are excluded. Do not put application source
+under the reserved `.snowglobe/` path or use the reserved `snowglobe-project.json`
+filename.
+
+Keep the folder private: VM checkpoints can contain Auth accounts, database rows
+and service keys; chat/history can contain private text. Provider/model preferences
+are portable project metadata, but AI keys and OAuth tokens are not written to
+the folder. Existing encrypted gateway credentials and Codex-owned authorization
+remain separate. Connecting this folder to a different gateway does not transfer
+AI authorization. Review what is included before sharing or committing a folder.
+
+Run `npm run test:browser:folders --prefix packages/builder` for server-independent
+storage/UI regressions. `node packages/builder/test/folder-vm-browser.mjs` exercises
+an actual source VM against the development runtime (override `BUILDER_URL`).
+
+Fresh VMs may not have `/workspace` yet. Project inspection distinguishes this
+from an initialized project; framework initialization creates the complete
+workspace and dependency links. A first prompt with an explicitly selected
+Supabase backend prepares its source framework before installing the SDK.
+AI-triggered Supabase enable/schema/migration tools also prepare a missing source
+workspace in Automatic mode, respecting any selected framework. Other workspace
+AI tools require `initialize_framework` first, and empty-project
+source duplication also initializes before exporting. Missing-workspace errors
+return that initialization instruction rather than a raw `lstat` exception.
+`test/first-project-browser.mjs` covers the cold first-prompt ordering without AI
+credentials; the workspace unit suite checks the actual guest dispatcher against
+a missing directory without creating an incomplete workspace.
+
+Environment image downloads now use an inactivity deadline while streaming, so
+large files that continue to arrive are not aborted merely for exceeding a total
+15/60-second transfer duration. Background warm-pack loading and explicit file
+recovery share an in-flight download, and a warmed live VM is not filled again.
+A genuinely stalled download still times out, retries within the existing bound,
+and identifies the affected file. These changes repair image caches in place;
+they do not reset projects or replace source/database checkpoints. The focused
+regressions are in `internal/site/download.test.cjs`.
+
+Codex gateway sessions now renew their one-hour idle lease on authenticated
+requests. Active turns are not expired by the session sweeper. Remembered native
+authorization is resumed for direct status, turn and tool-result requests even
+when the hourly session cookie is gone; the long-lived profile capability is
+still required. Explicit Forget continues to delete that authorization. SSE
+heartbeats keep browser-VM tool waits from appearing idle to the proxy. The
+bounded Codex task deadline is 30 minutes, reports a timeout explicitly, and
+retains the AI connection. `test/codex-session.test.mjs` covers rolling leases,
+active-turn/tool-result survival across expiry, direct restoration, Forget and
+timeout reporting.
