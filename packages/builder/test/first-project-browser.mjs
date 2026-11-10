@@ -1,12 +1,14 @@
 // Actual Builder startup/send controls with a fresh VM protocol fixture. No AI
 // credentials or VM image boot: the fixture rejects workspace access until init.
 import {chromium} from '../../../bench/node_modules/playwright/index.mjs';import fs from 'node:fs/promises';import assert from 'node:assert/strict';
+import {runtimeCatalog} from './runtime-catalog-fixture.mjs';
 const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
 try{
  const context=await browser.newContext(),page=await context.newPage();
  await context.route('https://builder.test/**',async route=>{
   const pathname=new URL(route.request().url()).pathname;if(pathname.startsWith('/builder-api/'))return route.fulfill({status:503,contentType:'application/json',body:'{"error":"No provider in fixture"}'});
-  const file=pathname==='/builder/'?'site/builder/index.html':pathname.startsWith('/builder/')?'site'+pathname:pathname==='/agent/runtimes.json'?'dist/agent/runtimes.json':null;if(!file)return route.fulfill({status:404,body:'Not found'});
+  if(pathname==='/agent/runtimes.json')return route.fulfill({json:runtimeCatalog});
+  const file=pathname==='/builder/'?'site/builder/index.html':pathname.startsWith('/builder/')?'site'+pathname:null;if(!file)return route.fulfill({status:404,body:'Not found'});
   let body=await fs.readFile(new URL('../../../'+file,import.meta.url));
   if(file.endsWith('/app.js'))body=body.toString()+`\nwindow.firstProjectFixture=(backendMode='supabase')=>{
    let initialized=false;const calls=[];

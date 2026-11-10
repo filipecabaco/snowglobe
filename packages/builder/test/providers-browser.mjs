@@ -8,15 +8,17 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {createGateway} from '../gateway.mjs';
 import {fixtureProviders,fixtureUsage} from './provider-fixture.mjs';
+import {runtimeCatalog} from './runtime-catalog-fixture.mjs';
 const root=path.resolve(new URL('../../../',import.meta.url).pathname),temporary=await fs.mkdtemp(path.join(os.tmpdir(),'builder-providers-browser-')),requests=[];
 let gateway,context;
 const server=http.createServer(async(req,res)=>{
  if(req.url.startsWith('/builder-api/')){req.url=req.url.slice('/builder-api'.length);gateway.emit('request',req,res);return;}
  const pathname=new URL(req.url,'http://test.local').pathname;
+ if(pathname==='/agent/runtimes.json'){res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify(runtimeCatalog));}
  if(pathname.includes('..')||!/^\/(?:builder|agent|conduit|duckdb|web|supabase|blobs)\//.test(pathname)){res.writeHead(404);return res.end();}
  const name=pathname.endsWith('/')?pathname+'index.html':pathname;
- for(const folder of ['site','dist'])try{
-  let bytes=await fs.readFile(path.join(root,folder,name));
+ try{
+  let bytes=await fs.readFile(path.join(root,'site',name));
   if(name==='/builder/app.js')bytes=Buffer.from(bytes.toString()+"\nwindow.testProviderPrompt=async()=>{await agent.prompt('Say hello');return agent.state.messages;};");
   const type={'.js':'text/javascript','.json':'application/json','.html':'text/html','.css':'text/css','.wasm':'application/wasm','.txt':'text/plain'}[path.extname(name)]||'application/octet-stream';
   res.writeHead(200,{'Content-Type':type,'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp','Cache-Control':'no-store'});return res.end(bytes);

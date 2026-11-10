@@ -4,6 +4,7 @@
 import {chromium} from '../../../bench/node_modules/playwright/index.mjs';
 import fs from 'node:fs/promises';import path from 'node:path';import assert from 'node:assert/strict';
 import {build} from 'esbuild';import {openFixture} from './browser-fixture.mjs';
+import {runtimeCatalog} from './runtime-catalog-fixture.mjs';
 const bundle=await build({stdin:{contents:"export * from './src/folder-workspace.js';export * from './src/storage-context.js';export * from './src/projects.js';export * from './src/checkpoint.js';export * from './src/history.js';export * from './src/vm-backup.js';",resolveDir:new URL('../',import.meta.url).pathname},bundle:true,write:false,format:'esm',platform:'browser'});
 const sessions=await fs.readFile(new URL('../../../internal/site/sessions.js',import.meta.url),'utf8');
 const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
@@ -59,7 +60,8 @@ try{
  await uiContext.route('https://builder.test/**',async route=>{
   const pathname=new URL(route.request().url()).pathname;
   if(pathname.startsWith('/builder-api/'))return route.fulfill({status:503,contentType:'application/json',body:'{"error":"No provider in storage test"}'});
-  let file=pathname==='/builder/'?'site/builder/index.html':pathname.startsWith('/builder/')?'site'+pathname:pathname==='/agent/runtimes.json'?'dist/agent/runtimes.json':null;
+  if(pathname==='/agent/runtimes.json')return route.fulfill({json:runtimeCatalog});
+  let file=pathname==='/builder/'?'site/builder/index.html':pathname.startsWith('/builder/')?'site'+pathname:null;
   if(!file)return route.fulfill({status:404,body:'Not found'});
   const body=file==='site/builder/app.js'?app+'\nwindow.folderTest=()=>({currentProject,folderWorkspace,projectStore,checkpointStore,historyStore,api,busy});':await fs.readFile(path.resolve(new URL('../../../',import.meta.url).pathname,file));
   await route.fulfill({headers:{'Content-Type':file.endsWith('.js')?'text/javascript':file.endsWith('.json')?'application/json':file.endsWith('.css')?'text/css':'text/html','Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'},body});
