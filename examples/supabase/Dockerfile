@@ -68,6 +68,10 @@ RUN supabase init --yes >/dev/null && \
     realtime_env=$(echo ~/.supabase/cache/stack/slim-services/realtime/*/linux-arm64/*/bin/.runtime-env.sh) && \
     test -f "$realtime_env" && grep -q 'RELEASE_MODE:-"embedded"' "${realtime_env%/.runtime-env.sh}/realtime" && \
     echo 'export RELEASE_MODE="${RELEASE_MODE:-interactive}"' >> "$realtime_env" && \
+    echo "export ELIXIR_ERL_OPTIONS='+fnu +S 1:1 +SDio 1 +sbwt none +sbwtdcpu none +sbwtdio none +Mea min +MMmcs 0 +MBacul 0'" >> "$realtime_env" && \
+    auth_env=$(echo ~/.supabase/cache/stack/slim-services/auth/*/linux-arm64/*/bin/.runtime-env.sh) && \
+    test -f "$auth_env" && \
+    printf '%s\n' 'export GOMEMLIMIT=32MiB GOGC=25 GOMAXPROCS=1' >> "$auth_env" && \
     cd ~/.supabase/cache/stack/slim-services/postgres/*/linux-arm64/*/ && \
     test -x bin/postgres && \
     rm -rf lib/wrappers-*.so share/postgresql/extension/wrappers* \
@@ -110,7 +114,7 @@ CMD ["/usr/local/bin/supabase-demo"]
 # is about 200 MB of it, and the CLI keeps a Bun process per service), which leaves room for the
 # programs' pages and a couple of notes runs at once
 LABEL snowglobe.title="Supabase in the browser" \
-      snowglobe.memory="768" snowglobe.cpus="2" \
+      snowglobe.memory="448" snowglobe.cpus="2" \
       snowglobe.network="fetch" \
       snowglobe.agent="true" \
       snowglobe.agent-purpose="Supabase for web app building: Postgres, Auth and the Data API, with a preview" \
