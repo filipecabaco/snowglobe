@@ -158,8 +158,8 @@ func TestRunBuildsASiteWithDocker(t *testing.T) {
 			t.Errorf("%s was kept", f)
 		}
 	}
-	if js, _ := os.ReadFile(filepath.Join(out, "armless", "armless.js")); !strings.Contains(string(js), "o.memory_mb * 3") {
-		t.Errorf("armless.js not patched: %s", js)
+	if js, _ := os.ReadFile(filepath.Join(out, "armless", "armless.js")); !strings.Contains(string(js), "o.memory_mb + 1024") {
+		t.Errorf("armless.js changed on the way: %s", js)
 	}
 }
 
