@@ -287,6 +287,8 @@ test('run: a failing command fails its step and stops runAll', async () => {
   assert.equal(s.status, 'failed');
   assert.match(s.error, /command 1 exited 3/);
   assert.match(s.output, /out of mkdir/);
+  assert.match(s.error, /after \d+\.\ds$/);
+  assert.match(s.output, /\[exit 3 after \d+\.\ds\]/);
   assert.equal(api.log.length, 1);
   assert.equal(run.state('service/web').status, 'pending');
 });
