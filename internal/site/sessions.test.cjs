@@ -62,6 +62,20 @@ check('capture does not restart a previously paused guest', async () => {
   assert.deepEqual(await S.capture(vm), new Uint8Array([42]));
   assert.equal(runs, 0);
 });
+check('capture takes the snapshot in pieces where the machine hands it out so', async () => {
+  const pieces = [new Uint8Array([1, 2]), new Uint8Array([3])];
+  const vm = { running: false, stop: async () => {}, run: () => {},
+    save_state: async () => { throw new Error('the one buffer, not wanted'); },
+    save_state_pieces: async () => pieces };
+  assert.equal(await S.capture(vm), pieces);
+});
+check('pieces pack to the snapshot they make up', async () => {
+  const pieces = [new Uint8Array(6000).fill(7), new Uint8Array(4000).fill(9)];
+  const whole = new Uint8Array(10000);
+  whole.fill(7, 0, 6000);
+  whole.fill(9, 6000);
+  assert.deepEqual(await S.unpackState(await S.packState(pieces)), whole);
+});
 check('gzip snapshots decode to the original bytes', async () => {
   const bytes = new Uint8Array(10000).fill(42);
   const packed = await S.packState(bytes);
