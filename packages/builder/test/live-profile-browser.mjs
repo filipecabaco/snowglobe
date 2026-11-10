@@ -51,7 +51,7 @@ try{
  await page.goto(process.env.BUILDER_URL||'https://aspire.tailb03e.ts.net:18445/builder/');await page.waitForFunction(()=>document.getElementById('status').textContent!=='Loading Builder…');
  timer=setInterval(async()=>{try{console.log('STATUS',await page.locator('#status').textContent());}catch{}},15000);
  if(!fixture){
- await page.locator('#settings').evaluate(el=>el.open=true);await page.locator('#codex-connect').click();await idle(90000);
+ await page.locator('#settings').evaluate(el=>el.open=true);await page.locator('#provider').selectOption('openai');await page.locator('#provider-method').selectOption('codex');await page.locator('#connect').click();await idle(90000);
  const userCode=(await page.locator('#codex-code').textContent()).trim(),verificationUrl=await page.locator('#codex-link').getAttribute('href');
  assert(userCode);assert.equal(verificationUrl,'https://auth.openai.com/codex/device');console.log('SIGN_IN',JSON.stringify({verificationUrl,userCode}));
  const loginDeadline=Date.now()+10*60*1000;
@@ -99,7 +99,7 @@ async function shutdown(){
  shutdownPromise=(async()=>{
  clearInterval(timer);const disconnected=await page.evaluate(async()=>{const r=await fetch('/builder-api/disconnect',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});return r.ok||r.status===401;}).catch(()=>false);
  if(disconnected)console.log('PASS test provider session disconnected');
- await fs.writeFile(new URL('../../../.local-dev/'+resultName,import.meta.url),JSON.stringify({status:passed&&disconnected?'passed':'failed',mode:fixture?'deterministic-fixture':'live-subscription',diagnosticPrefix:diagnosticPrefix.pathname,model:await page.locator('#codex-model').inputValue().catch(()=>null),checks,disconnected,completedAt:new Date().toISOString(),browserArtifactSha256:createHash('sha256').update(bundle).digest('hex')},null,2)+'\n',{mode:0o600});
+ await fs.writeFile(new URL('../../../.local-dev/'+resultName,import.meta.url),JSON.stringify({status:passed&&disconnected?'passed':'failed',mode:fixture?'deterministic-fixture':'live-subscription',diagnosticPrefix:diagnosticPrefix.pathname,model:await page.locator('#model').inputValue().then(value=>JSON.parse(value)[1]).catch(()=>null),checks,disconnected,completedAt:new Date().toISOString(),browserArtifactSha256:createHash('sha256').update(bundle).digest('hex')},null,2)+'\n',{mode:0o600});
  await browser.close();
 })();return shutdownPromise;
 }

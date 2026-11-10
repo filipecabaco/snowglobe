@@ -96,7 +96,7 @@ async function refreshUsage(){
  const element=$('ai-usage');if(!element)return;
  try{const usage=await post(engine==='pi'&&piConnectionId?'providers/usage':'usage');element.textContent=usage.requests+' / '+usage.limits.maxRequests+' AI requests this session'+(usage.metering==='request-count-only'?(engine==='codex'?' · uses your ChatGPT plan allowance':' · provider account usage · request count only'):usage.accountingComplete===false?' · usage incomplete; reconnect before continuing':' · '+usage.tokens.toLocaleString()+' tokens · estimated $'+usage.estimatedCostUsd.toFixed(3)+' of $'+usage.limits.maxCostUsd.toFixed(2)+' session limit');}catch{element.textContent='';}
 }
-function controls(value){busy=value;providerSettings?.setBusy(value);for(const id of ['guide-codex','guide-api','guide-skip','backup-import','backup-manifest','backup-web','backup-supabase','send','prepare','counter','build','save','export','connect','disconnect','retry','codex-connect','codex-refresh','edit-demo','backend','import-skill','history','refresh-skills','project-new','project-rename','project-duplicate','project-delete','project-open','extension-import','extension-example','framework']){const element=$(id);if(element)element.disabled=value;}$('framework').disabled=value||projectPrepared||!!api?._get('web').slot.saved||!!recoveryFiles;$('stop').disabled=!value;workspaceViews?.configure({ready:workspaceReady,busy:value,database:currentProject?.backend!=='off'});if(!value)queueMicrotask(maybeConnectConsole);}
+function controls(value){busy=value;providerSettings?.setBusy(value);for(const id of ['guide-api','guide-skip','backup-import','backup-manifest','backup-web','backup-supabase','send','prepare','counter','build','save','export','connect','retry','codex-refresh','edit-demo','backend','import-skill','history','refresh-skills','project-new','project-rename','project-duplicate','project-delete','project-open','extension-import','extension-example','framework']){const element=$(id);if(element)element.disabled=value;}$('framework').disabled=value||projectPrepared||!!api?._get('web').slot.saved||!!recoveryFiles;$('stop').disabled=!value;workspaceViews?.configure({ready:workspaceReady,busy:value,database:currentProject?.backend!=='off'});if(!value)queueMicrotask(maybeConnectConsole);}
 async function task(fn){if(busy)return;controls(true);startProgress();abort=new AbortController();const before=revision;let failed=false;try{await vmConsole?.disconnect();await fn();}catch(e){failed=true;status(abort.signal.aborted?'Stopped. The last successful preview is kept.':e.message);log(e.message,'error');}finally{if(!leavingProject&&projectPrepared&&revision!==before&&revision!==persistedRevision){try{const source=await client.call('project.export');const lastTask={state:abort.signal.aborted?'stopped':failed?'failed':'completed',finishedAt:Date.now(),durationMs:Math.round(performance.now()-progressStarted)};await projectCheckpoint('readwrite',{savedAt:Date.now(),files:source.files,messages:agent?.state.messages??savedMessages,preview:lastGood,previewData,backendConfig:backend.enabled?backend.config:undefined,lastTask});try{await historyStore(projectId,{label:'After '+lastTask.state+' task',files:source.files,lastTask});}catch(error){throw new Error('Source recovery saved, but task history failed: '+error.message);}persistedRevision=revision;$('recovery-status').textContent='Source recovery saved automatically. Save VM also preserves database state.';}catch(error){failed=true;$('recovery-status').textContent='Automatic source recovery failed: '+error.message+'. Export source or retry Save VM.';log($('recovery-status').textContent,'error');}}if(agent){try{$('usage').textContent=usageLabel(await post(engine==='pi'&&piConnectionId?'providers/usage':'usage'));}catch{$('usage').textContent='Usage unavailable';}}finishProgress(failed);controls(false);}}
 function reportPreviewError(error){status(error.message);$('work-progress').hidden=false;$('work-progress').classList.add('failed');$('progress-stage').textContent=error.message;$('progress-activity').textContent='Check build details or ask the AI to fix the startup error.';log(error.message,'error');}
 async function preview(html){
@@ -171,7 +171,7 @@ function renderExtensions(){$('extension-list').replaceChildren();for(const exte
 $('extension-example').onclick=()=>task(async()=>{await extensions.register(projectSummaryExtension,abort.signal);renderExtensions();status('Project summary extension enabled');});
 $('extension-import').onclick=()=>$('extension-file').click();
 $('extension-file').onchange=()=>task(async()=>{const file=$('extension-file').files[0];if(!file)return;try{if(file.size>40000)throw new Error('Extension manifest exceeds 40 KiB');await extensions.register(JSON.parse(await file.text()),abort.signal);renderExtensions();status('Reviewed extension enabled for this session');}finally{$('extension-file').value='';}});
-for(const [id,target] of [['guide-codex','codex-connect'],['guide-api','provider']])$(id).onclick=()=>{$('settings').open=true;$(target).scrollIntoView({block:'center'});$(target).focus();};
+$('guide-api').onclick=()=>{$('settings').open=true;$('provider').scrollIntoView({block:'center'});$('provider').focus();};
 $('guide-skip').onclick=()=>task(async()=>{const updated={...currentProject,onboardingSeen:true};await projectStore('put',updated);currentProject=updated;$('connection-guide').hidden=true;status('Try the counter, or open AI settings whenever you are ready.');});
 async function rememberModel(engine,id,options={}){try{currentProject={...currentProject,onboardingSeen:true,ai:modelPreference(engine,id,options)};$('connection-guide').hidden=true;await projectStore('put',currentProject);}catch{log('Model preference could not be saved. Your AI connection remains available for this tab.','tool');}}
 async function usePiConnection({model,connectionId,thinking,connection}){
@@ -183,13 +183,15 @@ async function usePiConnection({model,connectionId,thinking,connection}){
 }
 function clearAiConnection(){savedMessages=agent?.state.messages??savedMessages;agent=null;connectedModel=null;piConnectionId=null;$('ai-indicator').textContent='AI not connected';$('ai-usage').textContent='';status('Saved connection removed');}
 async function connectionAction(fn){if(busy)return;controls(true);try{await fn();}catch(error){status(error.message);$('provider-feedback').textContent=error.message;}finally{controls(false);}}
-providerSettings=new ProviderSettings({post,run:connectionAction,onPi:usePiConnection,onCodex:(info,choice)=>useCodex(info,choice),preference:()=>currentProject?.ai,onClear:clearAiConnection});
+providerSettings=new ProviderSettings({post,run:connectionAction,onPi:usePiConnection,onCodex:(info,choice)=>useCodex(info,choice),onNativeConnect:connectCodex,preference:()=>currentProject?.ai,onClear:clearAiConnection});
 async function useCodex(info,choice={}){
  savedMessages=agent?.state.messages??savedMessages;piConnectionId=null;
- engine='codex';$('ai-indicator').textContent='Codex · ChatGPT plan';const select=$('codex-model');select.replaceChildren(...info.models.map(m=>new Option(m.name,m.id,m.isDefault,m.isDefault)));
- if(currentProject.ai?.engine==='codex'&&info.models.some(model=>model.id===currentProject.ai.id))select.value=currentProject.ai.id;if(choice.id)select.value=choice.id;const desiredThinking=choice.thinking||currentProject.ai?.thinking||'default',levels=info.models.find(m=>m.id===select.value)?.thinkingLevels||['default'],thinking=levels.includes(desiredThinking)?desiredThinking:'default';await rememberModel('codex',select.value,{connectionId:'codex',thinking});
- connectedModel={id:select.value};let paragraph;
- agent=new CodexAgent({projectId,model:select.value,post,onText:(delta,reset)=>{if(reset){paragraph=null;return;}if(delta)firstModelOutput();paragraph??=log('');paragraph.textContent+=delta;},onTool:firstModelOutput,execute:async(name,args,signal)=>projectTool(name.replace(/^vm_/,''),args,async()=>{
+ engine='codex';$('ai-indicator').textContent='Codex · ChatGPT plan';
+ const preferred=currentProject.ai?.engine==='codex'?currentProject.ai.id:null,id=choice.id||(info.models.some(m=>m.id===preferred)?preferred:info.models.find(m=>m.isDefault)?.id||info.models[0]?.id);
+ if(!id)throw Error('No Codex models are available');
+ const desiredThinking=choice.thinking||currentProject.ai?.thinking||'default',levels=info.models.find(m=>m.id===id)?.thinkingLevels||['default'],thinking=levels.includes(desiredThinking)?desiredThinking:'default';await rememberModel('codex',id,{connectionId:'codex',thinking});
+ connectedModel={id};let paragraph;
+ agent=new CodexAgent({projectId,model:id,post,onText:(delta,reset)=>{if(reset){paragraph=null;return;}if(delta)firstModelOutput();paragraph??=log('');paragraph.textContent+=delta;},onTool:firstModelOutput,execute:async(name,args,signal)=>projectTool(name.replace(/^vm_/,''),args,async()=>{
    name=name.replace(/^vm_/,'');
    if(++calls>24)throw new Error('Tool limit reached');
    if(name==='list_frameworks')return {templates:frameworkChoices(),selected:currentProject.template||'auto',initialized:projectPrepared};
@@ -212,21 +214,19 @@ async function useCodex(info,choice={}){
    if(name==='apply_migration'){const result=await backend.migrate(args,signal);if(!result.unchanged)revision++;return result;}
    if(name==='build_preview')return build();throw new Error('Unsupported VM tool');
  })});
- agent.thinking=thinking;agent.state.messages=[...savedMessages];providerSettings.setNative(info,select.value,thinking);
- select.onchange=()=>{agent.model=select.value;connectedModel.id=select.value;void rememberModel('codex',select.value);};
- $('codex-login').hidden=true;$('codex-connected').hidden=false;$('codex-account').textContent='Connected · '+(info.account.email||'ChatGPT account')+' · '+(info.account.planType||'subscription');
+ agent.thinking=thinking;agent.state.messages=[...savedMessages];providerSettings.setNative(info,id,thinking);
+ $('codex-login').hidden=true;
  $('settings').open=false;
  status('Codex connected · ChatGPT plan usage');
 }
-$('codex-connect').onclick=()=>task(async()=>{
+async function connectCodex(){
  const result=await post('codex/connect',{remember:true});if(result.connected){await useCodex(result);return;}
  $('codex-login').hidden=false;$('codex-code').textContent=result.userCode;$('codex-link').href=result.verificationUrl;
  $('codex-copy-field').hidden=true;$('codex-copy-status').textContent='';
  status('Open the sign-in link, approve the code, then select Check connection');
-});
+}
 $('codex-copy').onclick=()=>copySignInCode({text:$('codex-code').textContent,field:$('codex-copy-field'),feedback:$('codex-copy-status'),hideField:true});
-$('codex-refresh').onclick=()=>task(async()=>{const result=await post('codex/status');if(result.connected)await useCodex(result);else status(result.login?.error||'Waiting for ChatGPT approval. Complete sign-in, then check again.');});
-$('disconnect').onclick=()=>connectionAction(async()=>{await post('disconnect');providerSettings.clearNative();if(engine==='codex')clearAiConnection();$('codex-connected').hidden=true;$('codex-login').hidden=true;status('Saved ChatGPT connection removed');});
+$('codex-refresh').onclick=()=>connectionAction(async()=>{const result=await post('codex/status');if(result.connected)await useCodex(result);else status(result.login?.error||'Waiting for ChatGPT approval. Complete sign-in, then check again.');});
 $('prepare').onclick=()=>task(async()=>{builds=0;await prepare();await build();});
 $('framework').onchange=()=>task(async()=>{if(projectPrepared)throw new Error('Create a new project to change frameworks');currentProject={...currentProject,template:$('framework').value};await projectStore('put',currentProject);status('Framework selected · prepare the environment or describe your app');});
 $('backend').onchange=()=>task(async()=>{currentProject={...currentProject,backend:$('backend').value};await projectStore('put',currentProject);if(currentProject.backend==='supabase'){builds=0;await prepare();await backend.enable(abort.signal);if(lastGood)await build();else status('Supabase Auth and database ready · describe your app');}else if(currentProject.backend==='off'){$('preview-backend').textContent='Backend disabled · static app';status('Backend disabled. Existing database checkpoints are preserved by Save VM.');}else status('Backend automatic · Supabase is available when needed');});

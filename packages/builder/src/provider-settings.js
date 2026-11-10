@@ -1,9 +1,9 @@
 const $=id=>document.getElementById(id);
 const valueFor=(connectionId,id)=>JSON.stringify([connectionId,id]);
 export class ProviderSettings {
- constructor({post,run,onPi,onCodex,preference=()=>null,onClear=()=>{}}){
-  Object.assign(this,{post,run,onPi,onCodex,preference,onClear});this.connections=[];this.providers=[];this.busy=false;this.native=null;this.active=null;this.login=null;
-  $('connection').onsubmit=e=>{e.preventDefault();const provider=$('provider').value,type=$('provider-method').value;void run(async()=>{await this.open();const login=await post('providers/login/start',{provider,type});this.showLogin(login);this.poll();});};
+ constructor({post,run,onPi,onCodex,onNativeConnect,preference=()=>null,onClear=()=>{}}){
+  Object.assign(this,{post,run,onPi,onCodex,onNativeConnect,preference,onClear});this.connections=[];this.providers=[];this.busy=false;this.native=null;this.active=null;this.login=null;
+  $('connection').onsubmit=e=>{e.preventDefault();const provider=$('provider').value,type=$('provider-method').value;void run(async()=>{if(type==='codex'){this.showLogin(null);return this.onNativeConnect();}$('codex-login').hidden=true;await this.open();const login=await post('providers/login/start',{provider,type});this.showLogin(login);this.poll();});};
   $('provider').onchange=()=>this.methods();
   $('model-filter').oninput=()=>this.models();
   $('model').onchange=()=>{const value=$('model').value;void run(()=>this.choose(value));};
@@ -25,8 +25,8 @@ export class ProviderSettings {
   this.connections=info.connections||[];this.providers=info.providers||[];
   const selected=$('provider').value;$('provider').replaceChildren(...this.providers.map(p=>new Option(p.name+(p.chat?'':' · no coding models'),p.id)));if(this.providers.some(p=>p.id===selected))$('provider').value=selected;else if(this.providers.some(p=>p.id==='openai'))$('provider').value='openai';this.methods();this.renderConnections();this.models();if(info.login)this.showLogin(info.login);
  }
- methods(){const p=this.providers.find(p=>p.id===$('provider').value),current=$('provider-method').value;$('provider-method').replaceChildren(...(p?.methods||[]).map(m=>new Option(m.label,m.type)));if(p?.methods.some(m=>m.type===current))$('provider-method').value=current;$('connect').disabled=this.busy||!p?.methods.length;}
- allConnections(){return [...(this.native?[{id:'codex',name:'ChatGPT · official Codex',type:'oauth',models:this.native.models.map(m=>({...m,thinkingLevels:m.thinkingLevels||['default']}))}]:[]),...this.connections];}
+ methods(){const p=this.providers.find(p=>p.id===$('provider').value),current=$('provider-method').value,methods=p?.id==='openai'?[{type:'codex',label:'Sign in with ChatGPT (Codex)'},...p.methods.map(m=>m.type==='oauth'?{...m,label:'ChatGPT sign-in (Pi)'}:m)]:p?.methods||[];$('provider-method').replaceChildren(...methods.map(m=>new Option(m.label,m.type)));if(methods.some(m=>m.type===current))$('provider-method').value=current;$('connect').disabled=this.busy||!methods.length;}
+ allConnections(){return [...(this.native?[{id:'codex',name:'ChatGPT (Codex)',type:'oauth',models:this.native.models.map(m=>({...m,thinkingLevels:m.thinkingLevels||['default']}))}]:[]),...this.connections];}
  models(){
   const filter=$('model-filter').value.trim().toLowerCase(),select=$('model'),current=this.active?valueFor(this.active.connectionId,this.active.id):select.value;const groups=[];
   for(const c of this.allConnections()){
@@ -48,14 +48,20 @@ export class ProviderSettings {
   else await this.onPi({...await this.post('providers/select',{connectionId,model:id,thinking}),connection});
   this.active={connectionId,id,thinking};this.models();$('provider-feedback').textContent='';
  }
- setNative(info,id,thinking='default'){this.native=info;this.active={connectionId:'codex',id,thinking};this.models();}
- clearNative(){this.native=null;if(this.active?.connectionId==='codex')this.active=null;this.models();}
+ setNative(info,id,thinking='default'){this.native=info;this.active={connectionId:'codex',id,thinking};this.models();this.renderConnections();}
+ clearNative(){this.native=null;if(this.active?.connectionId==='codex')this.active=null;this.models();this.renderConnections();}
  renderConnections(){
   const list=$('provider-connections');list.replaceChildren();
-  if(!this.connections.length)list.textContent='No saved Pi connections yet.';
-  for(const c of this.connections){
-   const row=document.createElement('div'),label=document.createElement('div');label.textContent=c.name+' · '+(c.type==='api_key'?'API key':'sign-in')+' · '+c.models.length+' models';row.append(label);
-   for(const [text,action] of [['Refresh models','refresh'],['Forget connection','forget']]){const button=document.createElement('button');button.type='button';button.textContent=text;button.disabled=this.busy;button.onclick=()=>void this.run(async()=>{const info=await this.post('providers/'+action,{connectionId:c.id});this.apply(info);if(this.active?.connectionId===c.id&&!this.connections.find(connection=>connection.id===c.id)?.models.some(model=>model.id===this.active.id)){this.active=null;this.onClear();this.models();}if(info.warning)$('provider-feedback').textContent=info.warning;});row.append(button);}list.append(row);
+  const connections=this.allConnections();if(!connections.length)list.textContent='No saved connections yet.';
+  for(const c of connections){
+   const row=document.createElement('div'),label=document.createElement('div');row.dataset.connectionId=c.id;label.textContent=c.name+' · '+(c.type==='api_key'?'API key':'sign-in')+' · '+c.models.length+' models';row.append(label);
+   for(const [text,action] of [['Refresh models','refresh'],['Forget connection','forget']]){const button=document.createElement('button');button.type='button';button.textContent=text;button.disabled=this.busy;button.onclick=()=>void this.run(async()=>{
+    if(c.id==='codex'){
+     if(action==='forget'){await this.post('disconnect');const active=this.active?.connectionId==='codex';this.clearNative();if(active)this.onClear();$('codex-login').hidden=true;return;}
+     const info=await this.post('codex/status');if(!info.connected)throw Error('ChatGPT is signed out. Add the connection again.');this.native=info;this.renderConnections();this.models();
+    }else{const info=await this.post('providers/'+action,{connectionId:c.id});this.apply(info);if(info.warning)$('provider-feedback').textContent=info.warning;}
+    if(this.active?.connectionId===c.id&&!this.allConnections().find(connection=>connection.id===c.id)?.models.some(model=>model.id===this.active.id)){this.active=null;this.onClear();this.models();}
+   });row.append(button);}list.append(row);
   }
  }
  showLogin(login){

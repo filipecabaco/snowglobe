@@ -13,9 +13,9 @@ and [provider/model collection](https://github.com/earendil-works/pi/blob/main/p
 2. Complete the provider's native prompts: API key, account settings, device code, or browser authorization. On a remote gateway, prefer device-code/copy-code options. If a loopback callback cannot reach the gateway, paste the final callback URL/code into the protected sign-in field when Pi requests it.
 3. Add more providers without removing earlier connections. A provider can have both an API-key and OAuth connection. Repeating the same provider/method replaces that credential only after successful login/setup.
 4. Search the combined model list, choose a model and its supported thinking level. Selection is per project. Switching between providers preserves portable chat context; it does not copy provider-specific tool calls or reasoning signatures.
-5. **Refresh models** retries catalog discovery. **Forget connection** deletes that method's saved credential and catalog. The independent **Forget ChatGPT connection** signs out of the official Codex runtime.
+5. **Refresh models** retries catalog discovery. **Forget connection** deletes that method's saved credential and catalog. **Forget connection** on the ChatGPT (Codex) row signs out of the official runtime.
 
-The original official Codex device-login connection stays available alongside Pi.
+The original official Codex device-login connection is an OpenAI connection method in the shared provider form, alongside Pi. There is no standalone ChatGPT setup section.
 Its models and reasoning efforts come from the official app-server, not a hardcoded
 list. Pi's OpenAI and legacy Codex OAuth methods are also exposed as supplied by Pi;
 there is no automatic transfer of credentials between those implementations.

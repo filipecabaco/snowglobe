@@ -43,7 +43,7 @@ operator backup procedures; neither belongs in source/VM exports or public asset
 The official Codex runtime manages separate protected credential files beneath
 `BUILDER_CODEX_DIR`. Remembered profiles restore authorization after expiry and
 normal gateway restart. Runtime cleanup stops processes and retains remembered
-credentials; **Forget ChatGPT connection** signs out and removes its directory.
+credentials; **Forget connection** on the ChatGPT (Codex) row signs out and removes its directory.
 **Forget connection** deletes an individual Pi credential and its cached catalog.
 Browser storage clearing does not delete abandoned server files; operators must
 remove unused profiles privately after confirming no active sessions need them.

@@ -29,7 +29,7 @@ export class BrowserTest {
    owned.page=await owned.browser.newPage();const page=owned.page;page.setDefaultTimeout(30000);
    await fs.writeFile('.local-dev/builder-live-control.json',JSON.stringify({endpoint:server.wsEndpoint()}),{mode:0o600});
    await page.goto(this.builderUrl);await page.waitForFunction(()=>document.getElementById('status').textContent!=='Loading Builder…');
-   await page.locator('#settings').evaluate(el=>el.open=true);await page.getByRole('button',{name:'Continue with ChatGPT'}).click();
+   await page.locator('#settings').evaluate(el=>el.open=true);await page.locator('#provider').selectOption('openai');await page.locator('#provider-method').selectOption('codex');await page.locator('#connect').click();
    await page.locator('#codex-code').filter({hasText:/\S/}).waitFor();
    if(generation!==this.generation)return;
    const code=await page.locator('#codex-code').textContent(),verificationUrl=await page.locator('#codex-link').getAttribute('href');

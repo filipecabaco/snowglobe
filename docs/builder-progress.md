@@ -984,3 +984,20 @@ matrix, storage boundaries and advanced Pi capabilities outside this browser UI.
 Live-provider entitlement/OAuth acceptance remains provider-specific; earlier live
 ChatGPT records remain scoped to their original artifacts. The working-folder
 feature is deferred at the owner's request. Existing public-release gates remain.
+
+## November 9: one AI connection setup form
+
+Removed the standalone “Use your ChatGPT plan with Codex” section and its extra
+Continue button. The official runtime remains accessible through the shared
+Add a provider form: OpenAI → Sign in with ChatGPT (Codex). Existing native
+connections, models, refresh and Forget now appear alongside other saved
+connections. The device-code instructions appear only after that method is chosen.
+Removed the duplicate first-run ChatGPT setup button and obsolete hidden Codex
+model selector. Updated the sign-in/clipboard/live-acceptance harnesses and docs
+for the shared controls; authentication storage and gateway behavior are unchanged.
+
+Verification: 123 native tests passed (one optional skipped). Chromium and WebKit
+provider/persistence flows passed. The existing Codex UI check verifies sign-in
+through the provider form, removal of the standalone section, restoring a saved
+connection on reload, shared model selection and Forget. Admission/onboarding and
+Chromium/WebKit clipboard/manual-copy checks also passed against the private site.
