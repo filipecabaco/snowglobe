@@ -11,6 +11,24 @@
   const statusLine = $("fleet-status");
   const say = (t) => { statusLine.textContent = t; };
 
+  // A running step's clock (render() re-renders each second while one runs), and the files line
+  let tickTimer = null;
+
+  const mb = (n) => `${(n / (1 << 20)).toFixed(n < (10 << 20) ? 1 : 0)} MB`;
+  const elapsed = (since) => {
+    const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  };
+  /** How a machine's files are coming in: the warm pack while it arrives, then what was fetched. */
+  function filesText(f) {
+    if (!f) return "";
+    const parts = [];
+    if (f.warm && !f.warm.done) parts.push(f.warm.total ? `files ${mb(f.warm.loaded)} of ${mb(f.warm.total)}` : "files starting");
+    if (f.fetched) parts.push(`${f.fetched} fetched on demand (${mb(f.fetchedBytes)})`);
+    if (f.prefetched) parts.push(`${f.prefetched} ahead (${mb(f.prefetchedBytes)})`);
+    return parts.join(", ");
+  }
+
   let framed = true;
   try { framed = window.top !== window; } catch {}
   if (framed) {
@@ -254,7 +272,9 @@
       dot.setAttribute("aria-hidden", "true");
       head.append(dot, el("b", null, `${s.kind} ${s.name}`), el("span", "step-sum", s.summary), go);
       const row = li(head);
-      const state = st.status === "failed" ? st.error : st.status === "running" ? (st.detail ?? "running…") : st.status === "done" ? st.detail : "";
+      // A running step says how long it has run, so a slow one (a phone's) doesn't look stuck
+      const running = st.status === "running" ? `${st.detail ?? "running…"}${st.startedAt != null ? ` · ${elapsed(st.startedAt)}` : ""}` : "";
+      const state = st.status === "failed" ? st.error : st.status === "running" ? running : st.status === "done" ? st.detail : "";
       if (state) row.append(el("p", "step-state" + (st.status === "failed" ? " bad" : ""), state));
       if (st.output && st.status !== "done") row.append(el("pre", "step-out", st.output));
       return row;
@@ -267,8 +287,12 @@
     // Only the machines this fleet uses
     machinesList.replaceChildren(...machines.filter((m) => steps.some((s) => s.runtime === m.name)).map((m) => {
       const d = api._describe(m);
-      return li(el("b", null, m.name), ` ${d.state}`, d.doing ? ` · ${d.doing}` : "", d.unavailable ? ` · ${d.unavailable}` : "");
+      const files = filesText(d.files);
+      return li(el("b", null, m.name), ` ${d.state}`, d.doing ? ` · ${d.doing}` : "", files ? ` · ${files}` : "",
+        d.filesUnreachable ? ` · ${d.filesUnreachable}` : "", d.unavailable ? ` · ${d.unavailable}` : "");
     }));
+    // While a step runs, its time moves on every second
+    if (busy() && !tickTimer) tickTimer = setInterval(() => { if (busy()) render(); else { clearInterval(tickTimer); tickTimer = null; } }, 1000);
   }
 
   /** A run starts: remember it, and the machines it uses, for Stop (which a later edit of the file doesn't forget). */
