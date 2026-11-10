@@ -697,7 +697,7 @@
       }
       const run = chain.then(async () => {
         if (stopping || states.get(key).status === "running") return;
-        set(key, { status: "running", detail: null, error: null, output: "" });
+        set(key, { status: "running", detail: null, error: null, output: "", startedAt: now() });
         try {
           set(key, { status: "done", ...(await execute(step)) });
         } catch (e) {
