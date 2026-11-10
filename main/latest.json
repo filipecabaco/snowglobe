@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "sha": "dc9eb74d9bfc47499b6badfcde95bb83870897a8",
-  "created_at": "2026-11-10T17:38:00.435Z",
+  "created_at": "2026-11-10T17:59:05.273Z",
   "sites": {
     "web": {
       "schema": 1,
@@ -890,6 +890,479 @@
               "median": 24,
               "min": 22,
               "max": 30,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "supabase-1cpu": {
+      "schema": 1,
+      "site": "supabase-1cpu",
+      "title": "Supabase in the browser",
+      "cpus": 1,
+      "network": "fetch",
+      "snowglobe": "v0.0.0-20261110172459-dc9eb74d9bfc+dirty",
+      "built_at": "2026-11-10T17:51:11Z",
+      "measured_at": "2026-11-10T17:58:35.408Z",
+      "env": {
+        "sha": "dc9eb74d9bfc47499b6badfcde95bb83870897a8",
+        "ref": "refs/heads/main",
+        "event": "push",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 1822,
+              "running_ms": 1874,
+              "first_output_ms": 1988,
+              "requests": 21,
+              "bytes": 201597099,
+              "not_modified": 0,
+              "sw_served": 5,
+              "heap_peak_bytes": 4313636
+            },
+            {
+              "ready_ms": 1808,
+              "running_ms": 1854,
+              "first_output_ms": 1968,
+              "requests": 21,
+              "bytes": 201597099,
+              "not_modified": 0,
+              "sw_served": 6,
+              "heap_peak_bytes": 5988604
+            },
+            {
+              "ready_ms": 1735,
+              "running_ms": 1781,
+              "first_output_ms": 1886,
+              "requests": 21,
+              "bytes": 201597099,
+              "not_modified": 0,
+              "sw_served": 5,
+              "heap_peak_bytes": 4718616
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1808,
+              "min": 1735,
+              "max": 1822,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1854,
+              "min": 1781,
+              "max": 1874,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1968,
+              "min": 1886,
+              "max": 1988,
+              "n": 3
+            },
+            "requests": {
+              "median": 21,
+              "min": 21,
+              "max": 21,
+              "n": 3
+            },
+            "bytes": {
+              "median": 201597099,
+              "min": 201597099,
+              "max": 201597099,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 5,
+              "min": 5,
+              "max": 6,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 4718616,
+              "min": 4313636,
+              "max": 5988604,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 1341,
+              "running_ms": 1390,
+              "first_output_ms": 1495,
+              "requests": 0,
+              "bytes": 0,
+              "not_modified": 0,
+              "sw_served": 15,
+              "heap_peak_bytes": 4397180
+            },
+            {
+              "ready_ms": 1343,
+              "running_ms": 1372,
+              "first_output_ms": 1497,
+              "requests": 0,
+              "bytes": 0,
+              "not_modified": 0,
+              "sw_served": 17,
+              "heap_peak_bytes": 4466872
+            },
+            {
+              "ready_ms": 1384,
+              "running_ms": 1417,
+              "first_output_ms": 1545,
+              "requests": 0,
+              "bytes": 0,
+              "not_modified": 0,
+              "sw_served": 17,
+              "heap_peak_bytes": 4357424
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1343,
+              "min": 1341,
+              "max": 1384,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1390,
+              "min": 1372,
+              "max": 1417,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1497,
+              "min": 1495,
+              "max": 1545,
+              "n": 3
+            },
+            "requests": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "bytes": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 17,
+              "min": 15,
+              "max": 17,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 4397180,
+              "min": 4357424,
+              "max": 4466872,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 89096,
+              "running_ms": 89146,
+              "first_output_ms": 89265,
+              "requests": 47,
+              "bytes": 130899772,
+              "not_modified": 0,
+              "sw_served": 32,
+              "heap_peak_bytes": 4520868
+            },
+            {
+              "ready_ms": 88976,
+              "running_ms": 89025,
+              "first_output_ms": 89147,
+              "requests": 47,
+              "bytes": 130506556,
+              "not_modified": 0,
+              "sw_served": 32,
+              "heap_peak_bytes": 4394448
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 89036,
+              "min": 88976,
+              "max": 89096,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 89085.5,
+              "min": 89025,
+              "max": 89146,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 89206,
+              "min": 89147,
+              "max": 89265,
+              "n": 2
+            },
+            "requests": {
+              "median": 47,
+              "min": 47,
+              "max": 47,
+              "n": 2
+            },
+            "bytes": {
+              "median": 130703164,
+              "min": 130506556,
+              "max": 130899772,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 32,
+              "min": 32,
+              "max": 32,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 4457658,
+              "min": 4394448,
+              "max": 4520868,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 2961,
+              "commands": [
+                {
+                  "command": "notes signup ada@example.com lovelace-1815",
+                  "ms": 29,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes add first program, for the analytical engine",
+                  "ms": 24,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes search engine",
+                  "ms": 606,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 28,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes watch 6 & sleep 2; notes add live, by Realtime; wait",
+                  "ms": 22,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes signup grace@example.com hopper-1906",
+                  "ms": 263,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 573,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+                  "ms": 1416,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 3576,
+              "commands": [
+                {
+                  "command": "notes signup ada@example.com lovelace-1815",
+                  "ms": 56,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes add first program, for the analytical engine",
+                  "ms": 24,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes search engine",
+                  "ms": 346,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 24,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes watch 6 & sleep 2; notes add live, by Realtime; wait",
+                  "ms": 28,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes signup grace@example.com hopper-1906",
+                  "ms": 845,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 944,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+                  "ms": 1309,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 4064,
+              "commands": [
+                {
+                  "command": "notes signup ada@example.com lovelace-1815",
+                  "ms": 56,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes add first program, for the analytical engine",
+                  "ms": 24,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes search engine",
+                  "ms": 1049,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 24,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes watch 6 & sleep 2; notes add live, by Realtime; wait",
+                  "ms": 25,
+                  "done": "quiet"
+                },
+                {
+                  "command": "notes signup grace@example.com hopper-1906",
+                  "ms": 342,
+                  "done": "prompt"
+                },
+                {
+                  "command": "notes ls",
+                  "ms": 1073,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+                  "ms": 1471,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 3576,
+              "min": 2961,
+              "max": 4064,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "notes signup ada@example.com lovelace-1815",
+              "median": 56,
+              "min": 29,
+              "max": 56,
+              "n": 3
+            },
+            {
+              "command": "notes add first program, for the analytical engine",
+              "median": 24,
+              "min": 24,
+              "max": 24,
+              "n": 3
+            },
+            {
+              "command": "notes search engine",
+              "median": 606,
+              "min": 346,
+              "max": 1049,
+              "n": 3
+            },
+            {
+              "command": "notes ls",
+              "median": 300.5,
+              "min": 24,
+              "max": 1073,
+              "n": 6
+            },
+            {
+              "command": "notes watch 6 & sleep 2; notes add live, by Realtime; wait",
+              "median": 25,
+              "min": 22,
+              "max": 28,
+              "n": 3
+            },
+            {
+              "command": "notes signup grace@example.com hopper-1906",
+              "median": 342,
+              "min": 263,
+              "max": 845,
+              "n": 3
+            },
+            {
+              "command": "psql \"$DB_URL\" -c \"select u.email, count(n.id) from auth.users u left join notes n on n.user_id = u.id group by 1\"",
+              "median": 1416,
+              "min": 1309,
+              "max": 1471,
               "n": 3
             }
           ]
