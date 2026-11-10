@@ -459,7 +459,7 @@ test('a blob store that can\'t be reached is said, and cleared once it answers',
   await assert.rejects(core.fetchBlob('cd.bin.zst'));
   up = true;
   assert.equal((await core.fetchBlob('ab.bin.zst')).length, 2);
-  assert.deepEqual(events, [['blobs', { ok: false, url: 'https://blobs.example/', message: 'Failed to fetch' }], ['blobs', { ok: true }]]);
+  assert.deepEqual(events.filter(([e]) => e === 'blobs'), [['blobs', { ok: false, url: 'https://blobs.example/', message: 'Failed to fetch' }], ['blobs', { ok: true }]]);
 });
 
 test('a worker that doesn\'t answer: its end is forced after 2 s, a capture fails after its bound, the worker terminated', async () => {

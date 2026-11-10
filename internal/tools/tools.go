@@ -92,10 +92,7 @@ func Build(version string) (*Image, error) {
 // CopySite copies the browser runtime (armless, xterm.js) into out. build.pruneRuntime then
 // drops the machine build the site doesn't load.
 func (i *Image) CopySite(out string) error {
-	if err := i.run(out, nil, "cp", "-R", "/tools/site/.", "/out/"); err != nil {
-		return err
-	}
-	return patchArmless(out)
+	return i.run(out, nil, "cp", "-R", "/tools/site/.", "/out/")
 }
 
 // FetchSite writes what CopySite copies out of the image (armless's browser runtime and xterm.js)
@@ -157,7 +154,7 @@ func FetchSite(out string) error {
 			return fmt.Errorf("%s: %w", archive, err)
 		}
 	}
-	return patchArmless(out)
+	return nil
 }
 
 func extractMembers(archive string, members map[string]string, out string) error {
@@ -203,32 +200,6 @@ func extractMembers(archive string, members map[string]string, out string) error
 		return fmt.Errorf("found %d of its %d files", found, len(members))
 	}
 	return nil
-}
-
-// patchArmless applies snapshotMemoryHeadroom to the site's armless.js in out.
-func patchArmless(out string) error {
-	file := filepath.Join(out, "armless", "armless.js")
-	source, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
-	patched, err := snapshotMemoryHeadroom(source)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(file, patched, 0o644)
-}
-
-// armless (v0.2.6 to v0.3.0) reserves only RAM+1 GiB for SMP. A live snapshot also allocates serialized
-// filesystem metadata and a growing RAM buffer; Supabase can exceed that limit during capture.
-// Raise the maximum, not the initial allocation, while retaining wasm32's 4 GiB hard ceiling.
-// Guard the pinned source shape so a runtime upgrade requires deliberate re-evaluation.
-func snapshotMemoryHeadroom(source []byte) ([]byte, error) {
-	const old = "Math.ceil((o.memory_mb + 1024) * 16)"
-	if strings.Count(string(source), old) != 1 {
-		return nil, fmt.Errorf("armless snapshot memory adaptation: unexpected pinned runtime")
-	}
-	return []byte(strings.Replace(string(source), old, "Math.ceil((o.memory_mb * 3 + 1024) * 16)", 1)), nil
 }
 
 // The console size the guest boots and is snapshotted with. The page replays the snapshot's

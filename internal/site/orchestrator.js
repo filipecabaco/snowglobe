@@ -356,6 +356,8 @@
     // A machine's host, made at each wake (and its worker with it), ended at each suspend
     function makeHost(m) {
       const host = createMachine({ base: m.base, config: withLinks(m), transport: state.transport, scripts, uploadWindow: state.uploadWindow, ...hostOptions });
+      m.files = null; // this wake's
+
       // Its guest's TCP connections over links, by cid: each ends when this host goes ("gone")
       const linkConns = new Map();
       host.on("link", (e) => linkEvent(m, host, linkConns, e));
@@ -393,6 +395,12 @@
       host.on("blobs", (e) => {
         if (m.host !== host) return;
         m.blobsDown = e.ok ? null : { url: e.url, message: e.message };
+        changed();
+      });
+      // How its guest's files are coming in (the warm pack, files fetched on their own and ahead)
+      host.on("files", (e) => {
+        if (m.host !== host) return;
+        m.files = e;
         changed();
       });
       return host;
@@ -524,6 +532,9 @@
         unsaved: m.dirty && uiState(m) !== "asleep" && uiState(m) !== "failed",
         // Its files (the blob store) could not be reached: reads of files not yet fetched fail
         filesUnreachable: m.blobsDown ? `can't reach the machine's files (${m.blobsDown.url})` : null,
+        // How its files are coming in, while it is awake: { warm: { loaded, total, done } | null,
+        // fromPack, fetched, fetchedBytes, prefetched, prefetchedBytes }
+        files: m.host ? m.files ?? null : null,
         cpus: m.cpus,
         // Why it can't run in this page, if it can't (several CPUs, not isolated)
         unavailable: unavailable(m),

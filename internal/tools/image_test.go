@@ -281,21 +281,18 @@ func TestFetchSiteRefusesADownloadWithTheWrongChecksum(t *testing.T) {
 // The out directory a `docker run -v OUT:/out` was given, in the fake docker script: $out.
 const outMount = `out=; prev=; for a; do [ "$prev" = -v ] && case "$a" in *:/out) out=${a%:/out} ;; esac; prev=$a; done`
 
-func TestCopySitePatchesArmless(t *testing.T) {
+// armless.js ships as released: since armless 0.9.7 a save and a restore hold the files the guest
+// wrote once, so a machine needs no memory beyond what armless reserves for it
+func TestCopySiteShipsArmlessAsReleased(t *testing.T) {
+	const js = "pages = Math.ceil((o.memory_mb + 1024) * 16);"
 	fakeDocker(t, outMount+`
-mkdir -p "$out/armless" && echo 'pages = Math.ceil((o.memory_mb + 1024) * 16);' > "$out/armless/armless.js"`)
+mkdir -p "$out/armless" && echo '`+js+`' > "$out/armless/armless.js"`)
 	out := t.TempDir()
 	if err := (&Image{tag: "snowglobe-tools:x"}).CopySite(out); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(out, "armless", "armless.js")); !strings.Contains(string(got), "o.memory_mb * 3 + 1024") {
-		t.Errorf("not patched: %q", got)
-	}
-	// A runtime of another shape fails rather than ship unpatched
-	fakeDocker(t, outMount+`
-mkdir -p "$out/armless" && echo 'something else' > "$out/armless/armless.js"`)
-	if err := (&Image{tag: "snowglobe-tools:x"}).CopySite(t.TempDir()); err == nil {
-		t.Error("an unexpected runtime was copied")
+	if got, _ := os.ReadFile(filepath.Join(out, "armless", "armless.js")); strings.TrimSpace(string(got)) != js {
+		t.Errorf("armless.js changed on the way: %q", got)
 	}
 	fakeDocker(t, "exit 1")
 	if err := (&Image{tag: "snowglobe-tools:x"}).CopySite(t.TempDir()); err == nil {

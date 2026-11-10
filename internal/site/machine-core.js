@@ -332,6 +332,183 @@
     return fetch(url, init);
   }
 
+  // ------------------------------------------------------------------ the warm pack
+  //
+  // warm.pack is [u32 index size][index: JSON [[name, size, length], ...]][the files' bytes, in index
+  // order], the files ordered by when the build saw them first read. It is read as it arrives: the
+  // index from its first bytes, then each file as soon as its bytes are in, so a file the guest asks
+  // for that the pack holds comes from the pack (waited for while it is near) instead of a request
+  // of its own, and the files go into the machine in slices of time rather than one timer each
+  // (a phone's browser stretches each timer, and the guest raced past a pack fed that way).
+
+  /** How long a read waits for the pack to bring a file before it fetches the file itself. */
+  const PACK_WAIT_MS = 2000;
+  /** ... and, before the pack's rate is known, how far into what is still to come it waits. */
+  const PACK_WAIT_BYTES = 4 << 20;
+  /** How long a read waits for the pack's index (its first bytes) before it fetches its file itself. */
+  const PACK_INDEX_WAIT_MS = 1000;
+  /** How long a slice of handing files to the machine runs before it lets the machine run. */
+  const PACK_SLICE_MS = 8;
+  /** Reading ahead (Core._readAhead): files fetched at once, and at most so many bytes a machine. */
+  const READ_AHEAD = 6;
+  const READ_AHEAD_BYTES = 48 << 20;
+  /** The chunks of a large file fetched after the one asked for. */
+  const CHUNKS_AHEAD = 4;
+  /** How often a `files` event says how the files are coming. */
+  const FILES_EVERY_MS = 250;
+  /**
+   * The machine's own cache of file contents (armless's fs_cache_mb), decompressed, in its memory,
+   * which never shrinks: armless's default is 256 MB, and the guest keeps what it reads in its own
+   * page cache anyway. What it drops comes again from the warm pack, kept compressed in this page
+   * (and let go with the machine), or the blob store.
+   */
+  const FS_CACHE_MB = 64;
+  /** The pack's first files (the build read them first), up to this many bytes decompressed, go
+   *  into the machine as they arrive; the rest wait in the pack until the guest reads them. */
+  const PACK_GIVE_BYTES = 48 << 20;
+
+  class WarmPack {
+    /** `now()` the clock in ms. */
+    constructor({ now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()), indexWaitMs = PACK_INDEX_WAIT_MS } = {}) {
+      this.now = now;
+      this.indexWaitMs = indexWaitMs;
+      this.buf = new Uint8Array(0);
+      this.received = 0;
+      this.entries = null; // name -> { start, end }, once the index is in
+      this.order = []; // the entries in pack order
+      this.ready = 0; // entries in order whose bytes are all in
+      this.total = null; // the pack's size, once the index says it
+      this.done = false; // all of it in, or given up on
+      this.started = now();
+      this._waiters = new Map(); // name -> [resolve]
+      this._indexWaiters = [];
+    }
+
+    /** Bytes as they arrive. */
+    push(chunk) {
+      if (this.done) return;
+      const need = this.received + chunk.length;
+      if (need > this.buf.length) {
+        const grown = new Uint8Array(Math.max(need, this.buf.length * 2, this.total ?? 0, 1 << 16));
+        grown.set(this.buf.subarray(0, this.received));
+        this.buf = grown;
+      }
+      this.buf.set(chunk, this.received);
+      this.received = need;
+      if (!this.entries) this._readIndex();
+      if (this.entries) this._arrived();
+    }
+
+    /** The pack is all in (ok) or can't be had: whoever waits stops waiting. */
+    end(ok = true) {
+      if (this.done) return;
+      if (ok && !this.entries) this._readIndex();
+      if (ok && this.entries) this._arrived();
+      this.done = true;
+      for (const r of this._indexWaiters.splice(0)) r();
+      for (const [name, list] of this._waiters) for (const r of list) r(this._bytes(name));
+      this._waiters.clear();
+    }
+
+    _readIndex() {
+      if (this.received < 4) return;
+      const size = new DataView(this.buf.buffer, this.buf.byteOffset).getUint32(0, true);
+      if (this.received < 4 + size) return;
+      const index = JSON.parse(new TextDecoder().decode(this.buf.subarray(4, 4 + size)));
+      this.entries = new Map();
+      let at = 4 + size;
+      for (const [name, size, length] of index) {
+        const e = { name, size, start: at, end: at + length };
+        this.entries.set(name, e);
+        this.order.push(e);
+        at += length;
+      }
+      this.total = at;
+      if (this.buf.length < at) {
+        const whole = new Uint8Array(at);
+        whole.set(this.buf.subarray(0, this.received));
+        this.buf = whole;
+      }
+      for (const r of this._indexWaiters.splice(0)) r();
+    }
+
+    _arrived() {
+      while (this.ready < this.order.length && this.order[this.ready].end <= this.received) {
+        const e = this.order[this.ready++];
+        const list = this._waiters.get(e.name);
+        if (list) {
+          this._waiters.delete(e.name);
+          for (const r of list) r(this._bytes(e.name));
+        }
+      }
+    }
+
+    /** A file's bytes, if they are in. */
+    _bytes(name) {
+      const e = this.entries?.get(name);
+      return e && e.end <= this.received ? this.buf.subarray(e.start, e.end) : null;
+    }
+
+    /** Bytes a second so far (null until there is a measure). */
+    rate() {
+      const ms = this.now() - this.started;
+      return ms > 50 && this.received > 0 ? (this.received / ms) * 1000 : null;
+    }
+
+    /**
+     * A file the guest asks for: its bytes from the pack, now or once they arrive if that is soon
+     * (PACK_WAIT_MS at the rate the pack comes in); null if the pack doesn't hold it, or it is too
+     * far off, and the file should be fetched on its own.
+     */
+    async get(name) {
+      // The index is the pack's first bytes: worth waiting for, a little (a pack slow to start
+      // mustn't hold the guest's reads; they fetch their files until it comes)
+      if (!this.entries && !this.done) {
+        let timer;
+        await new Promise((r) => {
+          this._indexWaiters.push(r);
+          timer = setTimeout(r, this.indexWaitMs);
+        });
+        clearTimeout(timer);
+      }
+      const e = this.entries?.get(name);
+      if (!e) return null;
+      const now = this._bytes(name);
+      if (now || this.done) return now;
+      // Near enough at the rate it comes, or (no rate yet: it has only just started) within its next
+      // PACK_WAIT_BYTES
+      const rate = this.rate();
+      const left = e.end - this.received;
+      if (rate ? (left / rate) * 1000 > PACK_WAIT_MS : left > PACK_WAIT_BYTES) return null;
+      return new Promise((resolve) => {
+        const list = this._waiters.get(name) ?? [];
+        list.push(resolve);
+        this._waiters.set(name, list);
+      });
+    }
+
+    /** The files whose bytes are in, from `from` on in pack order: { name, size, bytes } (size
+     *  decompressed). */
+    *arrivedFrom(from) {
+      for (let i = from; i < this.ready; i++) {
+        const e = this.order[i];
+        yield { name: e.name, size: e.size, bytes: this._bytes(e.name) };
+      }
+    }
+
+    /** Whether the pack holds a file (its bytes in, or coming). */
+    holds(name) {
+      return !!this.entries?.has(name);
+    }
+
+    /** Let the bytes go (the machine is gone). */
+    release() {
+      this.buf = new Uint8Array(0);
+      this.entries = null;
+      this.order = [];
+    }
+  }
+
   class Core {
     /**
      * `config` is armless's options with absolute URLs (located()), plus `warm` (the warm pack's
@@ -350,6 +527,15 @@
       this.controller = null;
       this.failedBlobs = new Set();
       this.blobRetryDelays = blobRetryDelays;
+      // The guest's files: the warm pack as it comes (warm()), what is being fetched (by name, the
+      // guest's reads and reading ahead share a request), the reads waiting, and how it all went
+      this.pack = null;
+      this.inflight = new Map();
+      this.demanded = new Set();
+      this.fetchedNames = new Set(); // fetched for a read: armless has them, or is handing them over
+      this.prefetchQueue = [];
+      this.prefetching = 0;
+      this.fileStats = { fromPack: 0, fetched: 0, fetchedBytes: 0, prefetched: 0, prefetchedBytes: 0 };
       // The job runner for any machine with agent.js loaded (its Controller says what it supports)
       if (agent) {
         const core = this;
@@ -390,7 +576,8 @@
           const names = links && Object.keys(links).length ? links : null;
           if (allowed.size || names) network.WebSocket = linkSockets(this, allowed, this.WebSocket ?? root.WebSocket, root, names);
         }
-        vm = new this.Armless({ ...this.config, filesystem, network, warm: undefined, initial_state: url, autostart: false });
+        vm = new this.Armless({ fs_cache_mb: FS_CACHE_MB, ...this.config, filesystem, network, warm: undefined, initial_state: url,
+          autostart: false });
         this.vm = vm;
         vm.on("progress", (e) => this.emit("progress", { file: e.file, loaded: e.loaded, total: e.total }));
         vm.on("console", (bytes) => { if (vm === this.vm) this.emit("console", bytes); });
@@ -460,6 +647,38 @@
 
     /** A final failure emits `blobs` once until another file succeeds, and remains repairable. */
     async fetchBlob(name) {
+      // From the warm pack, if it holds the file and brings it soon
+      const packed = await this.pack?.get(name);
+      if (packed) {
+        this.failedBlobs.delete(name);
+        this.fileStats.fromPack++;
+        this._filesChanged();
+        return packed;
+      }
+      this.demanded.add(name);
+      try {
+        // A file a read-ahead is already fetching: the same request
+        let bytes = this.inflight.get(name);
+        if (!bytes) {
+          bytes = this._fetchBlob(name);
+          this.inflight.set(name, bytes);
+          this.fetchedNames.add(name);
+          bytes.then(() => {}, () => this.fetchedNames.delete(name)).finally(() => this.inflight.delete(name)).catch(() => {});
+          this.fileStats.fetched++;
+          this._filesChanged();
+          this._readAhead(name).catch(() => {});
+        }
+        const b = await bytes;
+        this.fileStats.fetchedBytes += b.length;
+        this._filesChanged();
+        return b;
+      } finally {
+        this.demanded.delete(name);
+      }
+    }
+
+    /** One file from the blob store, as fetchBlob says it. */
+    async _fetchBlob(name) {
       const base = this.config.filesystem?.baseurl ?? "";
       const url = new URL(name, typeof location !== "undefined" ? new URL(base, location.href) : base).href;
       try {
@@ -496,6 +715,106 @@
       return { repaired: failed.length + warmed };
     }
 
+    // ---------------------------------------------------------------- reading ahead
+    //
+    // A read the pack couldn't serve waits for its own request, and the guest's next read starts
+    // only after it: one at a time. A large file is stored in chunks and read chunk after chunk, so
+    // the chunks after the one asked for are fetched alongside (READ_AHEAD at once, at most
+    // READ_AHEAD_BYTES a machine) and handed to the machine before the guest asks: a filesystem's
+    // sequential read-ahead. The machine's own filesystem.json (which armless has loaded already,
+    // so the browser has it) says which chunks make a file.
+
+    /** The chunks of `filesystem.json`'s large files by blob: { chunks, at }. */
+    async _fsIndex() {
+      this._fsIndexing ??= (async () => {
+        const url = this.config.filesystem?.json;
+        if (!url) return null;
+        const r = await (this.fetch ?? fetch)(url);
+        if (!r.ok) return null;
+        const root = await r.json();
+        const byBlob = new Map();
+        const walk = (nodes) => {
+          for (const [, , , mode, , , target] of nodes ?? []) {
+            const kind = mode & 0o170000;
+            if (kind === 0o040000) walk(target);
+            else if (kind === 0o100000 && Array.isArray(target)) {
+              const chunks = target.map(([blob]) => blob);
+              chunks.forEach((blob, at) => { if (!byBlob.has(blob)) byBlob.set(blob, { chunks, at }); });
+            }
+          }
+        };
+        walk(root?.fsroot);
+        return { byBlob };
+      })().catch(() => null);
+      return this._fsIndexing;
+    }
+
+    /** Fetch the chunks after `name`, if it is a chunk of a large file just fetched on its own. */
+    async _readAhead(name) {
+      const index = await this._fsIndex();
+      const f = index?.byBlob.get(name);
+      if (!f) return;
+      for (const blob of f.chunks.slice(f.at + 1, f.at + 1 + CHUNKS_AHEAD)) this._prefetch(blob);
+    }
+
+    /** Queue one file to fetch ahead, unless it is in, coming, or past the budget. */
+    _prefetch(name) {
+      const vm = this.vm;
+      if (!vm || this.inflight.has(name) || this.fetchedNames.has(name) || this.prefetchQueue.includes(name) || vm.has_blob(name)) return;
+      // The pack brings what it holds, or has it (a read takes it from there)
+      if (this.pack?.holds(name)) return;
+      if (this.fileStats.prefetchedBytes >= READ_AHEAD_BYTES) return;
+      this.prefetchQueue.push(name);
+      this._prefetchPump();
+    }
+
+    _prefetchPump() {
+      while (this.prefetching < READ_AHEAD && this.prefetchQueue.length) {
+        const name = this.prefetchQueue.shift();
+        const vm = this.vm;
+        if (!vm || vm.has_blob(name) || this.inflight.has(name)) continue;
+        this.prefetching++;
+        const bytes = this._fetchBlob(name);
+        this.inflight.set(name, bytes);
+        bytes.then((b) => {
+          this.fileStats.prefetched++;
+          this.fileStats.prefetchedBytes += b.length;
+          // Into the machine, unless the guest asked meanwhile (its read hands it over itself)
+          if (vm === this.vm && !vm.stopped && !this.demanded.has(name) && !vm.has_blob(name)) vm.provide_blob(name, b);
+        }, () => {}).finally(() => {
+          this.inflight.delete(name);
+          this.prefetching--;
+          this._filesChanged();
+          this._prefetchPump();
+        });
+      }
+    }
+
+    /** How the machine's files are coming: a `files` event, at most every FILES_EVERY_MS. */
+    filesStatus() {
+      const p = this.pack;
+      return {
+        warm: p ? { loaded: p.received, total: p.total, done: p.done } : null,
+        fromPack: this.fileStats.fromPack,
+        fetched: this.fileStats.fetched,
+        fetchedBytes: this.fileStats.fetchedBytes,
+        prefetched: this.fileStats.prefetched,
+        prefetchedBytes: this.fileStats.prefetchedBytes,
+      };
+    }
+
+    _filesChanged() {
+      if (this._filesTimer) return;
+      const since = Date.now() - (this._filesAt ?? 0);
+      const send = () => {
+        this._filesTimer = null;
+        this._filesAt = Date.now();
+        this.emit("files", this.filesStatus());
+      };
+      if (since >= FILES_EVERY_MS) send();
+      else this._filesTimer = setTimeout(send, FILES_EVERY_MS - since);
+    }
+
     /** Run it, and fill its file cache in the background. */
     run() {
       this.vm.run();
@@ -515,8 +834,10 @@
       this.capturing = true;
       try {
         await vm.stop();
-        let bytes = await vm.save_state();
-        const packed = this.sessions ? await this.sessions.packState(bytes) : { encoding: "raw", state: new Blob([bytes]) };
+        // In pieces where the machine gives them (packState takes them as they are): never in one
+        // buffer, in the machine's memory or this page's
+        let bytes = vm.save_state_pieces ? await vm.save_state_pieces() : [await vm.save_state()];
+        const packed = this.sessions ? await this.sessions.packState(bytes) : { encoding: "raw", state: new Blob(bytes) };
         bytes = null;
         return packed;
       } catch (e) {
@@ -542,6 +863,9 @@
         this.emit("link", { cid, kind: "close" });
       }
       this.links?.clear();
+      // The warm pack's bytes go with the machine they were for
+      this.pack?.release();
+      this.pack = null;
       this.vm = null;
       this.state = "idle";
       this.tcp?.clear();
@@ -555,8 +879,9 @@
     }
 
     // The guest's files are fetched one blocking request at a time the first time each is read.
-    // warm.pack bundles the files the app is most likely to need so they arrive in a single
-    // background download and are in the machine before the guest asks for them.
+    // warm.pack bundles the files the app is most likely to need into one background download, read
+    // as it arrives (WarmPack): its first files go into the machine once their bytes are in, and a
+    // read of one the pack holds takes it from there (fetchBlob) instead of a request of its own.
     async warm({ required = false } = {}) {
       const vm = this.vm;
       if (!this.config.warm || !vm) {
@@ -572,37 +897,89 @@
         this.warming = warming;
         warming.promise.finally(() => { if (this.warming === warming) this.warming = null; }).catch(() => {});
       }
-      const supplied = await warming.promise;
+      const result = await warming.promise;
       if (required && (vm.stopped || vm !== this.vm)) throw new Error("the machine stopped while restoring files");
-      return supplied;
+      if (required && result.error) throw result.error;
+      if (result.complete) this.warmedVms.add(vm);
+      return result.supplied;
     }
 
     async _warm(vm) {
-      const pack = await this._fetchBytes(this.config.warm, 60000);
-      const indexSize = new DataView(pack.buffer).getUint32(0, true);
-      const index = JSON.parse(new TextDecoder().decode(pack.subarray(4, 4 + indexSize)));
-      let offset = 4 + indexSize;
-      let supplied = 0;
-      for (const [name, , length] of index) {
-        // A machine stopped (suspended) meanwhile takes no more
-        if (vm.stopped || vm !== this.vm) {
-          return supplied;
+      const pack = this.pack = new WarmPack(this.packOptions ?? {});
+      this._filesChanged();
+      let given = 0, supplied = 0;
+      let givenBytes = 0;
+      const gone = () => vm.stopped || vm !== this.vm;
+      // Hand over what has arrived, a slice of time at a time, so the machine (and a page sharing
+      // this thread) keeps running between slices: the pack's first files, up to PACK_GIVE_BYTES
+      // (the machine's cache holds little more), the rest kept in the pack for the guest's reads
+      const feed = async () => {
+        for (;;) {
+          const until = pack.now() + PACK_SLICE_MS;
+          let any = false;
+          for (const { name, size, bytes } of pack.arrivedFrom(given)) {
+            if (gone()) return;
+            given++;
+            if (givenBytes >= PACK_GIVE_BYTES) continue;
+            any = true;
+            givenBytes += size ?? bytes.length;
+            if (!vm.has_blob(name)) { vm.provide_blob(name, bytes); supplied++; } // else the guest already has it
+            this.failedBlobs.delete(name);
+            if (pack.now() >= until) break;
+          }
+          this._filesChanged();
+          if (!any) return;
+          await new Promise((resolve) => setTimeout(resolve, 0));
         }
-        const blob = pack.subarray(offset, offset + length);
-        offset += length;
-        if (vm.has_blob(name)) continue; // the guest already loaded it
-        vm.provide_blob(name, blob);
-        this.failedBlobs.delete(name);
-        supplied++;
-        // Yield between files so the machine (and a page sharing this thread) stays responsive
-        await new Promise((resolve) => setTimeout(resolve, 0));
+      };
+      let feeding = Promise.resolve();
+      const kick = () => { feeding = feeding.then(feed); };
+      const controller = new AbortController();
+      let timer, reader, failure;
+      const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => controller.abort(new DOMException("Environment warm-pack download stalled", "TimeoutError")), 60000);
+      };
+      const aborted = new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true }));
+      try {
+        arm();
+        const response = await Promise.race([(this.fetch ?? fetch)(this.config.warm, { signal: controller.signal }), aborted]);
+        if (!response.ok) throw new Error(`${response.status}`);
+        arm();
+        if (response.body?.getReader) {
+          reader = response.body.getReader();
+          for (;;) {
+            const { done, value } = await Promise.race([reader.read(), aborted]);
+            if (done || gone()) break;
+            if (value.byteLength) arm();
+            pack.push(value);
+            kick();
+          }
+        } else {
+          pack.push(new Uint8Array(await Promise.race([response.arrayBuffer(), aborted])));
+        }
+        if (!gone() && (!pack.entries || pack.received < pack.total)) throw new Error("Environment warm-pack download was incomplete");
+        pack.end(!gone());
+      } catch (error) {
+        failure = error;
+        pack.end(false); // what didn't arrive, reads fetch themselves
+      } finally {
+        clearTimeout(timer);
+        if (controller.signal.aborted || gone()) reader?.cancel().catch(() => {});
+        else reader?.releaseLock();
       }
-      this.warmedVms.add(vm);
-      if (this.blobsDown && !this.failedBlobs.size) {
+      // What did arrive goes in, up to the budget; the pack stays (compressed, in this page) for the
+      // files that didn't, and for those the machine's cache lets go, until the machine goes
+      kick();
+      await feeding.catch(error => { failure ??= error; });
+      if (this.pack === pack) this._filesChanged();
+      const complete = !failure && !gone() && pack.entries && pack.received >= pack.total;
+      if (complete && this.blobsDown && !this.failedBlobs.size) {
         this.blobsDown = false;
         this.emit("blobs", { ok: true });
       }
-      return supplied;
+      return { supplied, complete: !!complete, error: failure };
+
     }
 
     // ------------------------------------------------------------------ jobs and files
@@ -756,7 +1133,7 @@
     }
   }
 
-  const SnowglobeMachineCore = { Core, located, errorOf, guestFetch, linked, linkUrl, parseLinkUrl, linkSockets, linkPipe, wsLinked, LINK_URL, LINK_LINGER_MS };
+  const SnowglobeMachineCore = { Core, WarmPack, located, errorOf, guestFetch, linked, linkUrl, parseLinkUrl, linkSockets, linkPipe, wsLinked, LINK_URL, LINK_LINGER_MS };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeMachineCore;
   else root.SnowglobeMachineCore = SnowglobeMachineCore;
 })(typeof window !== "undefined" ? window : globalThis);

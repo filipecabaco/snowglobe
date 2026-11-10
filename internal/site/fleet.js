@@ -654,11 +654,15 @@
         let log = "";
         for (const [i, command] of step.run.entries()) {
           set(step.key, { detail: `command ${i + 1} of ${step.run.length}` });
+          const began = now();
           const r = await exec(step.runtime, command, Math.ceil(step.timeoutMs / 1000));
-          log += `$ ${command}\n${r.output}`;
+          const took = `${((now() - began) / 1000).toFixed(1)}s`;
+          // What each command printed and how it ended, so a failure on a slow device says what happened
+          log += `$ ${command}\n${r.output}${r.output && !r.output.endsWith("\n") ? "\n" : ""}${r.output.trim() ? "" : "(no output)\n"}[${r.exit === null ? r.state : `exit ${r.exit}`} after ${took}]\n`;
           if (r.exit !== 0) {
             set(step.key, { output: tail(log) });
-            throw new Error(`command ${i + 1} ${r.exit === null ? `ended ${r.state}${r.error ? ` (${r.error})` : ""}` : `exited ${r.exit}`}`);
+            console.warn(`fleet ${step.key}: command ${i + 1} of ${step.run.length} in ${step.runtime} ${r.exit === null ? `ended ${r.state}` : `exited ${r.exit}`} after ${took}\n${log}`);
+            throw new Error(`command ${i + 1} ${r.exit === null ? `ended ${r.state}${r.error ? ` (${r.error})` : ""}` : `exited ${r.exit}`} after ${took}`);
           }
         }
         if (step.ready) {
@@ -697,7 +701,7 @@
       }
       const run = chain.then(async () => {
         if (stopping || states.get(key).status === "running") return;
-        set(key, { status: "running", detail: null, error: null, output: "" });
+        set(key, { status: "running", detail: null, error: null, output: "", startedAt: now() });
         try {
           set(key, { status: "done", ...(await execute(step)) });
         } catch (e) {

@@ -12,7 +12,7 @@ const response=bytes=>({ok:true,arrayBuffer:async()=>Uint8Array.from(bytes).buff
 test('transient image fetch failures retry before poisoning a guest executable',async()=>{
  const events=[],core=new Core({config:{filesystem:{baseurl:'https://files.invalid/'}},agent:null,blobRetryDelays:[0,0],emit:(...e)=>events.push(e)});let calls=0;
  core.fetch=async()=>{if(++calls===1)throw new TypeError('Failed to fetch');return response([1,2]);};
- assert.deepEqual(await core.fetchBlob('busybox.zst'),Uint8Array.of(1,2));assert.equal(calls,2);assert.equal(core.failedBlobs.size,0);assert.deepEqual(events,[]);
+ assert.deepEqual(await core.fetchBlob('busybox.zst'),Uint8Array.of(1,2));assert.equal(calls,2);assert.equal(core.failedBlobs.size,0);assert.deepEqual(events.filter(([type])=>type==='blobs'),[]);
  core.fetch=async()=>{calls++;return {ok:false,status:404,statusText:'Not found'};};const before=calls;
  await assert.rejects(core.fetchBlob('missing.zst'),/404/);assert.equal(calls,before+1,'permanent HTTP errors do not retry');
 });

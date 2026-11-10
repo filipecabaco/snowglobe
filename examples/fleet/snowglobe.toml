@@ -23,7 +23,25 @@ network = "fetch"
 template = "supabase"
 run = [
 '''
-. /home/supa/.stack-env; psql -q "$DB_URL" <<'SQL'
+. /home/supa/.stack-env
+# A slow machine (a phone) can still be starting the database: wait for it, up to 90s, and if it never
+# answers say what is there, so the failure explains itself (psql exits 2 when it can't connect)
+n=0
+until psql -tA "$DB_URL" -c 'select 1' >/dev/null 2>&1; do
+  n=$((n + 1))
+  if [ "$n" -gt 90 ]; then
+    echo "postgres did not answer in 90s. DB_URL=${DB_URL:-<unset>}"
+    ls -l /home/supa/.stack-env 2>&1
+    echo "postgres processes: $(ps | grep -c '[p]ostgres')"
+    free -m 2>&1 | head -n 2
+    dmesg 2>/dev/null | tail -n 5
+    psql "$DB_URL" -c 'select 1' 2>&1 | tail -n 3
+    exit 2
+  fi
+  sleep 1
+done
+echo "postgres answered after ${n}s"
+psql -q "$DB_URL" <<'SQL'
 create table if not exists public.ticks (id bigserial primary key, v numeric not null, at timestamptz not null default now());
 grant select on public.ticks to anon, authenticated;
 alter publication supabase_realtime add table public.ticks;
