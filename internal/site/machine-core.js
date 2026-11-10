@@ -754,8 +754,10 @@
       this.capturing = true;
       try {
         await vm.stop();
-        let bytes = await vm.save_state();
-        const packed = this.sessions ? await this.sessions.packState(bytes) : { encoding: "raw", state: new Blob([bytes]) };
+        // In pieces where the machine gives them (packState takes them as they are): never in one
+        // buffer, in the machine's memory or this page's
+        let bytes = vm.save_state_pieces ? await vm.save_state_pieces() : [await vm.save_state()];
+        const packed = this.sessions ? await this.sessions.packState(bytes) : { encoding: "raw", state: new Blob(bytes) };
         bytes = null;
         return packed;
       } catch (e) {

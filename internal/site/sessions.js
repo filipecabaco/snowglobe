@@ -60,8 +60,9 @@
     consoleEvents(await c.console.arrayBuffer());
     return c;
   }
-  async function packState(bytes) {
-    const raw = new Blob([bytes]);
+  /** The snapshot as bytes, or as the pieces a machine hands it out in (snapshot()). */
+  async function packState(state) {
+    const raw = new Blob(Array.isArray(state) ? state : [state]);
     if (typeof CompressionStream === "undefined") return { encoding: "raw", state: raw };
     return { encoding: "gzip", state: await new Response(raw.stream().pipeThrough(new CompressionStream("gzip"))).blob() };
   }
@@ -71,11 +72,17 @@
     return new Response(c.state.stream().pipeThrough(new DecompressionStream("gzip"))).blob();
   }
   async function unpackState(c) { return new Uint8Array(await (await stateBlob(c)).arrayBuffer()); }
+  /**
+   * A stopped machine's snapshot: its pieces where the machine hands it out so (armless 0.9.6 and
+   * on), which packState() takes as they are, so the page never holds it in one buffer as well;
+   * else its bytes.
+   */
+  function snapshot(vm) { return vm.save_state_pieces ? vm.save_state_pieces() : vm.save_state(); }
   async function capture(vm, onPaused = () => {}) {
     const running = vm.running;
     try {
       await vm.stop(); // including all SMP workers; host input is gated by the UI during capture
-      const bytes = await vm.save_state();
+      const bytes = await snapshot(vm);
       onPaused();
       return bytes;
     } finally { if (running) vm.run(); }
@@ -252,7 +259,7 @@
     });
   }
 
-  const api = { BrowserStore, FolderStore, acquireLock, compatible, capture, packState, unpackState,
+  const api = { BrowserStore, FolderStore, acquireLock, compatible, capture, snapshot, packState, unpackState,
     encodeBackup, decodeBackup, stateBlob, consoleRecord, resizeRecord, consoleEvents, metadata, digest };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.SnowglobeSessions = api;

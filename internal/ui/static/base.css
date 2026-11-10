@@ -88,8 +88,11 @@ footer { margin-top: clamp(80px, 10vw, 140px); padding: 28px 0 48px; border-top:
 @media (pointer: coarse) {
   .top nav a, .theme, footer a, .command a { display: inline-block; padding-block: 12px; margin-block: -12px; }
 }
-/* Phones: an options table reflows into one block per row, so nothing clips */
+/* Phones: the masthead wraps (the nav goes under the mark) rather than widening the page, and an
+   options table reflows into one block per row, so nothing clips */
 @media (max-width: 720px) {
+  .top { flex-wrap: wrap; row-gap: 14px; }
+  .top nav { flex-wrap: wrap; gap: 10px 22px; }
   table.options thead { display: none; }
   table.options, table.options tbody, table.options tr { display: block; }
   table.options tr { padding: 12px 0; border-bottom: 1px solid var(--rule); }
