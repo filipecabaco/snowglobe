@@ -118,6 +118,8 @@
       worker: abs("machine-worker.js"),
       core: [abs(manifest.armless.js), abs("sessions.js"), abs("agent.js"), abs("transfer.js"), abs("ws-client.js"), abs("machine-core.js")],
     };
+    // The memory debug (memory-debug.js): armless samples the machines' memory when the page asked
+    const debugMemory = !!root.SnowglobeMemoryDebug?.enabled?.();
     const changed = () => { try { onchange?.(); } catch {} };
     const tell = (event) => { try { onactivity?.(event); } catch {} };
     const jobs = new Map(); // job id: { machine, final view once it ended }
@@ -353,7 +355,8 @@
 
     // A machine's host, made at each wake (and its worker with it), ended at each suspend
     function makeHost(m) {
-      const host = createMachine({ base: m.base, config: withLinks(m), transport: state.transport, scripts, uploadWindow: state.uploadWindow, ...hostOptions });
+      const config = debugMemory ? { ...withLinks(m), debug: true } : withLinks(m);
+      const host = createMachine({ base: m.base, config, transport: state.transport, scripts, uploadWindow: state.uploadWindow, ...hostOptions });
       m.files = null; // this wake's
 
       // Its guest's TCP connections over links, by cid: each ends when this host goes ("gone")

@@ -116,7 +116,10 @@
   const claim = (url) => {
     try { navigator.serviceWorker?.controller?.postMessage({ type: "snowglobe-preview-nav", url: new URL(url, location.href).href }); } catch {}
   };
-  window.snowglobeFleet = { api, plan: () => current?.plan, run: () => current?.run };
+  // Each awake machine's memory, digested (memory-debug.js): from the console, and as a panel with ?debug=memory
+  const memoryOf = async () => Promise.all(api._machines.filter((m) => m.host).map(async (m) => ({ name: m.name, snapshot: await m.host.memoryReport().catch(() => null) })));
+  window.snowglobeFleet = { api, plan: () => current?.plan, run: () => current?.run, memory: memoryOf };
+  if (window.SnowglobeMemoryDebug?.enabled()) SnowglobeMemoryDebug.mount(document.body, memoryOf);
 
   // ---------------------------------------------------------------- the file
   const text = $("fleet-text");
