@@ -818,6 +818,27 @@
       return { wasmBytes: this.vm?.memory?.buffer?.byteLength ?? 0 };
     }
 
+    /**
+     * What the machine's memory holds, for the memory debug (memory-debug.js digests it): armless's
+     * report (it scans the memory, a few ms per 100 MB), the samples it took with the `debug`
+     * option, and what this machine was set up with. null where armless has no report.
+     */
+    memoryReport() {
+      const vm = this.vm;
+      if (!vm?.memory_report) return null;
+      return {
+        report: vm.memory_report(),
+        samples: vm.debug?.samples ?? [],
+        info: {
+          memory_mb: this.config.memory_mb ?? null,
+          fs_cache_mb: vm.options?.fs_cache_mb ?? FS_CACHE_MB,
+          pack_give_mb: PACK_GIVE_BYTES >> 20,
+          pack_given_bytes: this.packGivenBytes ?? 0,
+          sampling: !!vm.debug,
+        },
+      };
+    }
+
     // The guest's files are fetched one blocking request at a time the first time each is read.
     // warm.pack bundles the files the app is most likely to need into one background download, read
     // as it arrives (WarmPack): its first files go into the machine once their bytes are in, and a
@@ -843,6 +864,7 @@
             if (givenBytes >= PACK_GIVE_BYTES) continue;
             any = true;
             givenBytes += size ?? bytes.length;
+            this.packGivenBytes = givenBytes;
             if (!vm.has_blob(name)) vm.provide_blob(name, bytes); // else the guest already has it
             if (pack.now() >= until) break;
           }
