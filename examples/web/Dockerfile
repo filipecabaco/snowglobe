@@ -55,7 +55,7 @@ CMD ["/usr/local/bin/web-demo"]
 # without it, an agent's first `npm install` fetched them one by one from the live site, over five
 # minutes. It installs into a scratch directory, removed after, so the project is untouched.
 LABEL snowglobe.title="React + Vite in the browser" \
-      snowglobe.memory="640" \
+      snowglobe.memory="384" \
       snowglobe.network="fetch" \
       snowglobe.ready="~/app $ " \
       snowglobe.agent="true" \
