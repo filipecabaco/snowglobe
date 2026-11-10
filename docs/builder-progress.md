@@ -1001,3 +1001,23 @@ provider/persistence flows passed. The existing Codex UI check verifies sign-in
 through the provider form, removal of the standalone section, restoring a saved
 connection on reload, shared model selection and Forget. Admission/onboarding and
 Chromium/WebKit clipboard/manual-copy checks also passed against the private site.
+
+## November 9: deleting projects with an open Supabase preview
+
+Fixed project deletion failing with “supabase is busy” after the source checkpoint
+had already been cleared. Supabase's preview bridge intentionally pins its VM as
+busy; deletion now disposes the application frame/relay, aborts and drains backend
+requests, and closes that bridge before deleting checkpoints. Both machines are
+checked for remaining activity before either saved VM is removed. A remaining
+busy operation reports that saved data is unchanged. After source removal, the
+page no longer treats its old compiler/client as an initialized project; a partial
+delete keeps recovery/project metadata available until cleanup can be retried.
+
+Chromium and WebKit regressions use the actual Builder/orchestrator and IndexedDB:
+denial preserves the live preview and both saves; confirmed cleanup disposes the
+preview/request and clears its database pin; an unrelated busy operation preserves
+both checkpoints; an injected database failure after source removal can be retried;
+and another project's VM saves, recovery and history remain untouched. No VM boot
+or provider credentials are needed by these fixtures. All 123 native Builder tests
+passed, with one optional fixture skipped. The rebuilt frontend is served by the
+private development site; existing tabs need reload before retrying deletion.

@@ -166,7 +166,28 @@ $('project-new').onclick=()=>task(()=>createProject());
 $('project-duplicate').onclick=()=>task(()=>createProject(true));
 $('project-rename').onclick=()=>task(async()=>{currentProject={...currentProject,name:projectName($('project-new-name').value)};await projectStore('put',currentProject);await refreshProjects();status('Project renamed');});
 $('project-open').onchange=()=>{const selected=$('project-open').value;if(selected===projectId)return;task(async()=>{if(projectPrepared||recoveryFiles)await saveProject();navigateProject(selected);});};
-$('project-delete').onclick=()=>task(async()=>{await requireApproval(approve,{title:'Delete this project',description:'Permanently delete this project’s saved source, conversation, versions and database checkpoint from this browser. Export it first if needed.',content:currentProject.name},abort.signal);for(const runtime of ['web','supabase']){const slot=api._get(runtime).slot;await slot.open();if(!slot.store)throw new Error(slot.error||'Project storage could not be opened');}deletingProject=true;try{for(const runtime of ['web','supabase'])if(!await api.startFresh(runtime))throw new Error('Project deletion stopped');projectPrepared=false;recoveryFiles=null;await projectCheckpoint('readwrite',null);await historyStore(projectId,null);await projectStore('delete',{id:projectId});localStorage.removeItem(metadataKey);navigateProject(DEFAULT_PROJECT);}catch(error){throw new Error('Project deletion did not finish; some project data may already have been removed. '+error.message);}finally{deletingProject=false;}});
+$('project-delete').onclick=()=>task(async()=>{
+ await requireApproval(approve,{title:'Delete this project',description:'Permanently delete this project’s saved source, conversation, versions and database checkpoint from this browser. Export it first if needed.',content:currentProject.name},abort.signal);
+ // Check access to both stores before stopping the preview or deleting any checkpoint.
+ for(const runtime of ['web','supabase']){const slot=api._get(runtime).slot;await slot.open();if(!slot.store)throw new Error(slot.error||'Project storage could not be opened');}
+ let removing=false;deletingProject=true;pendingConsole=false;
+ try{
+  // Dispose the relay first: it aborts requests and prevents the app from opening new ones.
+  for(const frame of $('preview').querySelectorAll('iframe')){frame._disposePreview?.();frame.remove();}
+  await backend.freeze();
+  abort.signal.throwIfAborted();
+  // A database preview used to keep Supabase busy after the source save was already erased.
+  // Check every machine after draining requests, before touching either saved VM.
+  for(const runtime of ['web','supabase'])if(api._get(runtime).busy())throw new Error((runtime==='supabase'?'Database':'Source')+' VM still has an active operation. Wait for it to finish and retry.');
+  for(const runtime of ['web','supabase']){
+   abort.signal.throwIfAborted();removing=true;
+   if(!await api.startFresh(runtime))throw new Error('Project deletion stopped');
+   if(runtime==='web'){projectPrepared=false;client.installed=false;}else backend.client.installed=false;
+  }
+  recoveryFiles=null;await projectCheckpoint('readwrite',null);await historyStore(projectId,null);await projectStore('delete',{id:projectId});localStorage.removeItem(metadataKey);navigateProject(DEFAULT_PROJECT);
+ }catch(error){throw new Error(removing?'Project deletion did not finish; some project data may already have been removed. Retry deleting this project. '+error.message:'Project deletion did not start; saved project data is unchanged. '+error.message+' Rebuild preview to use the app again.');}
+ finally{deletingProject=false;backend.resume();}
+});
 function renderExtensions(){$('extension-list').replaceChildren();for(const extension of extensions.list()){const row=document.createElement('p'),text=document.createElement('span'),revoke=document.createElement('button'),run=document.createElement('button');text.textContent=extension.name+' · '+extension.scopes.join(', ')+' ';revoke.textContent='Revoke';revoke.onclick=()=>{extensions.revoke(extension.id);renderExtensions();};run.textContent='Run';run.onclick=()=>task(async()=>{await prepare();const result=await extensions.invoke(extension.id,{},abort.signal);log(JSON.stringify(result),'tool');status('Extension completed');});row.append(text,run,revoke);$('extension-list').append(row);}if(!extensions.list().length)$('extension-list').textContent='No extensions enabled. Permissions expire when this page closes.';}
 $('extension-example').onclick=()=>task(async()=>{await extensions.register(projectSummaryExtension,abort.signal);renderExtensions();status('Project summary extension enabled');});
 $('extension-import').onclick=()=>$('extension-file').click();
