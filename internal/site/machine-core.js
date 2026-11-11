@@ -337,18 +337,27 @@
   // ------------------------------------------------------------------ the warm pack
   //
   // warm.pack is [u32 index size][index: JSON [[name, size, length], ...]][the files' bytes, in index
-  // order], the files ordered by when the build saw them first read. It is read as it arrives: the
-  // index from its first bytes, then each file as soon as its bytes are in, so a file the guest asks
-  // for that the pack holds comes from the pack (waited for while it is near) instead of a request
-  // of its own, and the files go into the machine in slices of time rather than one timer each
-  // (a phone's browser stretches each timer, and the guest raced past a pack fed that way).
+  // order], the files in the order a restored machine first read them at build time (its exercises),
+  // so it streams what the guest needs first, first. It is read as it arrives: the index from its
+  // first bytes (a read waits for those), then each file as soon as its bytes are in. A file the
+  // guest asks for that the pack holds comes from the pack, waited for while the pack brings it
+  // within PACK_WAIT_MS at the rate it comes. One further off (a visitor's first command isn't the
+  // build's) is fetched on its own, so the guest isn't held behind files it doesn't need yet, and
+  // goes into the pack's place for it: every later read of it, the machine's cache having let it go,
+  // comes from there. While the guest waits on files fetched on their own (and nothing it reads
+  // waits on the pack), the pack stops reading, so they have the bandwidth: the guest's reads go
+  // first, the pack fills the time between them. A pack that stops coming (PACK_STALL_MS without a byte, or failed) lets its
+  // reads fetch their files. The files go into the machine in slices of time rather than one timer
+  // each (a phone's browser stretches each timer, and the guest raced past a pack fed that way).
 
-  /** How long a read waits for the pack to bring a file before it fetches the file itself. */
+  /** How long a read waits for the pack to bring a file, at the rate it comes, before it fetches
+   *  the file itself. */
   const PACK_WAIT_MS = 2000;
   /** ... and, before the pack's rate is known, how far into what is still to come it waits. */
   const PACK_WAIT_BYTES = 4 << 20;
-  /** How long a read waits for the pack's index (its first bytes) before it fetches its file itself. */
-  const PACK_INDEX_WAIT_MS = 1000;
+  /** How long the pack may go without a byte (its first ones included) before the reads waiting on
+   *  it give up and fetch their files themselves, until it comes again. */
+  const PACK_STALL_MS = 5000;
   /** How long a slice of handing files to the machine runs before it lets the machine run. */
   const PACK_SLICE_MS = 8;
   /** Reading ahead (Core._readAhead): files fetched at once, and at most so many bytes a machine. */
@@ -374,12 +383,20 @@
    *  into the machine as they arrive; the rest wait in the pack until the guest reads them. Less
    *  than the machine's cache holds, or it drops them before the guest reads them. */
   const PACK_GIVE_BYTES = 12 << 20;
+  /**
+   * Files fetched on their own (the pack doesn't hold them) are kept, compressed, in this page, up
+   * to so many bytes (the least recently read go first): the machine's cache (FS_CACHE_MB) lets
+   * files go, and the guest reads them again, which must not mean downloading them again. Pack
+   * files need no copy: the pack keeps them.
+   */
+  const KEEP_BYTES = 32 << 20;
 
   class WarmPack {
     /** `now()` the clock in ms. */
-    constructor({ now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()), indexWaitMs = PACK_INDEX_WAIT_MS } = {}) {
+    constructor({ now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()), stallMs = PACK_STALL_MS, waitMs = PACK_WAIT_MS } = {}) {
       this.now = now;
-      this.indexWaitMs = indexWaitMs;
+      this.stallMs = stallMs;
+      this.waitMs = waitMs;
       this.buf = new Uint8Array(0);
       this.received = 0;
       this.entries = null; // name -> { start, end }, once the index is in
@@ -388,8 +405,18 @@
       this.total = null; // the pack's size, once the index says it
       this.done = false; // all of it in, or given up on
       this.started = now();
+      this.lastByteAt = this.started; // when bytes last came (the start, before any)
+      this.stalled = false; // no byte for stallMs: reads fetch their files, until bytes come again
       this._waiters = new Map(); // name -> [resolve]
       this._indexWaiters = [];
+      this._watch = null; // the stall timer, while anyone waits
+      this.pausedMs = 0; // time the page held the pack back (Core._packTurn): not its rate's
+      this.onWait = null; // called when a read starts waiting on the pack
+    }
+
+    /** Whether a read waits on the pack (its index, or a file it brings). */
+    waiting() {
+      return this._waiters.size > 0 || this._indexWaiters.length > 0;
     }
 
     /** Bytes as they arrive. */
@@ -403,6 +430,8 @@
       }
       this.buf.set(chunk, this.received);
       this.received = need;
+      this.lastByteAt = this.now();
+      this.stalled = false;
       if (!this.entries) this._readIndex();
       if (this.entries) this._arrived();
     }
@@ -413,9 +442,43 @@
       if (ok && !this.entries) this._readIndex();
       if (ok && this.entries) this._arrived();
       this.done = true;
+      this._letGo();
+    }
+
+    /** Whoever waits stops: a file's waiters get its bytes if they are in, else null (fetch it). */
+    _letGo() {
       for (const r of this._indexWaiters.splice(0)) r();
       for (const [name, list] of this._waiters) for (const r of list) r(this._bytes(name));
       this._waiters.clear();
+      clearInterval(this._watch);
+      this._watch = null;
+    }
+
+    /** While anyone waits, check now and then that bytes still come; once they haven't for
+     *  stallMs, the waiting reads go and fetch their files. */
+    _watchStall() {
+      if (this._watch) return;
+      const every = Math.max(10, Math.min(500, this.stallMs / 4));
+      this._watch = setInterval(() => {
+        if (!this._waiters.size && !this._indexWaiters.length) {
+          clearInterval(this._watch);
+          this._watch = null;
+        } else if (this.now() - this.lastByteAt >= this.stallMs) {
+          this.stalled = true;
+          this._letGo();
+        }
+      }, every);
+      this._watch.unref?.();
+    }
+
+    /** Resolves once the index is in, or the pack is done or stalled (then there may be none). */
+    async indexed() {
+      if (this.entries || this.done || this.stalled) return;
+      await new Promise((r) => {
+        this._indexWaiters.push(r);
+        this._watchStall();
+        this.onWait?.();
+      });
     }
 
     _readIndex() {
@@ -426,7 +489,7 @@
       this.entries = new Map();
       let at = 4 + size;
       for (const [name, size, length] of index) {
-        const e = { name, size, start: at, end: at + length };
+        const e = { name, size, start: at, end: at + length, filled: false };
         this.entries.set(name, e);
         this.order.push(e);
         at += length;
@@ -454,44 +517,56 @@
     /** A file's bytes, if they are in. */
     _bytes(name) {
       const e = this.entries?.get(name);
-      return e && e.end <= this.received ? this.buf.subarray(e.start, e.end) : null;
+      return e && (e.filled || e.end <= this.received) ? this.buf.subarray(e.start, e.end) : null;
     }
 
     /** Bytes a second so far (null until there is a measure). */
     rate() {
-      const ms = this.now() - this.started;
+      const ms = this.now() - this.started - this.pausedMs;
       return ms > 50 && this.received > 0 ? (this.received / ms) * 1000 : null;
     }
 
     /**
+     * A file the pack holds, fetched on its own (it was far off): its bytes go in its place, so
+     * whoever waits for it has it, and later reads take it from there. The pack's own copy, when it
+     * comes, is the same bytes.
+     */
+    fill(name, bytes) {
+      const e = this.entries?.get(name);
+      if (!e || e.filled || e.end <= this.received || bytes.length !== e.end - e.start || this.buf.length < e.end) return;
+      this.buf.set(bytes, e.start);
+      e.filled = true;
+      const list = this._waiters.get(name);
+      if (list) {
+        this._waiters.delete(name);
+        for (const r of list) r(this._bytes(name));
+      }
+    }
+
+    /**
      * A file the guest asks for: its bytes from the pack, now or once they arrive if that is soon
-     * (PACK_WAIT_MS at the rate the pack comes in); null if the pack doesn't hold it, or it is too
-     * far off, and the file should be fetched on its own.
+     * (waitMs at the rate the pack comes in); null if the pack doesn't hold it, it is too far off,
+     * or the pack stops coming (failed, or stalled for stallMs), and the file should be fetched on
+     * its own (then fill() it).
      */
     async get(name) {
-      // The index is the pack's first bytes: worth waiting for, a little (a pack slow to start
-      // mustn't hold the guest's reads; they fetch their files until it comes)
-      if (!this.entries && !this.done) {
-        let timer;
-        await new Promise((r) => {
-          this._indexWaiters.push(r);
-          timer = setTimeout(r, this.indexWaitMs);
-        });
-        clearTimeout(timer);
-      }
+      // The index is the pack's first bytes
+      await this.indexed();
       const e = this.entries?.get(name);
       if (!e) return null;
       const now = this._bytes(name);
-      if (now || this.done) return now;
+      if (now || this.done || this.stalled) return now;
       // Near enough at the rate it comes, or (no rate yet: it has only just started) within its next
       // PACK_WAIT_BYTES
       const rate = this.rate();
       const left = e.end - this.received;
-      if (rate ? (left / rate) * 1000 > PACK_WAIT_MS : left > PACK_WAIT_BYTES) return null;
+      if (rate ? (left / rate) * 1000 > this.waitMs : left > PACK_WAIT_BYTES && this.waitMs !== Infinity) return null;
       return new Promise((resolve) => {
         const list = this._waiters.get(name) ?? [];
         list.push(resolve);
         this._waiters.set(name, list);
+        this._watchStall();
+        this.onWait?.();
       });
     }
 
@@ -511,6 +586,8 @@
 
     /** Let the bytes go (the machine is gone). */
     release() {
+      this.done = true;
+      this._letGo();
       this.buf = new Uint8Array(0);
       this.entries = null;
       this.order = [];
@@ -541,7 +618,10 @@
       this.fetchedNames = new Set(); // fetched for a read: armless has them, or is handing them over
       this.prefetchQueue = [];
       this.prefetching = 0;
-      this.fileStats = { fromPack: 0, fetched: 0, fetchedBytes: 0, prefetched: 0, prefetchedBytes: 0 };
+      // Files fetched on their own, compressed, the least recently read first (KEEP_BYTES)
+      this.kept = new Map();
+      this.keptBytes = 0;
+      this.fileStats = { fromPack: 0, fromKept: 0, fetched: 0, fetchedBytes: 0, prefetched: 0, prefetchedBytes: 0 };
       // The job runner for any machine with agent.js loaded (its Controller says what it supports)
       if (agent) {
         const core = this;
@@ -623,7 +703,14 @@
      * succeeds again ({ ok: true }); it still fails the guest's read, as armless's own would.
      */
     async fetchBlob(name) {
-      // From the warm pack, if it holds the file and brings it soon
+      // Fetched before (the machine's cache let it go since): the copy this page kept
+      const kept = this._kept(name);
+      if (kept) {
+        this.fileStats.fromKept++;
+        this._filesChanged();
+        return kept;
+      }
+      // From the warm pack, if it holds the file: now, or once the pack brings it
       const packed = await this.pack?.get(name);
       if (packed) {
         this.fileStats.fromPack++;
@@ -638,7 +725,12 @@
           bytes = this._fetchBlob(name);
           this.inflight.set(name, bytes);
           this.fetchedNames.add(name);
-          bytes.then(() => {}, () => this.fetchedNames.delete(name)).finally(() => this.inflight.delete(name)).catch(() => {});
+          // Kept for the reads after this one: in the pack's place for it, or else in this page
+          bytes.then((b) => (this.pack?.holds(name) ? this.pack.fill(name, b) : this._keep(name, b)), () => {});
+          bytes.then(() => {}, () => this.fetchedNames.delete(name)).finally(() => {
+            this.inflight.delete(name);
+            this._fetchedIn();
+          }).catch(() => {});
           this.fileStats.fetched++;
           this._filesChanged();
           this._readAhead(name).catch(() => {});
@@ -649,6 +741,27 @@
         return b;
       } finally {
         this.demanded.delete(name);
+      }
+    }
+
+    /** A kept file's bytes (now the most recently read), or null. */
+    _kept(name) {
+      const b = this.kept.get(name);
+      if (!b) return null;
+      this.kept.delete(name);
+      this.kept.set(name, b);
+      return b;
+    }
+
+    /** Keep a fetched file's bytes, letting the least recently read go past KEEP_BYTES. */
+    _keep(name, bytes) {
+      if (this.kept.has(name) || bytes.length > KEEP_BYTES) return;
+      this.kept.set(name, bytes);
+      this.keptBytes += bytes.length;
+      for (const [n, b] of this.kept) {
+        if (this.keptBytes <= KEEP_BYTES) break;
+        this.kept.delete(n);
+        this.keptBytes -= b.length;
       }
     }
 
@@ -713,13 +826,15 @@
       const index = await this._fsIndex();
       const f = index?.byBlob.get(name);
       if (!f) return;
+      // Which chunks the pack brings is known once its index is in: those aren't fetched ahead
+      await this.pack?.indexed();
       for (const blob of f.chunks.slice(f.at + 1, f.at + 1 + CHUNKS_AHEAD)) this._prefetch(blob);
     }
 
     /** Queue one file to fetch ahead, unless it is in, coming, or past the budget. */
     _prefetch(name) {
       const vm = this.vm;
-      if (!vm || this.inflight.has(name) || this.fetchedNames.has(name) || this.prefetchQueue.includes(name) || vm.has_blob(name)) return;
+      if (!vm || this.inflight.has(name) || this.fetchedNames.has(name) || this.kept.has(name) || this.prefetchQueue.includes(name) || vm.has_blob(name)) return;
       // The pack brings what it holds, or has it (a read takes it from there)
       if (this.pack?.holds(name)) return;
       if (this.fileStats.prefetchedBytes >= READ_AHEAD_BYTES) return;
@@ -731,22 +846,48 @@
       while (this.prefetching < READ_AHEAD && this.prefetchQueue.length) {
         const name = this.prefetchQueue.shift();
         const vm = this.vm;
-        if (!vm || vm.has_blob(name) || this.inflight.has(name)) continue;
+        if (!vm || vm.has_blob(name) || this.inflight.has(name) || this.kept.has(name) || this.pack?.holds(name)) continue;
         this.prefetching++;
         const bytes = this._fetchBlob(name);
         this.inflight.set(name, bytes);
         bytes.then((b) => {
+          this._keep(name, b);
           this.fileStats.prefetched++;
           this.fileStats.prefetchedBytes += b.length;
           // Into the machine, unless the guest asked meanwhile (its read hands it over itself)
           if (vm === this.vm && !vm.stopped && !this.demanded.has(name) && !vm.has_blob(name)) vm.provide_blob(name, b);
         }, () => {}).finally(() => {
           this.inflight.delete(name);
+          this._fetchedIn();
           this.prefetching--;
           this._filesChanged();
           this._prefetchPump();
         });
       }
+    }
+
+    /**
+     * The pack's turn to read on: at once, unless files fetched on their own are coming (the guest,
+     * or reading ahead of it, waits on them) and no read waits on the pack; then once they are in
+     * or a read waits on the pack.
+     */
+    _packTurn(pack) {
+      if (!this.inflight.size || pack.waiting() || pack.done) return null;
+      const from = pack.now();
+      return new Promise((resolve) => {
+        this._packResume = () => {
+          this._packResume = null;
+          pack.onWait = null;
+          pack.pausedMs += pack.now() - from;
+          resolve();
+        };
+        pack.onWait = () => this._packResume?.();
+      });
+    }
+
+    /** Files fetched on their own are in: the pack may read on. */
+    _fetchedIn() {
+      if (!this.inflight.size) this._packResume?.();
     }
 
     /** How the machine's files are coming: a `files` event, at most every FILES_EVERY_MS. */
@@ -755,6 +896,7 @@
       return {
         warm: p ? { loaded: p.received, total: p.total, done: p.done } : null,
         fromPack: this.fileStats.fromPack,
+        fromKept: this.fileStats.fromKept,
         fetched: this.fileStats.fetched,
         fetchedBytes: this.fileStats.fetchedBytes,
         prefetched: this.fileStats.prefetched,
@@ -825,9 +967,12 @@
         this.emit("link", { cid, kind: "close" });
       }
       this.links?.clear();
-      // The warm pack's bytes go with the machine they were for
+      // The warm pack's bytes go with the machine they were for (a pack held back reads on, and stops)
+      this._packResume?.();
       this.pack?.release();
       this.pack = null;
+      this.kept.clear();
+      this.keptBytes = 0;
       this.vm = null;
       this.state = "idle";
       this.tcp?.clear();
@@ -856,6 +1001,7 @@
           fs_cache_mb: vm.options?.fs_cache_mb ?? FS_CACHE_MB,
           pack_give_mb: PACK_GIVE_BYTES >> 20,
           pack_given_bytes: this.packGivenBytes ?? 0,
+          kept_bytes: this.keptBytes ?? 0,
           sampling: !!vm.debug,
         },
       };
@@ -903,8 +1049,14 @@
         if (response.body?.getReader) {
           const reader = response.body.getReader();
           for (;;) {
-            const { done, value } = await reader.read();
-            if (done || gone()) break;
+            // The guest's own fetches first
+            const turn = this._packTurn(pack);
+            if (turn) await turn;
+            const { done, value } = gone() ? { done: true } : await reader.read();
+            if (done || gone()) {
+              if (!done) reader.cancel().catch(() => {});
+              break;
+            }
             pack.push(value);
             kick();
           }

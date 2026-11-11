@@ -10,7 +10,6 @@
 //! streams the session both ways; {"mode":"links","links":[{host,port,url}]} replaces the
 //! machine's links (names its guest reaches at a unix:// or tcp:// address the daemon chose).
 
-use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::net::TcpListener;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -339,7 +338,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // Every file the guest fetches from the restore on, written out as it grows (a detached run
     // ends when its container is stopped) in the reads.json shape `snowglobe warm` merges
     if let Some(path) = args.get("record-reads").map(PathBuf::from) {
-        *activity.reads.lock().unwrap() = Some(BTreeSet::new());
+        *activity.reads.lock().unwrap() = Some(machine::Reads::new());
         let activity = activity.clone();
         std::thread::spawn(move || {
             let mut written = None;

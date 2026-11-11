@@ -224,7 +224,10 @@ Build flags:
   --allow-private let the build's snapshot reach loopback and private addresses (a tunnel
                   endpoint on this machine, say); the page is unaffected
   --exercise CMD  a command to type into the app after the snapshot, recording the files it reads
-                  so they're preloaded too; repeatable. A warm-report.json explains the result
+                  so they're preloaded too; repeatable. The warm pack holds what the restored
+                  machine reads (left to settle, then exercised), in the order it first reads
+                  it; with no exercises, what booting read as well. A warm-report.json explains
+                  the result
   --jit on|off    off keeps armless's interpreter instead of compiling hot guest code, in the
                   page and in snowglobe run: slower, and a smaller machine (default: on)
   --kernel none   no guest kernel: the image's command, an aarch64 Linux program, runs on its

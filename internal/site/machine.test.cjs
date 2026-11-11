@@ -991,28 +991,179 @@ test('a file the pack lacks, or a pack that fails, goes back to fetching the fil
   assert.equal(textOf(await reading), 'alpha');
 });
 
-test('a read doesn\'t wait for a file far off in the pack: at the rate it comes, more than 2 s away', async () => {
+test('a read waits for a file near in the pack; one far off is fetched on its own and goes in the pack\'s place for it', async () => {
   let clock = 0;
-  const p = new MC.WarmPack({ now: () => clock });
+  const p = new MC.WarmPack({ now: () => clock, stallMs: 60 });
   const big = new Uint8Array(10 << 20);
-  const pack = warmPack([['near.bin.zst', bytesOf('n')], ['far.bin.zst', big]]);
-  const head = pack.length - big.length; // the index and the near file
+  const pack = warmPack([['near.bin.zst', bytesOf('n')], ['far.bin.zst', big], ['last.bin.zst', bytesOf('l')]]);
+  const head = pack.length - big.length - 1; // the index and the near file
   p.push(pack.subarray(0, head));
   clock = 1000; // ~ the head in a second: 10 MB would take far longer
-  assert.equal(await p.get('far.bin.zst'), null, 'fetched on its own');
   assert.equal(textOf(await p.get('near.bin.zst')), 'n');
   assert.equal(await p.get('other.bin.zst'), null, 'not in the pack');
-  // Before any rate, only what is within the next 4 MB is waited for
-  const q = new MC.WarmPack({ now: () => 0 });
+  assert.equal(await p.get('last.bin.zst'), null, 'far off: fetched on its own');
+  // Fetched, it goes in the pack's place: read again (the machine's cache let it go), it is there
+  p.fill('last.bin.zst', bytesOf('l'));
+  assert.equal(textOf(await p.get('last.bin.zst')), 'l');
+  p.fill('near.bin.zst', bytesOf('wrong size')); // in already, and not its bytes: ignored
+  assert.equal(textOf(await p.get('near.bin.zst')), 'n');
+  // A read waiting for a file is answered by its fill too
+  const q = new MC.WarmPack({ now: () => 0, waitMs: Infinity, stallMs: 1000 });
   q.push(pack.subarray(0, head));
+  const waiting = q.get('far.bin.zst');
+  q.fill('far.bin.zst', big);
+  assert.equal((await waiting).length, big.length);
+  // The pack's own bytes for it, arriving later, change nothing
+  q.push(pack.subarray(head));
+  assert.equal((await q.get('far.bin.zst')).length, big.length);
+  assert.equal(textOf(await q.get('last.bin.zst')), 'l');
+
+  // Before any rate, only what is within the next 4 MB is waited for
+  const r = new MC.WarmPack({ now: () => 0 });
+  r.push(pack.subarray(0, head));
+  assert.equal(await r.get('last.bin.zst'), null);
+});
+
+test('a pack that stops coming lets its reads go, and new reads don\'t wait until bytes come again; one ending short too', async () => {
+  const big = new Uint8Array(1 << 20);
+  const pack = warmPack([['near.bin.zst', bytesOf('n')], ['far.bin.zst', big]]);
+  const head = pack.length - big.length;
+  const q = new MC.WarmPack({ stallMs: 40, waitMs: Infinity });
+  q.push(pack.subarray(0, head));
+  const started = Date.now();
   assert.equal(await q.get('far.bin.zst'), null);
-  // A waiting read is let go when the pack ends short
+  assert.ok(Date.now() - started >= 30, 'after the stall, not before');
+  assert.equal(q.stalled, true);
+  assert.equal(await q.get('far.bin.zst'), null, 'stalled: no wait');
+  q.push(pack.subarray(head, head + 1));
+  assert.equal(q.stalled, false, 'bytes again: reads wait again');
+
   const r = new MC.WarmPack({ now: () => 0 });
   const small = warmPack([['x.bin.zst', bytesOf('xray')]]);
   r.push(small.subarray(0, small.length - 2));
-  const waiting = r.get('x.bin.zst');
+  const pending = r.get('x.bin.zst');
   r.end(false);
-  assert.equal(await waiting, null);
+  assert.equal(await pending, null);
+});
+
+test('a file far off in the pack is fetched once: its later reads come from the pack', async () => {
+  const s = streamed();
+  const big = new Uint8Array(6 << 20);
+  const pack = warmPack([['a.bin.zst', bytesOf('alpha')], ['big.bin.zst', big], ['z.bin.zst', bytesOf('zulu')]]);
+  const { core, fetched, vm } = fileCore((url) => (url === 'w' ? s.response : url === 'https://b/z.bin.zst' ? blobResponse(bytesOf('zulu')) : null), { warm: 'w' });
+  core.warm();
+  s.push(pack.subarray(0, pack.length - big.length - 4)); // the index and a
+  await tick();
+  assert.equal(textOf(await core.fetchBlob('z.bin.zst')), 'zulu', 'far off: fetched');
+  vm.blobs.clear();
+  assert.equal(textOf(await core.fetchBlob('z.bin.zst')), 'zulu', 'again: from the pack');
+  assert.deepEqual(fetched.filter((u) => u.endsWith('.bin.zst')), ['https://b/z.bin.zst']);
+  assert.equal(core.kept.size, 0, 'the pack keeps it, not the page\'s own copy');
+  s.close();
+});
+
+test('a read before the pack\'s index waits for it, then takes its file from the pack', async () => {
+  const s = streamed();
+  const pack = warmPack([['a.bin.zst', bytesOf('alpha')], ['b.bin.zst', bytesOf('bravo')]]);
+  const { core, fetched } = fileCore((url) => (url === 'w' ? s.response : null), { warm: 'w' });
+  core.packOptions = { stallMs: 2000 };
+  const warming = core.warm();
+  const reading = core.fetchBlob('b.bin.zst'); // nothing of the pack here yet
+  await new Promise((r) => setTimeout(r, 50));
+  s.push(pack.subarray(0, 3));
+  await new Promise((r) => setTimeout(r, 50));
+  s.push(pack.subarray(3));
+  s.close();
+  assert.equal(textOf(await reading), 'bravo');
+  await warming;
+  assert.deepEqual(fetched, ['w'], 'only the pack was fetched');
+});
+
+test('no file is downloaded twice: what the machine\'s cache let go comes again from the page\'s copy', async () => {
+  const s = streamed();
+  const pack = warmPack([['p.bin.zst', bytesOf('packed')]]);
+  const { core, fetched, vm } = fileCore((url) => (url === 'w' ? s.response : url.startsWith('https://b/') && url.endsWith('.bin.zst') ? blobResponse(bytesOf(url.slice(10))) : null), { warm: 'w' });
+  const warming = core.warm();
+  s.push(pack);
+  s.close();
+  await warming;
+  // Read, let go by the machine (armless asks again), read again: each downloaded once
+  for (let round = 0; round < 3; round++) {
+    assert.equal(textOf(await core.fetchBlob('p.bin.zst')), 'packed');
+    assert.equal(textOf(await core.fetchBlob('own.bin.zst')), 'own.bin.zst');
+    vm.blobs.clear();
+  }
+  assert.deepEqual(fetched.filter((u) => u.endsWith('.bin.zst')), ['https://b/own.bin.zst']);
+  const st = core.filesStatus();
+  assert.equal(st.fetched, 1);
+  assert.equal(st.fromKept, 2);
+  assert.equal(st.fromPack, 3);
+  // Kept up to a budget, the least recently read going first; nothing kept once the machine goes
+  assert.ok(core.keptBytes > 0);
+  core.destroy();
+  assert.equal(core.kept.size, 0);
+});
+
+test('the page keeps at most 32 MB of fetched files, the least recently read let go first', () => {
+  const { core } = fileCore(() => null);
+  const mb8 = () => new Uint8Array(8 << 20);
+  for (const n of ['a', 'b', 'c', 'd']) core._keep(n, mb8());
+  core._kept('a'); // read again: now the most recent
+  core._keep('e', mb8());
+  assert.deepEqual([...core.kept.keys()], ['c', 'd', 'a', 'e']);
+  assert.equal(core.keptBytes, 32 << 20);
+  core._keep('huge', new Uint8Array((32 << 20) + 1));
+  assert.equal(core.kept.has('huge'), false, 'larger than the whole budget: not kept');
+});
+
+test('reading ahead waits for the pack\'s index and fetches no chunk the pack brings', async () => {
+  const s = streamed();
+  const tree = { big: ['c0.bin.zst', 'c1.bin.zst', 'c2.bin.zst', 'c3.bin.zst'] };
+  const pack = warmPack([['c0.bin.zst', bytesOf('c0')], ['c2.bin.zst', bytesOf('c2')]]);
+  const { core, fetched, vm } = fileCore((url) => url === 'w' ? s.response : url === 'https://b/fs.json' ? { ok: true, json: async () => fsJson(tree) }
+    : url.startsWith('https://b/') ? blobResponse(bytesOf(url.slice(10))) : null, { warm: 'w' });
+  core.packOptions = { stallMs: 2000 };
+  core.warm();
+  // The pack's response has started but its index isn't in yet; a chunk it lacks is read
+  const reading = core.fetchBlob('c1.bin.zst');
+  await new Promise((r) => setTimeout(r, 30));
+  s.push(pack);
+  s.close();
+  assert.equal(textOf(await reading), 'c1.bin.zst');
+  for (let i = 0; i < 20; i++) await tick();
+  // c3 is fetched ahead; c2, which the pack brings, isn't
+  const blobs = fetched.filter((u) => u.endsWith('.bin.zst'));
+  assert.deepEqual(blobs.sort(), ['https://b/c1.bin.zst', 'https://b/c3.bin.zst']);
+  assert.ok(vm.has_blob('c3.bin.zst'));
+});
+
+test('the guest\'s own fetches go first: the pack stops reading while they come, unless a read waits on the pack', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const s = streamed();
+  const pack = warmPack([['a.bin.zst', bytesOf('alpha')], ['b.bin.zst', bytesOf('bravo')]]);
+  const { core } = fileCore((url) => (url === 'w' ? s.response
+    : url === 'https://b/own.bin.zst' ? { ok: true, arrayBuffer: async () => { await gate; return bytesOf('own').buffer; } } : null), { warm: 'w' });
+  const warming = core.warm();
+  const index = pack.length - 'alphabravo'.length;
+  s.push(pack.subarray(0, index));
+  await new Promise((r) => setTimeout(r, 10));
+  const own = core.fetchBlob('own.bin.zst'); // not in the pack: fetched, the guest waiting on it
+  await new Promise((r) => setTimeout(r, 10));
+  // The read already asked for goes through (a's bytes); b's are sent, but the pack doesn't read them yet
+  s.push(pack.subarray(index, index + 5));
+  await new Promise((r) => setTimeout(r, 10));
+  s.push(pack.subarray(index + 5));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(core.pack.received, index + 5, 'held back while the guest\'s fetch comes');
+  // A read that waits on the pack lets it read on at once
+  assert.equal(textOf(await core.fetchBlob('b.bin.zst')), 'bravo');
+  release();
+  assert.equal(textOf(await own), 'own');
+  s.close();
+  await warming;
+  assert.equal(core.pack.received, pack.length);
+  assert.ok(core.pack.pausedMs > 0);
 });
 
 /** filesystem.json for `tree` ({ name: blob | [chunk blobs] | { ...dir } }). */
@@ -1063,10 +1214,10 @@ test('a read of a file being fetched ahead shares its request', async () => {
   assert.equal(fetched.filter((u) => u === 'https://b/c1.bin.zst').length, 1);
 });
 
-test('a pack slow to start doesn\'t hold the guest\'s reads: past a short wait for its index, a read fetches its file', async () => {
+test('a pack slow to start doesn\'t hold the guest\'s reads: once it has sent nothing for a while, a read fetches its file', async () => {
   const s = streamed(); // never sends a byte
   const { core, fetched } = fileCore((url) => (url === 'w' ? s.response : url === 'https://b/a.bin.zst' ? blobResponse(bytesOf('alpha')) : null), { warm: 'w' });
-  core.packOptions = { indexWaitMs: 20 };
+  core.packOptions = { stallMs: 20 };
   core.warm();
   await tick();
   const started = Date.now();

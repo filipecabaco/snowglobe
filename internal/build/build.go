@@ -329,13 +329,16 @@ func Run(o Options, version string) error {
 		}
 		os.Remove(readsFile)
 
-		files, bytes, err := rootfs.WriteWarmPack(fs, rootfs.WarmSelection{Reads: reads.All(), Match: s.Warm}, filepath.Join(out, "system"))
+		// What a restored machine reads, in the order it first reads it: the page streams the
+		// pack in that order. What only booting read stays out, unless nothing was exercised
+		withBoot := packsBoot(o, s)
+		files, bytes, err := rootfs.WriteWarmPack(fs, rootfs.WarmSelection{Order: reads.Pack(withBoot), Match: s.Warm}, filepath.Join(out, "system"))
 		if err != nil {
 			return err
 		}
-		fmt.Printf("    warm.pack: %d files, %.1f MB\n", files, float64(bytes)/(1<<20))
+		fmt.Printf("    warm.pack: %d files, %.1f MB, in the order a restored machine first read them\n", files, float64(bytes)/(1<<20))
 
-		report := rootfs.BuildReport(fs, reads, s.Exercise, s.Warm, blobSize(fs))
+		report := rootfs.BuildReport(fs, reads, s.Exercise, s.Warm, withBoot, blobSize(fs))
 		printReport(report, s.Exercise)
 		data, err := json.MarshalIndent(report, "", "  ")
 		if err != nil {
@@ -349,6 +352,14 @@ func Run(o Options, version string) error {
 		}
 		return site.Render(out, Page(s, version))
 	})
+}
+
+// packsBoot says whether the warm pack holds what only booting read. The guest's page cache is
+// dropped before the snapshot, so a restored machine reads little of it again; its exercises,
+// run from the restore on, say what it does read. Without exercises, or with a --sandbox
+// snapshot (exercised before it is saved, so nothing after it), boot's reads are the best guess.
+func packsBoot(o Options, s *Settings) bool {
+	return o.Sandbox || len(s.Exercise) == 0
 }
 
 // Page is the page a build with these settings renders.
@@ -462,9 +473,20 @@ func printReport(r rootfs.Report, order []string) {
 			fmt.Printf("      %-50s %4d %8.1f MB\n", g.Dir, g.Files, float64(g.Bytes)/(1<<20))
 		}
 	}
-	show("read while booting", r.Boot)
+	if r.Restore.Files > 0 {
+		show("read after the restore, untouched", r.Restore)
+	}
+	done := map[string]bool{}
 	for _, command := range order {
-		show("first read by: "+truncate(command, 18), r.Exercise[command])
+		if !done[command] {
+			done[command] = true
+			show("first read by: "+truncate(command, 18), r.Exercise[command])
+		}
+	}
+	if r.BootInPack {
+		show("read while booting", r.Boot)
+	} else {
+		fmt.Printf("    %-34s %5d files %8.1f MB  (not packed: fetched on demand)\n", "read only while booting", r.Boot.Files, float64(r.Boot.Bytes)/(1<<20))
 	}
 	if r.Pattern.Files > 0 {
 		show("added by the warm pattern", r.Pattern)

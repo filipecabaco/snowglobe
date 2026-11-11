@@ -296,12 +296,13 @@ LABEL snowglobe.title="Python + Rich in the browser" \
 ==&gt; Boot and snapshot
 App ready on hvc0 after 46.8s
 Saved /out/system/state.bin.zst (14 MB)
-Exercising: t = Table("language", "year")… (0 files, 3.8s)
-Exercising: Syntax("def fib(n):…", "python") (3 files, 5.2s)
+Settled after the snapshot (0 files, 2.6s)
+Exercising: t = Table("language", "year")… (0 files, 0.7s)
+Exercising: Syntax("def fib(n):…", "python") (4 files, 1.1s)
 ==&gt; Write warm pack
-    warm.pack: 410 files, 8.5 MB
-    read while booting       404 files   8.4 MB
-    first read by: Syntax…     3 files   0.0 MB
+    warm.pack: 4 files, 0.6 MB, in the order a restored machine first read them
+    first read by: Syntax…     4 files   0.6 MB
+    read only while booting  286 files   4.0 MB  (not packed: fetched on demand)
     never read              4055 files  43.5 MB
 
 dist/python is ready to deploy.</pre>
@@ -547,8 +548,11 @@ $ snowglobe apply</pre>
       let pre = 0, cold = 0;
       if (warm) {
         const first = Object.values(warm.exercise || {}).reduce((sum, p) => sum + p.bytes, 0);
-        pre = warm.boot.bytes + first + (warm.pattern?.bytes || 0);
-        cold = warm.cold.bytes;
+        // The pack: what the restored machine read, and boot's reads only where it holds them (an
+        // older report, without boot_in_pack, always did)
+        const bootPacked = warm.boot_in_pack !== false;
+        pre = (warm.restore?.bytes || 0) + first + (warm.pattern?.bytes || 0) + (bootPacked ? warm.boot.bytes : 0);
+        cold = warm.cold.bytes + (bootPacked ? 0 : warm.boot.bytes);
       }
       if (run) {
         entry.cpus = run.cpus || 1;
