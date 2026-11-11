@@ -255,6 +255,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         return crate::serve::main(args, site, socket);
     }
     let (info, spec, title) = site_spec(&site)?;
+    machine::choose_jit(&info, args.get("jit"))?;
     let socket = args.get("socket").unwrap_or(SOCKET).to_string();
 
     let env_file = args.get("env-file").map(env_file).transpose()?.unwrap_or_default();
@@ -291,6 +292,10 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     driver::watch(controls, started);
     // A run compiles its profile's code on top of what it gets hot: room for both, or the JIT
     // fills up and starts over mid-run (ARMLESS_JIT_CODE_MB still says otherwise)
+    // A site with no kernel restores its program instead (snowglobe build --kernel none)
+    if crate::user::is_user(&site) {
+        return crate::user::run(args, &site, &spec, &title, image, &socket, started);
+    }
     if std::env::var_os("ARMLESS_JIT_CODE_MB").is_none() {
         std::env::set_var("ARMLESS_JIT_CODE_MB", "64");
     }
@@ -314,8 +319,8 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // Code that earlier runs of this snapshot compiled (and the build, booting it) is compiled
     // now, while the app waits for its first command, instead of interpreted until it gets hot.
     // The profile learns from every run, so it follows what runs actually do.
-    // ARMLESS_JIT_PREWARM=off skips it
-    let learned = if std::env::var("ARMLESS_JIT_PREWARM").map_or(true, |v| v != "off") {
+    // ARMLESS_JIT_PREWARM=off skips it, as does a run without the JIT
+    let learned = if machine::jit_wanted() && std::env::var("ARMLESS_JIT_PREWARM").map_or(true, |v| v != "off") {
         let learned = profile::Learned::open(&site);
         let queued = runner.jit_prewarm(&learned.prewarm());
         if timing {

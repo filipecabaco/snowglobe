@@ -50,6 +50,8 @@ type Options struct {
 	// LogDir keeps durable logs: console.log, serial.log, events.jsonl. A named native instance
 	// keeps them in LogsDir(name) unless this says otherwise
 	LogDir string
+	// JIT is "on" or "off" for this run, over the site's own choice; empty: the site's
+	JIT string
 	// Fork makes a detached native instance a template: every job (snowglobe sh) runs in a fresh
 	// copy of the restored machine, forked from it, and leaves nothing behind for the next
 	Fork bool
@@ -178,6 +180,11 @@ func Run(o Options, version string) error {
 		args = append(args, net...)
 	}
 	command := append([]string{tools.VM, "run", "/site"}, tools.TunnelArgs(tunnels, o.AllowPrivate)...)
+	jit, err := jitArgs(o.JIT)
+	if err != nil {
+		return err
+	}
+	command = append(command, jit...)
 	dockerDriver, vmDriver, err := driverArgs(o, true)
 	if err != nil {
 		return err
@@ -411,4 +418,15 @@ func daemonMachine(name string) (*nativeState, error) {
 func isTerminal(f *os.File) bool {
 	info, err := f.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// jitArgs are snowglobe-vm's flags for a run's JIT: on, off, or (empty) the site's own choice.
+func jitArgs(jit string) ([]string, error) {
+	switch jit {
+	case "":
+		return nil, nil
+	case "on", "off":
+		return []string{"--jit", jit}, nil
+	}
+	return nil, fmt.Errorf("--jit %s: on or off", jit)
 }

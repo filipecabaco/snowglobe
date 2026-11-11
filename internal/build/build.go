@@ -73,11 +73,25 @@ type Options struct {
 	Agent bool
 	// AgentExposedTo is the origins, beyond the page's own, its WebMCP tools are shared with
 	AgentExposedTo []string
+	// JIT is "on" or "off": whether runs of the site compile hot guest code (natively, and to
+	// WebAssembly in the page) or keep the interpreter, which is slower and smaller. Empty: the
+	// label snowglobe.jit, else on
+	JIT string
+	// Kernel is "linux" (the default) or "none": the image's command is a static aarch64 Linux
+	// executable that runs with no guest kernel, its system calls answered by the machine
+	// (armless user mode). Much smaller snapshots, and it runs natively only for now (snowglobe
+	// run): no network, one CPU, no exercises, no agent page
+	Kernel string
 }
 
 // Settings are the resolved values a build runs with.
 type Settings struct {
-	Title       string
+	Title string
+	// Kernel: "linux" or "none"; Argv is the command's words, which "none" runs
+	Kernel string
+	Argv   []string
+	// JIT: runs compile hot guest code (the default) rather than keep the interpreter
+	JIT         bool
 	Command     string
 	Ready       string
 	Memory      int
@@ -202,8 +216,11 @@ func Run(o Options, version string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("    command: %s\n    ready:   %s\n    memory:  %d MB\n    network: %s\n    cpus:    %d (booted on %d)\n",
-		s.Command, describeReady(s.Ready), s.Memory, s.Network, s.CPUs, s.BuildCPUs)
+	fmt.Printf("    command: %s\n    ready:   %s\n    memory:  %d MB\n    network: %s\n    cpus:    %d (booted on %d)\n    jit:     %s\n",
+		s.Command, describeReady(s.Ready), s.Memory, s.Network, s.CPUs, s.BuildCPUs, onOff(s.JIT))
+	if s.Kernel == "none" {
+		fmt.Println("    kernel:  none (the command runs on its own; natively only)")
+	}
 	for _, t := range s.Tunnels {
 		fmt.Printf("    tunnel:  %s:%d -> %s\n", first(t.Host, "*"), t.Port, t.URL)
 	}
@@ -221,6 +238,10 @@ func Run(o Options, version string) error {
 		caPEM = ca.CertPEM
 	}
 	if err := step("Add boot layer", func() error {
+		if s.Kernel == "none" {
+			fmt.Println("    none: the command runs with no kernel")
+			return nil
+		}
 		// Written, not built: the kernel archive, then BusyBox's init configured for the app
 		kernel, err := boot.Kernel(version)
 		if err != nil {
@@ -274,7 +295,7 @@ func Run(o Options, version string) error {
 			}
 			if nativeBuild {
 				cmd := exec.Command(vm, tools.SnapshotArgs(filepath.Join(out, "system"), s.Memory, s.Ready, s.Exercise,
-					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)...)
+					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, userArgv(s))...)
 				cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 				// It ends with this build, however the build ends (a SIGTERM, a kill -9, the
 				// daemon that started the build stopping): never left booting on its own
@@ -283,7 +304,7 @@ func Run(o Options, version string) error {
 				}
 				return cmd.Run()
 			}
-			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox)
+			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, userArgv(s))
 		}
 		return retryStalled(snapshot, os.Stderr)
 	}); err != nil {
@@ -322,7 +343,7 @@ func Run(o Options, version string) error {
 
 // Page is the page a build with these settings renders.
 func Page(s *Settings, version string) site.Page {
-	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, CPUs: s.CPUs,
+	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, CPUs: s.CPUs, JIT: s.JIT, NativeOnly: s.Kernel == "none",
 		Tunnels: s.Tunnels, TunnelToken: s.TunnelToken, ConsoleCols: tools.ConsoleCols, ConsoleRows: tools.ConsoleRows,
 		Agent: s.Agent, AgentExposedTo: s.AgentExposedTo, Version: version}
 }
@@ -336,6 +357,8 @@ type RunInfo struct {
 	Ready         string          `json:"ready,omitempty"`    // what the snapshot waited for
 	Exercise      []string        `json:"exercise,omitempty"` // typed in after it (bench/ replays them)
 	MemoryMB      int             `json:"memory_mb"`
+	JIT           bool            `json:"jit"`              // runs compile hot guest code; false: the interpreter
+	Kernel        string          `json:"kernel,omitempty"` // "none": the command runs with no kernel
 	Network       string          `json:"network"`
 	Tunnels       []tunnel.Tunnel `json:"tunnels,omitempty"`
 	TunnelToken   string          `json:"tunnel_token,omitempty"`
@@ -381,6 +404,8 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 	info := RunInfo{
 		Title: s.Title, Source: o.Source, Command: s.Command, Ready: s.Ready, Exercise: s.Exercise,
 		MemoryMB: s.Memory, Network: s.Network,
+		JIT:     s.JIT,
+		Kernel:  map[bool]string{true: "none"}[s.Kernel == "none"],
 		Tunnels: s.Tunnels, TunnelToken: s.TunnelToken,
 		Arch: "arm64", CPUs: s.CPUs, BuildCPUs: s.BuildCPUs,
 		BootSeconds: meta.BootSeconds, SnapshotBytes: meta.SnapshotBytes, StateBytes: meta.StateBytes,
@@ -463,9 +488,11 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	s.Exercise = o.Exercise
 	if o.Cmd != "" {
 		s.Command = o.Cmd
+		s.Argv = strings.Fields(o.Cmd)
 		s.Ready = o.Ready
 	} else {
-		s.Command = boot.Join(append(append([]string{}, img.Config.Entrypoint...), img.Config.Cmd...))
+		s.Argv = append(append([]string{}, img.Config.Entrypoint...), img.Config.Cmd...)
+		s.Command = boot.Join(s.Argv)
 		if len(s.Exercise) == 0 && label("exercise") != "" {
 			if err := json.Unmarshal([]byte(label("exercise")), &s.Exercise); err != nil {
 				return nil, fmt.Errorf("label %sexercise must be a JSON array of commands: %w", labelPrefix, err)
@@ -489,6 +516,13 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	}
 	if s.Memory < 1 {
 		return nil, fmt.Errorf("memory %d: a number of MB", s.Memory)
+	}
+
+	switch jit := first(o.JIT, label("jit"), "on"); jit {
+	case "on", "off":
+		s.JIT = jit == "on"
+	default:
+		return nil, fmt.Errorf("jit %q: use on or off", jit)
 	}
 
 	// Networking is opt-in: "fetch" turns the guest's HTTP requests into the browser's fetch()
@@ -592,6 +626,26 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	}
 	if s.AgentWatch = label("agent-watch"); s.AgentWatch != "" && (!strings.HasPrefix(s.AgentWatch, "/") || strings.ContainsAny(s.AgentWatch, "\x00\n\r")) {
 		return nil, fmt.Errorf("label %sagent-watch must be an absolute directory in the machine, on one line", labelPrefix)
+	}
+
+	s.Kernel = first(o.Kernel, label("kernel"), "linux")
+	switch s.Kernel {
+	case "linux":
+	case "none":
+		// What a machine with no kernel can't do yet
+		switch {
+		case s.Network != "none":
+			return nil, errors.New("kernel none: no network yet (the program runs with no sockets)")
+		case s.CPUs != 1:
+			return nil, errors.New("kernel none: one CPU (the program's threads take turns on it)")
+		case len(s.Exercise) > 0:
+			return nil, errors.New("kernel none: no exercises (there is no shell to type them into)")
+		case s.Agent:
+			return nil, errors.New("kernel none: not on the agent page (it runs natively only)")
+		}
+		s.BuildCPUs = 1
+	default:
+		return nil, fmt.Errorf("kernel %q: linux or none", s.Kernel)
 	}
 
 	s.Console = boot.Console{Env: img.Config.Env, Workdir: img.Config.WorkingDir, Command: s.Command}
@@ -702,4 +756,19 @@ func retryStalled(boot func() error, log io.Writer) error {
 		}
 	}
 	return err
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off (the interpreter: slower, smaller)"
+}
+
+// userArgv is the program a build with no kernel runs (snowglobe-vm snapshot --user), or none.
+func userArgv(s *Settings) []string {
+	if s.Kernel != "none" {
+		return nil
+	}
+	return s.Argv
 }

@@ -72,6 +72,11 @@ pub fn main(args: &Args) -> Result<u8, String> {
     let cols = args.get("cols").map_or(Ok(COLS), str::parse).map_err(|_| "--cols: not a number")?;
     let rows = args.get("rows").map_or(Ok(ROWS), str::parse).map_err(|_| "--rows: not a number")?;
 
+    // A site with no kernel (snowglobe build --kernel none): the program runs on its own, nothing to boot
+    let user = args.all("user");
+    if !user.is_empty() {
+        return crate::user::snapshot(&system, &spec, ready.as_deref(), &user);
+    }
     let site = crate::site::Site::system(&system);
     let (mut vm, clock) = machine::new_vm(&spec, &site)?;
     vm.board.console_resize(cols, rows);
@@ -237,7 +242,7 @@ fn offline(cpus: usize, build_cpus: usize) -> (String, String) {
 /// Write the snapshot into the system directory: the machine's state compressed, its sizes and
 /// boot time, and the console the page replays (what the screen shows, without the terminal
 /// queries and progress reports).
-fn save(system: &std::path::Path, state: &[u8], boot_seconds: f64, console: &[u8]) -> Result<(), String> {
+pub(crate) fn save(system: &std::path::Path, state: &[u8], boot_seconds: f64, console: &[u8]) -> Result<(), String> {
     eprintln!("\nCompressing {} MB snapshot ...", state.len() >> 20);
     let compressed = compress(state)?;
     let out = system.join("state.bin.zst");
@@ -339,7 +344,7 @@ fn dump_cpus(runner: &Runner, cpus: usize) {
     }
 }
 
-fn write_json(path: &std::path::Path, v: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn write_json(path: &std::path::Path, v: &serde_json::Value) -> Result<(), String> {
     std::fs::write(path, serde_json::to_vec(v).unwrap()).map_err(|e| format!("{}: {e}", path.display()))
 }
 

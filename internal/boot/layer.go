@@ -18,8 +18,8 @@ import (
 // The boot layer, for every build: nothing runs at build time (Docker, when there is one, only
 // builds the Dockerfile).
 //
-// The kernel, its initramfs (which mounts the root filesystem over 9p) and its modules come
-// prebuilt, as one archive (Kernel); everything else is files snowglobe writes (Files). The guest
+// The kernel, everything built in (it mounts the root filesystem over 9p itself, with no initramfs
+// and no modules), comes prebuilt as an archive (Kernel); everything else is files snowglobe writes (Files). The guest
 // starts with BusyBox's init, getty and udhcpc, which every Alpine image has: an inittab, and a
 // script doing what a service manager's boot services would (mounts, hostname, loopback, the
 // network and its CA when the site has one), in a fraction of OpenRC's time.
@@ -92,8 +92,8 @@ fi
 	return files
 }
 
-// Kernel is the archive of the kernel, its 9p initramfs and its modules (boot/vmlinuz-virt,
-// boot/initramfs-virt, lib/modules/...), as a layer: $SNOWGLOBE_BOOT, else this release's, else
+// Kernel is the archive of the kernel (boot/vmlinuz-virt, all built in: no initramfs, no modules),
+// as a layer: $SNOWGLOBE_BOOT, else this release's, else
 // built once with Docker and kept in the user cache.
 func Kernel(version string) (string, error) {
 	if p := os.Getenv("SNOWGLOBE_BOOT"); p != "" {
@@ -150,7 +150,7 @@ func BuildKernel(dest string) error {
 	tmp := f.Name()
 	err = docker.Stream(func(r io.Reader) error { _, err := io.Copy(f, r); return err },
 		"run", "--rm", "--platform", "linux/arm64", tag,
-		"tar", "-czf", "-", "-C", "/", "boot/vmlinuz-virt", "boot/initramfs-virt", "lib/modules")
+		"tar", "-czf", "-", "-C", "/", "boot/vmlinuz-virt")
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

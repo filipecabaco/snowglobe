@@ -16,6 +16,7 @@ pub const CMDLINE: &str = "rw root=host9p rootfstype=9p rootflags=trans=virtio,c
                            modules=virtio_pci console=ttyS0 init_on_free=on";
 
 /// Everything here must match between the snapshot and every restore of it.
+#[derive(Clone)]
 pub struct Spec {
     pub memory_mb: usize,
     pub cpus: usize,
@@ -27,9 +28,37 @@ pub fn new_vm(spec: &Spec, site: &Site) -> Result<(Vm<NativePlatform>, Arc<Clock
     new_vm_jit(spec, site, true)
 }
 
-/// Whether the JIT is on (ARMLESS_JIT=off keeps the interpreter anyway).
+/// The JIT for this run, once `choose_jit` decided it.
+static JIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Decide whether a run of a site compiles hot guest code to host code (the native JIT) or keeps
+/// the interpreter, which is slower and smaller: `--jit on|off` for this run, else the host's
+/// ARMLESS_JIT, else the site's own choice (run.json's `jit`, from `snowglobe build --jit` or the
+/// label snowglobe.jit), else on. `jit_wanted` says it from then on.
+pub fn choose_jit(info: &serde_json::Value, flag: Option<&str>) -> Result<bool, String> {
+    let on = decide_jit(info, flag, std::env::var("ARMLESS_JIT").ok().as_deref())?;
+    let _ = JIT.set(on);
+    Ok(on)
+}
+
+/// `choose_jit`'s choice, from the site's run.json, the run's --jit and the host's ARMLESS_JIT.
+fn decide_jit(info: &serde_json::Value, flag: Option<&str>, env: Option<&str>) -> Result<bool, String> {
+    Ok(match (flag, env) {
+        (Some("on"), _) => true,
+        (Some("off"), _) => false,
+        (Some(v), _) => return Err(format!("--jit {v}: on or off")),
+        (None, Some(v)) => v != "off",
+        (None, None) => info["jit"].as_bool().unwrap_or(true),
+    })
+}
+
+/// Whether the JIT is on: as `choose_jit` decided for a run, or (a build, which doesn't decide)
+/// unless ARMLESS_JIT=off.
 pub fn jit_wanted() -> bool {
-    std::env::var("ARMLESS_JIT").map_or(true, |v| v != "off")
+    match JIT.get() {
+        Some(&on) => on,
+        None => std::env::var("ARMLESS_JIT").map_or(true, |v| v != "off"),
+    }
 }
 
 /// `new_vm`, with the JIT left off when `jit` is false: its compiler threads would not survive a
@@ -363,6 +392,23 @@ pub fn enable_jit(runner: &armless::runner::Runner, cpus: usize) {
 mod tests {
     use super::*;
     use crate::testing::{self, site, EMPTY_FS};
+
+    #[test]
+    fn the_jit_is_the_runs_choice_then_the_hosts_then_the_sites() {
+        let on = serde_json::json!({ "jit": true });
+        let off = serde_json::json!({ "jit": false });
+        let old = serde_json::json!({});
+        assert!(decide_jit(&old, None, None).unwrap(), "a site built before the setting");
+        assert!(!decide_jit(&off, None, None).unwrap());
+        assert!(decide_jit(&on, None, None).unwrap());
+        assert!(!decide_jit(&on, None, Some("off")).unwrap(), "the host's ARMLESS_JIT over the site's");
+        assert!(decide_jit(&off, None, Some("1")).unwrap());
+        assert!(decide_jit(&off, Some("on"), Some("off")).unwrap(), "the run's --jit over both");
+        assert!(!decide_jit(&on, Some("off"), None).unwrap());
+        assert!(decide_jit(&on, Some("maybe"), None).is_err());
+        // A flag with its value, not a switch and a stray positional
+        assert_eq!(args(&["site", "--jit", "off"]).get("jit"), Some("off"));
+    }
 
     fn args(v: &[&str]) -> crate::Args {
         let v: Vec<String> = v.iter().map(|s| s.to_string()).collect();

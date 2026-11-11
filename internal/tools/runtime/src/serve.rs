@@ -40,6 +40,10 @@ use crate::{image, job, profile, sandbox, sys, Args};
 
 pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     let (info, spec, title) = crate::run::site_spec(&site)?;
+    machine::choose_jit(&info, args.get("jit"))?;
+    if crate::user::is_user(&site) {
+        return Err("a site with no kernel (--kernel none) runs with snowglobe run, not as a template to fork".into());
+    }
     let root = PathBuf::from(args.get("jobs-root").ok_or("--serve needs --jobs-root DIR (where job workspaces live)")?);
     std::fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
     let root = root.canonicalize().map_err(|e| e.to_string())?;

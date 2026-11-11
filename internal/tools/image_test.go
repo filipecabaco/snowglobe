@@ -310,7 +310,7 @@ func TestSnapshotRunsTheVMInTheToolsImage(t *testing.T) {
 	log := fakeDocker(t, "exit 0")
 	img := &Image{tag: "snowglobe-tools:x"}
 	tunnels := []tunnel.Tunnel{{Host: "db", Port: 5432, URL: "wss://gw/db"}}
-	if err := img.Snapshot("/site", 256, "$ ", []string{"ls", "env"}, "fetch", tunnels, true, 2, 4, true); err != nil {
+	if err := img.Snapshot("/site", 256, "$ ", []string{"ls", "env"}, "fetch", tunnels, true, 2, 4, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	user := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
@@ -323,7 +323,7 @@ func TestSnapshotRunsTheVMInTheToolsImage(t *testing.T) {
 	}
 	// Offline: none of the host's network settings
 	log = fakeDocker(t, "exit 0")
-	if err := img.Snapshot("/site", 256, "", nil, "none", nil, false, 1, 4, false); err != nil {
+	if err := img.Snapshot("/site", 256, "", nil, "none", nil, false, 1, 4, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := calls(t, log)[0]; strings.Contains(got, "HTTPS_PROXY") || strings.Contains(got, "--ready") || strings.Contains(got, "--sandbox") {

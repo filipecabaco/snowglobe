@@ -59,6 +59,12 @@ type Page struct {
 	MemoryMB int    // must match the snapshot
 	Network  string // "none" or "fetch"; must match the snapshot
 	CPUs     int    // must match the snapshot; more than one needs cross-origin isolation
+	// JIT: the machine compiles hot guest code to WebAssembly (armless's jit); false keeps the
+	// interpreter, slower and smaller
+	JIT bool
+	// NativeOnly: the site has no kernel (snowglobe build --kernel none), so only snowglobe run runs
+	// it; the page says so instead of booting
+	NativeOnly bool
 	// Guest TCP destinations the page carries over WebSockets (armless's network.tunnels)
 	Tunnels []tunnel.Tunnel
 	// Where the page gets a fresh access token for each tunnel connection whose URL has {token}
