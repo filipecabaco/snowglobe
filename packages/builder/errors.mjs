@@ -1,0 +1,1 @@
+export function safeError(error){return String(error?.message??error??'Unknown failure').replace(/Bearer\s+[^\s"']+/gi,'Bearer [redacted]').replace(/\bsk-[A-Za-z0-9_-]+/g,'[redacted]').replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[redacted]').replace(/((?:access_token|refresh_token|api_key|code)["']?\s*[:=]\s*["']?)[^\s,"'&]+/gi,'$1[redacted]').slice(0,800);}

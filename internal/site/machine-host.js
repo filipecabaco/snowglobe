@@ -292,6 +292,7 @@
       readJob: (id) => t.call("readJob", [id]),
       cancelJob: (id) => t.call("cancelJob", [id]),
       status: () => t.call("status"),
+      recoverFiles: () => t.call("recoverFiles"),
       /** { blob, size, sha256 } of a file in the machine. */
       readFile: (path, opts) => xfer("readFile", [path], opts),
       /** { size, sha256 }: `blob` written to `path` in the machine. */

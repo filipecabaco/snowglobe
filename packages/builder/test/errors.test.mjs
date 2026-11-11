@@ -1,0 +1,2 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {safeError} from '../errors.mjs';
+test('actionable model errors are bounded and redact credentials',()=>{const value=safeError('Model unavailable. Bearer secret-value api_key=private sk-provider-secret access_token="abc"');assert(value.includes('Model unavailable'));for(const secret of ['secret-value','private','sk-provider-secret','"abc"'])assert(!value.includes(secret));assert.equal(safeError('x'.repeat(2000)).length,800);});

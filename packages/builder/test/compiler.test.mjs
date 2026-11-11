@@ -1,0 +1,43 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import {watch as watchFiles} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {startCompilerServer,sourceChanged,compilerPaths} from '../src/compiler.mjs';
+const request=(socket,op)=>new Promise((resolve,reject)=>{const c=net.connect(socket);let b='';c.setEncoding('utf8');c.on('error',reject);c.on('connect',()=>c.write(JSON.stringify({op})+'\n'));c.on('data',s=>{b+=s;while(b.includes('\n')){const i=b.indexOf('\n'),e=JSON.parse(b.slice(0,i));b=b.slice(i+1);if(e.type==='result'){c.end();e.ok?resolve(e.result):reject(new Error(e.error));}}});});
+test('persistent Vite retains its runtime, tracks revisions, recovers from syntax errors and restarts on config changes',{timeout:30000},async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'sg-compiler-'));process.env.SNOWGLOBE_COMPILER_DIR=path.join(dir,'control');const root=path.join(dir,'app');await fs.mkdir(path.join(root,'src'),{recursive:true});
+ await fs.symlink(fileURLToPath(new URL('../node_modules',import.meta.url)),path.join(root,'node_modules'));
+ await fs.writeFile(path.join(root,'package.json'),'{"type":"module"}');await fs.writeFile(path.join(root,'index.html'),'<script type="module" src="/src/main.js"></script>');
+ await fs.writeFile(path.join(root,'src/dep.js'),'export const dep="unchanged-dependency";');
+ await fs.writeFile(path.join(root,'src/lazy.js'),'export const lazy="lazy-preview-module";');
+ await fs.writeFile(path.join(root,'src/main.js'),'import {dep} from "./dep.js";console.log(dep,"one");import("./lazy.js").then(console.log);');
+ const record=path.join(dir,'transforms.jsonl');
+ await fs.writeFile(path.join(root,'vite.config.mjs'),`import fs from 'node:fs';export default {plugins:[{name:'record',transform(code,id){if(id.includes('/src/'))fs.appendFileSync(${JSON.stringify(record)},id+'\\n');}}]};`);
+ let loads=0;const service=await startCompilerServer(root,{loadVite:async()=>{loads++;return import(new URL('../node_modules/vite/dist/node/index.js',import.meta.url).href);}});t.after(async()=>{await service.close();await fs.rm(dir,{recursive:true,force:true});});
+ const socket=compilerPaths(root).socket;
+ const cold=await request(socket,'build');assert.equal(cold.warm,false);const scripts=(await fs.readdir(path.join(root,'dist/assets'))).filter(f=>f.endsWith('.js'));assert.equal(scripts.length,1,'preview imports stay in one self-contained JavaScript bundle');
+ const cached=await request(socket,'build');assert.equal(cached.warm,true);assert.equal(cold.generation,cached.generation);
+ await fs.writeFile(path.join(root,'src/main.js'),'import {dep} from "./dep.js";console.log(dep,"two");');const r=await sourceChanged(root,'src/main.js');
+ const warm=await request(socket,'build');assert(warm.revision>=r.value);assert(warm.generation>cold.generation);
+ const transforms=await fs.readFile(record,'utf8');assert(transforms.includes('/src/dep.js'));assert.equal(loads,1,'warm edits retain the same Vite runtime');
+ await fs.writeFile(path.join(root,'src/main.js'),'this is invalid JavaScript }');await sourceChanged(root,'src/main.js');await assert.rejects(request(socket,'build'),/./);
+ await fs.writeFile(path.join(root,'src/main.js'),'console.log("repaired");');await sourceChanged(root,'src/main.js');await request(socket,'build');
+ await fs.writeFile(path.join(root,'src/unused.js'),'export const unused=42;');const unused=await sourceChanged(root,'src/unused.js');assert((await request(socket,'build')).revision>=unused.value);
+ await sourceChanged(root,'vite.config.mjs');const restarted=await request(socket,'build');assert.equal(restarted.warm,false);
+ await request(socket,'quiesce');
+});
+test('Stop terminates a detached guest compiler even while a plugin is blocked',{timeout:30000},async t=>{
+ const {compilerRequest}=await import('../src/compiler.mjs');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'sg-compiler-stop-'));process.env.SNOWGLOBE_COMPILER_DIR=path.join(dir,'control');const root=path.join(dir,'app');await fs.mkdir(root,{recursive:true});await fs.symlink(fileURLToPath(new URL('../node_modules',import.meta.url)),path.join(root,'node_modules'));await fs.writeFile(path.join(root,'package.json'),'{"type":"module"}');await fs.writeFile(path.join(root,'index.html'),'<h1>test</h1>');await fs.writeFile(path.join(root,'vite.config.mjs'),`import fs from 'node:fs';export default {plugins:[{name:'blocked',async buildStart(){fs.writeFileSync(${JSON.stringify(path.join(dir,'started'))},'ready');await new Promise(r=>setTimeout(r,60000));}}]};`);
+ t.after(async()=>{await compilerRequest(root,'stop').catch(()=>{});await fs.rm(dir,{recursive:true,force:true});});
+ let listener;const ready=new Promise(r=>{listener=watchFiles(dir,(_event,file)=>{if(file==='started'){listener.close();r();}});});t.after(()=>listener?.close());const building=compilerRequest(root,'build');building.catch(()=>{});await ready;await compilerRequest(root,'stop');await assert.rejects(building,/disconnected/);await new Promise(r=>setTimeout(r,100));assert.deepEqual(await compilerRequest(root,'quiesce'),{idle:true});
+});
+test('a compiler restored from an older Builder version is replaced before returning preview output',{timeout:30000},async t=>{
+ const {compilerRequest}=await import('../src/compiler.mjs');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'sg-compiler-upgrade-'));process.env.SNOWGLOBE_COMPILER_DIR=path.join(dir,'control');const root=path.join(dir,'app');await fs.mkdir(root,{recursive:true});await fs.mkdir(compilerPaths(root).dir,{recursive:true});await fs.symlink(fileURLToPath(new URL('../node_modules',import.meta.url)),path.join(root,'node_modules'));await fs.writeFile(path.join(root,'index.html'),'<h1>Upgraded compiler</h1>');
+ const socket=compilerPaths(root).socket;let stopped=false;const old=net.createServer(c=>{let body='';c.on('data',b=>{body+=b;if(!body.includes('\n'))return;const {op}=JSON.parse(body);if(op==='stop'){stopped=true;c.end('{"type":"result","ok":true}\n');old.close();}else c.end('{"type":"result","ok":true,"result":{"version":1,"warm":true}}\n');});});await new Promise(r=>old.listen(socket,r));
+ t.after(async()=>{await compilerRequest(root,'stop').catch(()=>{});await fs.rm(dir,{recursive:true,force:true});});
+ const result=await compilerRequest(root,'build');assert(stopped);assert.equal(result.version,2);
+});

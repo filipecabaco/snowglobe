@@ -43,7 +43,8 @@
 
   /** One machine's save: one checkpoint in IndexedDB, in a scope of its own, held by one tab. */
   class SaveSlot {
-    constructor(scope, config, name) {
+    constructor(scope, config, name, openStore) {
+      this.openStore = openStore;
       this.scope = scope;
       this.config = config;
       this.name = name;
@@ -59,7 +60,7 @@
       this.opened ??= (async () => {
         try {
           this.release ??= await S().acquireLock(this.scope);
-          this.store = await S().BrowserStore.open(this.scope);
+          this.store = await (this.openStore ? this.openStore() : S().BrowserStore.open(this.scope));
           const list = await this.store.list();
           this.saved = list.find((c) => c.id === SAVE_ID && S().compatible(c, this.config)) ?? null;
           this.error = null;
@@ -86,6 +87,7 @@
         encoding: packed.encoding, state: packed.state, console: new Blob([]) };
       await this.store.put(c);
       this.saved = S().metadata(c);
+      this.error = null;
     }
 
     async clear() {
@@ -109,7 +111,7 @@
    * CPUs need it); crossOriginIsolated when not given. `granted()`: the person has allowed it in
    * this page load (preview requests are answered only then; ask.granted when not given).
    */
-  function createAgents(manifest, { pageUrl, scheduler, Machine, createMachine, ask = notAsked, confirmFresh, onchange, onactivity, now = () => Date.now(),
+  function createAgents(manifest, { pageUrl, scheduler, Machine, createMachine, ask = notAsked, confirmFresh, onchange, onactivity, saveScope, saveStore, now = () => Date.now(),
     transport = "worker", hidden = false, machineOptions = {}, hostOptions = {}, isolated = root.crossOriginIsolated === true,
     granted = () => !!ask.granted?.(), preview: Preview = root.SnowglobePreview } = {}) {
     const page = new URL("./", pageUrl);
@@ -147,8 +149,8 @@
         name: r.name, title: r.title, purpose: r.purpose, sample: r.sample, base, cpus, network: r.network === "fetch",
         // The directory whose changes each command reports (builder.js), if its site has one
         watch: r.watch && B() ? B().checkWatch(r.watch) : null,
-        slot: new SaveSlot(new URL(r.name, page).pathname, config, r.title),
-        host: null, job: null, xfers: 0, starting: 0, lastUsed: 0, tape: [], tapeBytes: 0,
+        slot: new SaveSlot(saveScope ? saveScope(r.name) : new URL(r.name, page).pathname, config, r.title, saveStore ? () => saveStore(r.name) : null),
+        host: null, job: null, xfers: 0, starting: 0, holds: 0, lastUsed: 0, tape: [], tapeBytes: 0,
         loading: null, memoryBytes: 0, inMemory: null, discard: false, error: null,
         // Changed since its last save (a run, a copy into it, a key in its terminal): a reload loses it
         dirty: false,
@@ -166,7 +168,7 @@
         // preview's do, so the machine it connects to is woken beside it even at the awake limit)
         linksIn: 0,
         linksOut: 0,
-        busy() { return !!this.job || this.xfers > 0 || this.starting > 0 || this.previews.size > 0 || this.linksIn > 0; },
+        busy() { return !!this.job || this.xfers > 0 || this.starting > 0 || this.holds > 0 || this.previews.size > 0 || this.linksIn > 0; },
         // Held by the preview: the scheduler counts the preview's machines as one
         previewHeld() { return this.previews.size > 0 || this.linksIn > 0 || this.linksOut > 0; },
       };
@@ -483,9 +485,10 @@
         try {
           await m.slot.save(packed);
           m.dirty = false;
-        } catch {
+        } catch (error) {
           // No storage (another tab holds it, or none at all): kept in this tab for the wake, and
           // the store is tried again at the next suspend
+          m.slot.error = String(error?.message ?? error);
           m.inMemory = packed;
         }
       } else {
@@ -1294,6 +1297,22 @@
         return stale.map((m) => m.name);
       },
       async wake(runtime) { await awake(get(runtime)); return true; },
+      async recoverFiles(runtime) {
+        const m = get(runtime);
+        return serial(m, async () => {
+          if (m.busy()) throw new Error("wait for the active operation before restoring environment files");
+          m.starting++;
+          changed();
+          try {
+            await awake(m);
+            return await m.host.recoverFiles();
+          } finally {
+            m.starting = down(m.starting);
+            m.lifecycle.touch();
+            changed();
+          }
+        });
+      },
       async retry(runtime) {
         const m = get(runtime);
         m.lifecycle.retry();
@@ -1342,6 +1361,14 @@
     };
     Object.defineProperty(api, "_machines", { value: machines });
     Object.defineProperty(api, "_get", { value: get });
+    // Parent-owned interactive tools hold a running VM while their connection is open.
+    Object.defineProperty(api, "_hold", { value(runtime) {
+      const m = get(runtime);
+      if (!m.host || m.lifecycle.state !== "running") throw new Error("Wake the VM before holding it");
+      m.holds++;
+      let released = false;
+      return () => { if (released) return; released = true; m.holds = down(m.holds); if (m.lifecycle.state === "running") m.lifecycle.touch(); scheduler.notify(); changed(); };
+    } });
     Object.defineProperty(api, "_status", { value: status });
     Object.defineProperty(api, "_describe", { value: describe });
     return api;

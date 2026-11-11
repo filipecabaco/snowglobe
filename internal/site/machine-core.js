@@ -521,7 +521,7 @@
      * URL). `Armless` the class; `emit(event, payload)` where what it says goes.
      */
     constructor({ config, Armless = root.Armless, emit = () => {}, agent = root.SnowglobeAgent, transfer = root.SnowglobeTransfer,
-      sessions = root.SnowglobeSessions, uploadWindow = 1 }) {
+      sessions = root.SnowglobeSessions, uploadWindow = 1, blobRetryDelays = [250, 1000] }) {
       this.config = config;
       this.Armless = Armless;
       this.emit = emit;
@@ -531,6 +531,8 @@
       this.capturing = false;
       this.xfers = new Map();
       this.controller = null;
+      this.failedBlobs = new Set();
+      this.blobRetryDelays = blobRetryDelays;
       // The guest's files: the warm pack as it comes (warm()), what is being fetched (by name, the
       // guest's reads and reading ahead share a request), the reads waiting, and how it all went
       this.pack = null;
@@ -604,15 +606,57 @@
       return true;
     }
 
-    /**
-     * One of the guest's files from the blob store (as armless would fetch it). A failure is said
-     * once, as a `blobs` event { ok: false, url, message } (url: the store), until a fetch
-     * succeeds again ({ ok: true }); it still fails the guest's read, as armless's own would.
-     */
+    /** Retry transient download failures before handing an I/O failure to the guest filesystem. */
+    async _fetchBytes(url, timeoutMs = 30000) {
+      for (let attempt = 0; ; attempt++) {
+        const controller = new AbortController();
+        let timer, reader;
+        // A large warm pack can take minutes over a device/VPN connection. Time
+        // out stalled I/O, rather than aborting a download that is progressing.
+        const arm = () => {
+          clearTimeout(timer);
+          timer = setTimeout(() => controller.abort(new DOMException(`Environment download stalled: ${new URL(url, "https://runtime.invalid/").pathname}`, "TimeoutError")), timeoutMs);
+        };
+        const aborted = new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true }));
+        try {
+          arm();
+          const r = await Promise.race([(this.fetch ?? fetch)(url, { signal: controller.signal, ...(attempt ? { cache: "reload" } : {}) }), aborted]);
+          if (!r.ok) {
+            const error = new Error(`${r.status} ${r.statusText ?? ""}`.trim());
+            error.retryable = r.status >= 500 || r.status === 408 || r.status === 429;
+            throw error;
+          }
+          arm();
+          if (!r.body?.getReader) return new Uint8Array(await Promise.race([r.arrayBuffer(), aborted]));
+          reader = r.body.getReader();
+          const chunks = [];
+          let length = 0;
+          for (;;) {
+            const { value, done } = await Promise.race([reader.read(), aborted]);
+            if (done) break;
+            if (value.byteLength) { arm(); chunks.push(value); length += value.byteLength; }
+          }
+          const bytes = new Uint8Array(length);
+          let offset = 0;
+          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+          return bytes;
+        } catch (e) {
+          if (e.retryable === false || attempt >= this.blobRetryDelays.length) throw e;
+          await new Promise(resolve => setTimeout(resolve, this.blobRetryDelays[attempt]));
+        } finally {
+          clearTimeout(timer);
+          if (controller.signal.aborted) reader?.cancel().catch(() => {});
+          else reader?.releaseLock();
+        }
+      }
+    }
+
+    /** A final failure emits `blobs` once until another file succeeds, and remains repairable. */
     async fetchBlob(name) {
       // From the warm pack, if it holds the file and brings it soon
       const packed = await this.pack?.get(name);
       if (packed) {
+        this.failedBlobs.delete(name);
         this.fileStats.fromPack++;
         this._filesChanged();
         return packed;
@@ -644,21 +688,37 @@
       const base = this.config.filesystem?.baseurl ?? "";
       const url = new URL(name, typeof location !== "undefined" ? new URL(base, location.href) : base).href;
       try {
-        const r = await (this.fetch ?? fetch)(url);
-        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`.trim());
-        const bytes = new Uint8Array(await r.arrayBuffer());
+        const bytes = await this._fetchBytes(url);
+        this.failedBlobs.delete(name);
         if (this.blobsDown) {
           this.blobsDown = false;
           this.emit("blobs", { ok: true });
         }
         return bytes;
       } catch (e) {
+        this.failedBlobs.add(name);
         if (!this.blobsDown) {
           this.blobsDown = true;
           this.emit("blobs", { ok: false, url: base, message: String(e?.message ?? e) });
         }
         throw e;
       }
+    }
+
+    /** Repair failed immutable image downloads in place. Project files and VM state stay intact.
+     * A restored machine can have uncached image files without any JS failure records;
+     * when no failed names are known, refill its missing warm-pack files. */
+    async recoverFiles() {
+      const vm = this.vm;
+      if (!vm || this.state !== "ready") throw new Error("the machine is not ready to restore its files");
+      const failed = [...this.failedBlobs];
+      for (const name of failed) {
+        const bytes = await this.fetchBlob(name);
+        if (vm !== this.vm) throw new Error("the machine changed while restoring files");
+        vm.provide_blob(name, bytes);
+      }
+      const warmed = failed.length ? 0 : await this.warm({ required: true });
+      return { repaired: failed.length + warmed };
     }
 
     // ---------------------------------------------------------------- reading ahead
@@ -849,12 +909,32 @@
     // warm.pack bundles the files the app is most likely to need into one background download, read
     // as it arrives (WarmPack): its first files go into the machine once their bytes are in, and a
     // read of one the pack holds takes it from there (fetchBlob) instead of a request of its own.
-    async warm() {
+    async warm({ required = false } = {}) {
       const vm = this.vm;
-      if (!this.config.warm || !vm) return;
+      if (!this.config.warm || !vm) {
+        if (required) throw new Error("no environment file pack is configured");
+        return 0;
+      }
+      if (required && vm.stopped) throw new Error("the machine stopped while restoring files");
+      this.warmedVms ??= new WeakSet();
+      if (this.warmedVms.has(vm)) return 0;
+      let warming = this.warming;
+      if (!warming || warming.vm !== vm) {
+        warming = { vm, promise: this._warm(vm) };
+        this.warming = warming;
+        warming.promise.finally(() => { if (this.warming === warming) this.warming = null; }).catch(() => {});
+      }
+      const result = await warming.promise;
+      if (required && (vm.stopped || vm !== this.vm)) throw new Error("the machine stopped while restoring files");
+      if (required && result.error) throw result.error;
+      if (result.complete) this.warmedVms.add(vm);
+      return result.supplied;
+    }
+
+    async _warm(vm) {
       const pack = this.pack = new WarmPack(this.packOptions ?? {});
       this._filesChanged();
-      let given = 0;
+      let given = 0, supplied = 0;
       let givenBytes = 0;
       const gone = () => vm.stopped || vm !== this.vm;
       // Hand over what has arrived, a slice of time at a time, so the machine (and a page sharing
@@ -871,7 +951,8 @@
             any = true;
             givenBytes += size ?? bytes.length;
             this.packGivenBytes = givenBytes;
-            if (!vm.has_blob(name)) vm.provide_blob(name, bytes); // else the guest already has it
+            if (!vm.has_blob(name)) { vm.provide_blob(name, bytes); supplied++; } // else the guest already has it
+            this.failedBlobs.delete(name);
             if (pack.now() >= until) break;
           }
           this._filesChanged();
@@ -881,29 +962,52 @@
       };
       let feeding = Promise.resolve();
       const kick = () => { feeding = feeding.then(feed); };
+      const controller = new AbortController();
+      let timer, reader, failure;
+      const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => controller.abort(new DOMException("Environment warm-pack download stalled", "TimeoutError")), 60000);
+      };
+      const aborted = new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true }));
       try {
-        const response = await (this.fetch ?? fetch)(this.config.warm);
+        arm();
+        const response = await Promise.race([(this.fetch ?? fetch)(this.config.warm, { signal: controller.signal }), aborted]);
         if (!response.ok) throw new Error(`${response.status}`);
+        arm();
         if (response.body?.getReader) {
-          const reader = response.body.getReader();
+          reader = response.body.getReader();
           for (;;) {
-            const { done, value } = await reader.read();
+            const { done, value } = await Promise.race([reader.read(), aborted]);
             if (done || gone()) break;
+            if (value.byteLength) arm();
             pack.push(value);
             kick();
           }
         } else {
-          pack.push(new Uint8Array(await response.arrayBuffer()));
+          pack.push(new Uint8Array(await Promise.race([response.arrayBuffer(), aborted])));
         }
+        if (!gone() && (!pack.entries || pack.received < pack.total)) throw new Error("Environment warm-pack download was incomplete");
         pack.end(!gone());
-      } catch {
+      } catch (error) {
+        failure = error;
         pack.end(false); // what didn't arrive, reads fetch themselves
+      } finally {
+        clearTimeout(timer);
+        if (controller.signal.aborted || gone()) reader?.cancel().catch(() => {});
+        else reader?.releaseLock();
       }
       // What did arrive goes in, up to the budget; the pack stays (compressed, in this page) for the
       // files that didn't, and for those the machine's cache lets go, until the machine goes
       kick();
-      await feeding.catch(() => {});
+      await feeding.catch(error => { failure ??= error; });
       if (this.pack === pack) this._filesChanged();
+      const complete = !failure && !gone() && pack.entries && pack.received >= pack.total;
+      if (complete && this.blobsDown && !this.failedBlobs.size) {
+        this.blobsDown = false;
+        this.emit("blobs", { ok: true });
+      }
+      return { supplied, complete: !!complete, error: failure };
+
     }
 
     // ------------------------------------------------------------------ jobs and files

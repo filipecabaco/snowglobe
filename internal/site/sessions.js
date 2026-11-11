@@ -148,7 +148,13 @@
     async get(id) {
       identifier(id);
       const tx = this.db.transaction("checkpoints");
-      return (await request(tx.objectStore("checkpoints").get([this.scope, id])))?.checkpoint ?? null;
+      const c = (await request(tx.objectStore("checkpoints").get([this.scope, id])))?.checkpoint ?? null;
+      // WebKit can reject worker-created Blob handles. Binary fallback records
+      // are restored to the public Blob interface at the storage boundary.
+      if (c) for (const key of ["state", "console"]) {
+        if (c[key] instanceof ArrayBuffer || ArrayBuffer.isView(c[key])) c[key] = new Blob([c[key]]);
+      }
+      return c;
     }
     async list() {
       const tx = this.db.transaction("checkpoints");
@@ -157,10 +163,20 @@
     }
     async put(c) {
       validate(c);
-      const tx = this.db.transaction("checkpoints", "readwrite");
-      const done = committed(tx);
-      tx.objectStore("checkpoints").put({ scope: this.scope, id: c.id, checkpoint: c });
-      await done;
+      const write = async checkpoint => {
+        const tx = this.db.transaction("checkpoints", "readwrite");
+        const done = committed(tx);
+        try { tx.objectStore("checkpoints").put({ scope: this.scope, id: c.id, checkpoint }); }
+        catch (error) { tx.abort(); await done.catch(() => {}); throw error; }
+        await done;
+      };
+      try { await write(c); }
+      catch (error) {
+        // Do not retry quota/permission failures or erase the previous checkpoint.
+        // WebKit's Blob preparation failure aborts the first transaction atomically.
+        if (error?.name !== "UnknownError" || !/blob|file data/i.test(error.message)) throw error;
+        await write({ ...c, state: await c.state.arrayBuffer(), console: await c.console.arrayBuffer() });
+      }
     }
     async remove(id) {
       identifier(id);

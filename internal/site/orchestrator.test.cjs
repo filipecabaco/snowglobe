@@ -15,6 +15,17 @@ const manifest = {
   armless: { js: '../python/armless/armless.js', wasm: '../python/armless/armless.wasm' }, xterm: '../python/xterm/', exposed_to: [],
 };
 
+test('a parent-owned console hold prevents suspension and releases once', async () => {
+  const {api} = setup();
+  assert.throws(() => api._hold('python'), /Wake/);
+  await api.wake('python');
+  const release = api._hold('python');
+  assert.equal(await api.suspend('python'), false);
+  release(); release();
+  assert.equal(api._get('python').holds, 0);
+  assert.equal(await api.suspend('python'), true);
+});
+
 // Hosts that pretend: each boot, capture and job is logged; a job ends when the test says so
 function setup({ budget = 2, confirm = true, man = manifest, options = {}, tcp = null } = {}) {
   const log = [];
@@ -410,6 +421,24 @@ test('a save slot that could not open (another tab held it) is tried again at th
     S.acquireLock = orig.acquireLock;
     S.BrowserStore.open = orig.open;
   }
+});
+
+test('image file recovery holds the machine awake without replacing it or changing its dirty state', async () => {
+  const { api, host } = setup();
+  await api.wake('python');
+  const m = api._get('python'), original = m.host, dirty = m.dirty;
+  let finish, started;
+  const entered = new Promise(resolve => { started = resolve; });
+  host('python').recoverFiles = () => new Promise(resolve => { finish = resolve; started(); });
+  const recovering = api.recoverFiles('python');
+  await entered;
+  assert.equal(m.busy(), true);
+  assert.equal(await api.suspend('python'), false);
+  finish({ repaired: 1 });
+  assert.deepEqual(await recovering, { repaired: 1 });
+  assert.equal(m.host, original);
+  assert.equal(m.dirty, dirty);
+  assert.equal(m.busy(), false);
 });
 
 test('a blob store that can\'t be reached is said, and cleared once it answers', async () => {
@@ -906,6 +935,15 @@ test("the guest's fetch drops npm's and the cache's hints, so a registry GET nee
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test('a Builder project chooses independent checkpoint scopes without changing runtime asset resolution',()=>{
+ const a=setup({options:{saveScope:name=>'/builder/projects/first/'+name}});
+ const b=setup({options:{saveScope:name=>'/builder/projects/second/'+name}});
+ const name=manifest.runtimes[0].name;
+ assert.notEqual(a.api._get(name).slot.scope,b.api._get(name).slot.scope);
+ assert.equal(a.api._get(name).base,b.api._get(name).base);
+ assert.match(a.api._get(name).slot.scope,/\/first\//);
 });
 
 test('links: a machine reads its names when it wakes, and the page answers its target without a preview', async () => {

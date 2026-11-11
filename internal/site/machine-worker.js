@@ -17,7 +17,7 @@
 
 let core = null;
 const OPS = new Set(["boot", "run", "input", "resize", "capture", "destroy", "memory", "memoryReport", "runCommand", "readJob", "cancelJob", "status",
-  "readFile", "writeFile", "abort", "tcpOpen", "tcpWrite", "tcpEnd", "tcpAbort", "linkIn"]);
+  "readFile", "writeFile", "abort", "recoverFiles", "tcpOpen", "tcpWrite", "tcpEnd", "tcpAbort", "linkIn"]);
 
 function emit(event, payload) {
   if (event === "console" && payload instanceof Uint8Array) {

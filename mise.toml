@@ -38,7 +38,12 @@ done
 # The agent page's machines (/agent/runtimes.json and its scripts), once the sites' pages are final
 ./snowglobe agent-pages dist
 # The index page, its font, and a copy of xterm.js it renders the recorded transcripts with
+if [ "${SNOWGLOBE_BUILDER:-0}" = 1 ]; then
+  npm ci --prefix packages/builder
+  npm run build --prefix packages/builder
+fi
 cp -R site/. dist/
+if [ "${SNOWGLOBE_BUILDER:-0}" != 1 ]; then rm -rf dist/builder; fi
 # The fleet page's example, and the templates in its menu: the repo's own fleet files, which the page loads
 mkdir -p dist/fleet/templates && cp examples/fleet/snowglobe.toml dist/fleet/snowglobe.toml && cp examples/fleet/templates/*.toml dist/fleet/templates/
 cp -R dist/elixir/xterm dist/xterm
@@ -50,4 +55,4 @@ run = "go run ./cmd/snowglobe serve dist"
 
 [tasks.test]
 description = "Run the tests"
-run = "go test ./... && node --test examples/conduit/server.test.mjs internal/site/sessions.test.cjs internal/site/agent.test.cjs internal/site/machine.test.cjs internal/site/session-ui.test.cjs internal/site/scheduler.test.cjs internal/site/transfer.test.cjs internal/site/orchestrator.test.cjs internal/site/preview.test.cjs internal/site/builder.test.cjs internal/site/studio.test.cjs internal/site/fleet.test.cjs internal/site/memory-debug.test.cjs bench/lib.test.mjs bench/server.test.mjs"
+run = "go test ./... && node --test examples/conduit/server.test.mjs internal/site/sessions.test.cjs internal/site/agent.test.cjs internal/site/machine.test.cjs internal/site/download.test.cjs internal/site/session-ui.test.cjs internal/site/scheduler.test.cjs internal/site/transfer.test.cjs internal/site/orchestrator.test.cjs internal/site/preview.test.cjs internal/site/builder.test.cjs internal/site/studio.test.cjs internal/site/fleet.test.cjs internal/site/memory-debug.test.cjs bench/lib.test.mjs bench/server.test.mjs"

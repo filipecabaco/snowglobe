@@ -314,7 +314,11 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
             const m = new RegExp(`SGACK_${this.ack}_${this.next}_(\\d+)_42`).exec(this.scan);
             if (!m) return out;
             if (m[1] !== "0") {
-              this._fail(`the job could not be written into the guest (step ${this.next}, status ${m[1]})`, now, false);
+              // Include shell diagnostics, never echoed upload lines or their source contents.
+              const detail = plain(this.scan.slice(0, m.index)).split(/[\r\n]+/)
+                .filter(line => /^(?:\/(?:usr\/)?bin\/(?:a|ba)?sh|mkdir|base64|sh): /.test(line)).slice(-2).join("; ").slice(0, 400);
+              this.uploadFailure = { step: this.next, status: Number(m[1]), message: detail };
+              this._fail(`the job could not be written into the guest (step ${this.next}, status ${m[1]})${detail ? ": " + detail : ""}`, now, false);
               return [];
             }
             this.next++;
@@ -446,6 +450,7 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
         startedAt: this.startedAt,
         endedAt: this.endedAt,
         timeoutSeconds: this.timeoutS,
+        ...(this.uploadFailure ? { uploadFailure: this.uploadFailure } : {}),
       };
     }
   }

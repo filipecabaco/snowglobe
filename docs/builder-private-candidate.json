@@ -1,0 +1,95 @@
+{
+  "format": "snowglobe-private-candidate-v1",
+  "status": "candidate-unapproved",
+  "sourceCommit": "b48f0fd9c47c10fd9351b5bd61f35c597f12f2b4",
+  "createdAt": "2026-11-09T17:48:19.374206+00:00",
+  "runtime": {
+    "node": "v24.22.1",
+    "codex": "0.167.0",
+    "automatedBrowser": "Chromium 141.0.7390.37",
+    "ownerTarget": "Chrome on macOS"
+  },
+  "scope": "Private Tailscale Builder static assets, exact web/Supabase image dependencies and source archives; excludes user browser checkpoints, provider credentials and host service configuration",
+  "runtimes": {
+    "supabase": {
+      "buildId": "e54829bbc5e657ae4ae58fd3300602970a24c7420ae475d4dbb08ebce04a6fd3",
+      "memoryMb": 640,
+      "cpus": 2,
+      "network": "fetch"
+    },
+    "web": {
+      "buildId": "487b22319fbb60ae0fda3214577e1ec7663cab396cf02d376a85536be994e231",
+      "memoryMb": 640,
+      "cpus": 1,
+      "network": "fetch"
+    }
+  },
+  "archives": {
+    "source.tar": {
+      "bytes": 7342080,
+      "sha256": "a6308310163406f496eeb74ebd1192a733756c0a877f968dd0c4e86892d50c09"
+    },
+    "rollback-source.tar": {
+      "bytes": 7280640,
+      "sha256": "b3de2432b84ae5b6f3f5ef95eb2856649544624d3fd1688922240db2d8cba830"
+    },
+    "assets.tar": {
+      "bytes": 317593600,
+      "sha256": "938ab4a8966863d841ca96c7ba4a330bf73ac72168c18f71d0d00f73fd2e02a7"
+    }
+  },
+  "rollbackSourceCommit": "0315dc3d0d7199aa218a42b5dca21d730fefbfad",
+  "operationalRollbackDrill": false,
+  "liveProfileAcceptance": "docs/builder-live-profile-acceptance.json",
+  "assetCount": 6962,
+  "blobCount": 6923,
+  "imageBuildIdsVerified": true,
+  "assetArchiveReadbackVerified": true,
+  "independentOffHostImageBackup": false,
+  "localSnapshot": ".local-dev/releases/b48f0fd9c47c10fd9351b5bd61f35c597f12f2b4",
+  "localManifestSha256": "b76eafa610e98d8e9754ce91a5f2e00dfb9cdd0ce0ec38361e9a0d5d9f84a7e4",
+  "browserArtifactSha256": "f3c2bfd078fe30d7700ead5030560d4a2a7873efb2a8a78b6ecac4192cc5acbd",
+  "outstanding": [
+    "Owner Chrome-on-macOS walkthrough and release approval",
+    "Operational gateway rollback drill",
+    "Independent off-host image backup",
+    "Guest OS/image provenance, remaining license and security review"
+  ],
+  "isolatedRollbackDrill": {
+    "status": "passed",
+    "mode": "isolated-loopback-drill",
+    "restoredGatewayCommit": "0315dc3d0d7199aa218a42b5dca21d730fefbfad",
+    "checks": [
+      "source-archive-restored",
+      "matching-dependency-lock",
+      "candidate-gateway-connect",
+      "archived-gateway-start",
+      "restart-revokes-old-cookie",
+      "fresh-connect-disconnect-revokes-cookie"
+    ],
+    "liveProviderCalls": 0,
+    "productionGatewayRestarted": false,
+    "completedAt": "2026-11-09T17:51:21.001Z",
+    "recordSha256": "9c45a828fda34843219c290ce3ce8a9cbc956d9801caf2067510ef626d8cb3af"
+  },
+  "ownerWalkthrough": {
+    "status": "partial-owner-report",
+    "browser": "Chrome on macOS",
+    "browserVersion": null,
+    "prompt": "Create a recipe app with categories.\nMake the recipe list searchable.\nUse supabase to allow users to create an account, log in, and keep track of their own recipes.",
+    "confirmed": [
+      "ChatGPT connected",
+      "Requested application built and appeared to work well"
+    ],
+    "notYetConfirmed": [
+      "Recipe search behavior",
+      "Application signup/login and cross-user recipe isolation",
+      "Save VM and reload retention",
+      "Stop and Retry",
+      "Source export"
+    ],
+    "evidence": "Owner report in conversation; the active Mac browser was not accessible to the agent"
+  },
+  "currentBranchCandidate": false,
+  "qualificationNote": "This archived candidate predates upstream/main integration at 4b5b8d2. Shared runtime and Builder build assets changed; its acceptance results apply to the recorded source/artifact only. Prepare and qualify a new candidate before release."
+}

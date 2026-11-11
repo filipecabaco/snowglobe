@@ -1,0 +1,18 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {fixture} from './provider-fixture.mjs';
+function runtimes({onTurn}={}){const starts=[],closes=[];return {starts,closes,factory:options=>({directory:options.directory,async start(){starts.push(options);},async account(){return {connected:true,models:[{id:'fixture'}]};},async close(flags){closes.push(flags);},toolResult(){},async cancel(){},async turn(prompt,model,emit,signal){if(onTurn)return onTurn({emit,signal});emit({type:'text',delta:'done'});emit({type:'done',status:'completed'});}})};}
+test('Codex uses a rolling idle lease and resumes saved authorization on direct status/turn requests',async t=>{
+ let clock=Date.now();const r=runtimes(),f=await fixture(t,{codexFactory:r.factory,now:()=>clock,sessionTtlMs:1000}),c=f.client();await c.json('/codex/connect',{remember:true});
+ clock+=750;await c.json('/codex/status');clock+=750;assert.equal((await c.post('/codex/status')).status,200);assert.equal(r.starts.length,1);assert.equal(r.closes.length,0);
+ clock+=1001;assert.equal((await c.post('/codex/status')).status,200);assert.equal(r.starts.length,2);assert.equal(r.starts[0].directory,r.starts[1].directory);assert.notEqual(r.closes[0]?.forget,true);
+ const restored=await fixture(t,{credentialDirectory:f.directory,codexFactory:r.factory}),withoutHourlyCookie=restored.client(c.cookie.replace(/sg_builder=[a-f0-9]+;? ?/,''));const response=await withoutHourlyCookie.post('/codex/turn',{prompt:'continue',model:'fixture'});assert.equal(response.status,200);assert.match(await response.text(),/completed/);assert.equal(r.starts.at(-1).directory,r.starts[0].directory);
+ await withoutHourlyCookie.json('/disconnect');assert.equal((await withoutHourlyCookie.post('/codex/status')).status,401);assert.deepEqual(r.closes.at(-1),{forget:true});
+});
+test('an active Codex turn and its tool results survive idle expiry and the session sweeper',async t=>{
+ let clock=Date.now(),finish,started;const began=new Promise(r=>started=r);const r=runtimes({onTurn:async({emit,signal})=>{emit({type:'tool',name:'vm_read_file',callId:'active',args:{path:'src/App.jsx'}});started();await new Promise(resolve=>finish=resolve);assert.equal(signal.aborted,false);emit({type:'text',delta:'done'});emit({type:'done',status:'completed'});}}),f=await fixture(t,{codexFactory:r.factory,now:()=>clock,sessionTtlMs:1000,sessionSweepMs:10}),c=f.client();await c.json('/codex/connect',{remember:true});
+ const stream=c.post('/codex/turn',{prompt:'build',model:'fixture'});await began;clock+=3600000;await new Promise(r=>setTimeout(r,30));assert.equal(r.closes.length,0);
+ const tab=f.client(c.cookie.replace(/sg_builder=[a-f0-9]+;? ?/,''));assert.equal((await tab.post('/codex/tool-result',{callId:'active',result:{text:'source'}})).status,200);assert.equal(r.starts.length,1);finish();assert.match(await(await stream).text(),/completed/);assert.equal((await tab.post('/codex/status')).status,200);
+});
+test('task deadlines explain the timeout and keep remembered Codex authorization',async t=>{
+ const r=runtimes({onTurn:({emit,signal})=>new Promise(resolve=>signal.addEventListener('abort',()=>{emit({type:'done',status:'interrupted'});resolve();},{once:true}))}),f=await fixture(t,{codexFactory:r.factory,codexTurnTimeoutMs:25}),c=f.client();await c.json('/codex/connect',{remember:true});
+ const text=await(await c.post('/codex/turn',{prompt:'build',model:'fixture'})).text();assert.match(text,/task timed out/);assert.match(text,/saved AI connection is kept/);assert.equal((await c.post('/codex/status')).status,200);assert.equal(r.closes.length,0);
+});

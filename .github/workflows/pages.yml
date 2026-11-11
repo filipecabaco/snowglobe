@@ -68,6 +68,23 @@ jobs:
       # Installs Go from mise.toml (cached between runs)
       - uses: jdx/mise-action@v5
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Builder browser bundle and unit tests
+        run: |
+          npm ci --prefix packages/builder
+          npm run build --prefix packages/builder
+          npm test --prefix packages/builder
+          npm run audit:vulnerabilities --prefix packages/builder
+
+      - name: Builder isolated extensions and browser persistence
+        run: |
+          npm ci --prefix bench
+          ./bench/node_modules/.bin/playwright install --with-deps chromium firefox webkit
+          npm run test:browser:regressions --prefix packages/builder
+
       - name: Test
         run: mise run test
 
@@ -534,6 +551,8 @@ jobs:
           for demo in $DEMOS; do ./snowglobe pwa "dist/$demo"; done
           ./snowglobe agent-pages dist
           cp -R site/. dist/
+          # Builder is a gated local prototype, pending public security/release acceptance.
+          rm -rf dist/builder
           # The fleet page's example and the templates in its menu: the repo's own fleet files, which the page loads
           mkdir -p dist/fleet/templates && cp examples/fleet/snowglobe.toml dist/fleet/snowglobe.toml && cp examples/fleet/templates/*.toml dist/fleet/templates/
           cp -R dist/elixir/xterm dist/xterm

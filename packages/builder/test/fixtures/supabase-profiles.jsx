@@ -1,0 +1,10 @@
+import {useEffect,useState} from 'react';
+import {supabase} from './supabase.js';
+export default function App(){
+ const [session,setSession]=useState(null),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[name,setName]=useState(''),[message,setMessage]=useState(''),[error,setError]=useState('');
+ useEffect(()=>{supabase.auth.getSession().then(({data})=>setSession(data.session));const {data}=supabase.auth.onAuthStateChange((_event,current)=>setSession(current));return()=>data.subscription.unsubscribe();},[]);
+ useEffect(()=>{let active=true;setName('');setMessage('');setError('');if(session)supabase.from('profiles').select('display_name').eq('user_id',session.user.id).maybeSingle().then(({data,error})=>{if(active){if(error)setError(error.message);else setName(data?.display_name||'');}});return()=>{active=false;};},[session?.user.id]);
+ async function authenticate(signup){setError('');const {error}=await(signup?supabase.auth.signUp({email,password}):supabase.auth.signInWithPassword({email,password}));if(error)setError(error.message);}
+ async function save(event){event.preventDefault();setError('');setMessage('');const {error}=await supabase.from('profiles').upsert({user_id:session.user.id,display_name:name},{onConflict:'user_id'});if(error)setError(error.message);else setMessage('Profile saved');}
+ return <main><h1>Builder profiles</h1>{error&&<p role="alert">{error}</p>}{session?<><p>{session.user.email}</p><form onSubmit={save}><label>Display name<input value={name} onChange={event=>setName(event.target.value)}/></label><button type="submit">Save profile</button></form><p role="status">{message}</p><button onClick={()=>supabase.auth.signOut()}>Sign out</button></>:<><label>Email<input value={email} onChange={event=>setEmail(event.target.value)}/></label><label>Password<input type="password" value={password} onChange={event=>setPassword(event.target.value)}/></label><button onClick={()=>authenticate(true)}>Sign up</button><button onClick={()=>authenticate(false)}>Log in</button></>}</main>;
+}
