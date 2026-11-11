@@ -5,60 +5,75 @@ if [ "$(id -u)" = 0 ]; then
   chmod o+w /dev/ttyS0 2>/dev/null
   exec su supa -s /bin/bash -c "cd ~/app && exec /usr/local/bin/supabase-demo"
 fi
-export SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 SUPABASE_NO_UPDATE_NOTIFIER=1 CI=1
 
-echo "Starting Supabase's native stack: Postgres, PostgREST, Auth and Realtime (no Docker) ..."
-# --runtime native: plain processes, no Docker. --eager: every service is up before this returns
-# (they're in the snapshot) and none is stopped when idle, so a visitor never waits for a restart.
-# --preparation on-demand: only the enabled services' downloads are wanted, and the image has them
-# all (nothing is fetched at boot). The flags are the Dockerfile's first start's.
-# Postgres's first start was at image build time; this one only starts it again. A slow build
-# machine still gets a long readiness wait (SUPABASE_DB_HEALTH_TIMEOUT, set in the Dockerfile so
-# both starts agree), and a start that still gives up is resumed.
-for attempt in 1 2 3; do
-  supabase stack start --runtime native --eager --preparation on-demand \
-    -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null 2>&1 |
-    grep -v -e "new version of Supabase CLI" -e "recommend updating" | tee "$HOME/.stack-start.log"
-  # API_URL, DB_URL, ANON_KEY, SERVICE_ROLE_KEY, ... for the shell (the stack picks its own ports)
-  eval "$(supabase status --env </dev/null 2>/dev/null)"
-  [ -n "$API_URL" ] && break
-  echo "The stack isn't up yet (attempt $attempt of 3), starting it again ..."
-  # What failed, on the console too: the terminal above isn't in a build's log
-  { echo "supabase-demo: stack start attempt $attempt of 3 failed:"; tail -n 40 "$HOME/.stack-start.log"; } \
-    2>/dev/null >/dev/ttyS0
-done
-rm -f "$HOME/.stack-start.log"
-# Never reach the prompt (and so the snapshot) without the stack
-[ -n "$API_URL" ] || { echo "Supabase's stack didn't start."; exit 1; }
-export API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY
-# The same for every other shell (an agent's commands: /etc/profile.d/supabase.sh reads it). No
-# SUPABASE_* variable of our own: the CLI reads every one as a config override (SUPABASE_API_PORT
-# would be api.port), so a supabase command in such a shell would see the stack as changed.
-for v in API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY; do printf "export %s='%s'\n" "$v" "${!v}"; done \
-  > "$HOME/.stack-env"
-# The API on the machine's network address too, at a fixed port, 54321 (Supabase's usual one): the
-# stack picks its own ports, on 127.0.0.1, which nothing outside the machine reaches. The agent
-# page's preview (and snowglobe run -p 54321:54321) connect there.
-#  - Already answering on the network address (a stack that listens on 0.0.0.0:54321): nothing to do.
-#  - The stack itself on 127.0.0.1:54321: a listener on 0.0.0.0:54321 can't be bound beside it, so
-#    socat takes the network address alone.
-#  - Otherwise socat listens on 0.0.0.0:54321. A socat that couldn't start says why.
-api_port=${API_URL##*:}
-api_port=${api_port%%/*}
-net_ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4; exit }')
-expose_log="$HOME/.expose-54321.log"
-if [ -n "$net_ip" ] && curl -fsS -o /dev/null -m 5 "http://$net_ip:54321/auth/v1/health" 2>/dev/null; then
-  echo "The API already answers on $net_ip:54321" > "$expose_log"
-else
-  listen="TCP-LISTEN:54321,fork,reuseaddr"
-  [ "$api_port" = 54321 ] && [ -n "$net_ip" ] && listen="$listen,bind=$net_ip"
-  socat "$listen" "TCP:127.0.0.1:$api_port" </dev/null >"$expose_log" 2>&1 &
-  expose_pid=$!
+echo "Starting Supabase's stack: Postgres, PostgREST, Auth and Realtime ..."
+# The services are launched here directly, the way the Supabase CLI launched them when the image was
+# built (capture.sh wrote down each one's command, directory and environment in ~/stack), rather
+# than by the CLI: it would stay running beside them (a Bun process and a supervisor per service,
+# about 120 MB of the guest's memory, and so of the snapshot). What it did besides starting them is
+# done by others: Postgres listens on the TCP port the services connect to (the CLI carried that
+# port to Postgres's Unix socket), and nginx is the API gateway (see capture.sh). Nothing restarts
+# a service that stops once this script is done, as the CLI would; and supabase status doesn't see
+# this stack (the CLI's own record of it says stopped): ~/.stack-env has its URLs and keys.
+st=$HOME/stack
+. "$HOME/.stack-env"
+db_port=${DB_URL##*:}
+db_port=${db_port%%/*}
+
+# One service: in a session of its own (so a Ctrl-C at the prompt never reaches it), with exactly
+# the environment the CLI gave it, its output in ~/stack/logs
+declare -A pid
+launch() {
+  local env cmd
+  mapfile -d '' env <"$st/$1.env"
+  mapfile -d '' cmd <"$st/$1.cmd"
+  (cd "$(cat "$st/$1.cwd")" && exec setsid env -i "${env[@]}" "${cmd[@]}") </dev/null >>"$st/logs/$1.log" 2>&1 &
+  pid[$1]=$!
+}
+launch_gateway() {
+  setsid nginx -c "$st/nginx.conf" -e "$st/logs/nginx.log" </dev/null >>"$st/logs/nginx.log" 2>&1 &
+  pid[nginx]=$!
+}
+# Why a service didn't come up: on the terminal, and on the console (the terminal isn't in a
+# build's log)
+report() {
+  { echo "supabase-demo: $1:"; tail -n 30 "$st/logs/$2.log"; } 2>/dev/null | tee -a /dev/ttyS0 2>/dev/null
+}
+
+launch postgres
+for i in $(seq 600); do pg_isready -q -h 127.0.0.1 -p "$db_port" && break; sleep 0.5; done
+pg_isready -q -h 127.0.0.1 -p "$db_port" || { report "Postgres didn't start" postgres; exit 1; }
+launch rest
+launch auth
+launch realtime
+launch_gateway
+
+# Up when the gateway answers for each of them. A slow machine (the build's emulated boot) gets
+# minutes, and a service that stops on the way (Realtime giving up on a database that's still
+# warming up, say) is started again, up to three times
+ready() {
+  curl -fsS -o /dev/null -m 10 -H "apikey: $ANON_KEY" "$API_URL/rest/v1/" &&
+    curl -fsS -o /dev/null -m 10 "$API_URL/auth/v1/health" &&
+    curl -fsS -o /dev/null -m 10 "$API_URL/realtime/v1/api/ping"
+}
+declare -A starts
+up=
+for i in $(seq 300); do
+  ready 2>/dev/null && { up=1; break; }
+  for s in rest auth realtime nginx; do
+    kill -0 "${pid[$s]}" 2>/dev/null && continue
+    starts[$s]=$((${starts[$s]:-1} + 1))
+    [ "${starts[$s]}" -le 3 ] || break 2
+    report "$s stopped, starting it again (start ${starts[$s]} of 3)" "$s"
+    if [ "$s" = nginx ]; then launch_gateway; else launch "$s"; fi
+  done
   sleep 1
-  if ! kill -0 "$expose_pid" 2>/dev/null; then
-    echo "Warning: the API couldn't be offered on port 54321 of the machine's network address" \
-      "(the agent page's preview won't reach it): $(tail -n 3 "$expose_log")"
-  fi
+done
+# Never reach the prompt (and so the snapshot) without the stack
+if [ -z "$up" ]; then
+  echo "Supabase's stack didn't start."
+  for s in postgres rest auth realtime nginx; do report "$s's log" "$s"; done
+  exit 1
 fi
 
 # Warm everything a visitor's first commands go through, so it's done in the snapshot rather than
@@ -78,6 +93,12 @@ if notes signup warmup@example.com warmup-password >/dev/null 2>&1; then
   sleep 2; kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
 fi
 notes logout >/dev/null 2>&1
+# The watch's end doesn't stop what it started in Realtime: the app's tenant stays connected, its
+# change poller asking Postgres for new rows ten times a second (about a tenth of a CPU, idle,
+# in the guest). Realtime's reload of the tenant stops it all; a visitor's first watch starts it
+# again, with its code already loaded by the warm-up.
+curl -sS -o /dev/null -X POST -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  "$API_URL/realtime/v1/api/tenants/realtime-dev/reload"
 psql "$DB_URL" -qc "delete from auth.users where email = 'warmup@example.com'; truncate notes restart identity" >/dev/null 2>&1
 
 export PS1='\u:\w$ '
