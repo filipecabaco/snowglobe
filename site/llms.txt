@@ -172,8 +172,10 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   reaches only its own machines) | inclusive (every machine of a template reaches the target's
   template's, across instances) | all (as inclusive, plus every template reaches every other's
   `expose`d ports by its name)), `[links.N]` (`from`, `to` = a template, service or machine of the
-  file, `port`, `as`, `as_port`), `[snapshots.N]` (`template`, `run` = commands that must succeed, `ready`
-  = a command retried until it succeeds, `timeout`), `[services.N]` (`template`, `ports`, `min`,
+  file, `port`, `as`, `as_port`), `[snapshots.N]` (`template`, `run` = commands that must succeed, each a
+  string or `{ cmd, timeout }` for a time limit of its own, `ready` = a command retried until it
+  succeeds, `timeout` = each command's limit when it has none (10m) and how long `ready` is retried
+  (2m)), `[services.N]` (`template`, `ports`, `min`,
   `max`, `idle`, `concurrency`, `state`, `labels`), `[machines.N]` (`template`, `count`, `ports`,
   `ttl`, `labels`). What changed is replaced with what is made from it; what left the file is
   removed. `snowglobe diff` shows the plan; `snowglobe down [-f F | --name FLEET]` removes it all.

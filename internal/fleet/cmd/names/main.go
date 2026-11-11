@@ -31,8 +31,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	// Each snapshot command's time limit, in seconds
+	limits := map[string][]float64{}
+	for n, s := range f.Snapshots {
+		limits[n] = []float64{}
+		for _, c := range s.Run {
+			limits[n] = append(limits[n], s.Limit(c).Seconds())
+		}
+	}
 	json.NewEncoder(os.Stdout).Encode(map[string]any{
-		"name": f.Name, "templates": keys(f.Templates), "snapshots": keys(f.Snapshots),
+		"limits": limits, "name": f.Name, "templates": keys(f.Templates), "snapshots": keys(f.Snapshots),
 		"services": keys(f.Services), "machines": keys(f.Machines), "links": keys(f.Links),
 	})
 }

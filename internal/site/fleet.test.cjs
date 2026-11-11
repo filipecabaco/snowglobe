@@ -232,7 +232,7 @@ test('plan: names that are not safe are problems', () => {
 });
 
 // A stand-in orchestrator: commands are logged, and answer as the test says
-function fakeApi({ exits = () => 0 } = {}) {
+function fakeApi({ exits = () => 0, timesOut = () => false } = {}) {
   const log = [];
   const jobs = new Map();
   let n = 0;
@@ -247,6 +247,7 @@ function fakeApi({ exits = () => 0 } = {}) {
     async readJob(id) {
       const j = jobs.get(id);
       if (j.polls++ < 1) return { state: 'running', output: '' };
+      if (timesOut(j.command)) return { state: 'timed_out', exitStatus: null, output: 'still going\n' };
       return { state: 'exited', exitStatus: exits(j.command), output: `out of ${j.command}\n` };
     },
     async openPreview(req, opts) { log.push(`preview ${req.runtime}:${req.port} (${opts.source})`); return { status: 200, url: 'http://x/preview/python/8000/' }; },
@@ -271,7 +272,50 @@ test('run: all of the example, in order', async () => {
   assert.ok(changes.length > 6);
 });
 
+test('plan: a command is a string or { cmd, timeout }; each gets its own time, the snapshot\'s, or 10m', () => {
+  const file = (run, extra = '') => `[templates.py]\nsite = "python"\n[snapshots.s]\ntemplate = "py"\nrun = [\n${run}\n]\n${extra}`;
+  const p = F.plan(F.parse(file(`  { cmd = '''\nmkdir /a\n''', timeout = "90s" },\n  "true",`, 'timeout = "3m"\nready = "true"')), runtimes);
+  assert.deepEqual(p.problems, []);
+  const s = p.steps.find((x) => x.key === 'snapshot/s');
+  assert.deepEqual(s.run, ['mkdir /a\n', 'true']);
+  assert.deepEqual(s.runTimeoutsMs, [90000, 180000]);
+  assert.equal(s.timeoutMs, 180000, 'ready is retried until the snapshot\'s timeout');
+  const none = F.plan(F.parse(file('"true"')), runtimes).steps.find((x) => x.key === 'snapshot/s');
+  assert.deepEqual(none.runTimeoutsMs, [600000], 'no timeout anywhere: 10m, as snowglobe apply');
+  assert.equal(none.timeoutMs, 120000, 'and ready 2m');
+  for (const [run, want] of [
+    ['{ cmd = "x", timeout = "soon" }', /run\[0\]: timeout: a duration/],
+    ['{ cmd = "x", retries = 2 }', /run\[0\]: unknown key retries/],
+    ['{ timeout = "9s" }', /run\[0\] has no cmd/],
+  ]) assert.match(F.plan(F.parse(file(run)), runtimes).problems[0].message, want, run);
+});
+
+test('run: a command gets its own time limit, and one that runs out of it says so', async () => {
+  const text = `[templates.py]\nsite = "python"\n[snapshots.s]\ntemplate = "py"\nrun = [{ cmd = "slow", timeout = "90s" }, "after"]\n`;
+  const api = fakeApi({ timesOut: (c) => c === 'slow' });
+  const run = F.createRun(api, F.plan(F.parse(text), runtimes), fast);
+  assert.equal(await run.runAll(), false);
+  assert.match(api.log[0], /run python slow \(90s, fleet\)/);
+  assert.equal(api.log.length, 1, 'nothing after it runs');
+  assert.match(run.state('snapshot/s').error, /^command 1 of 2 timed out \(its limit 1m30s\) after \d+\.\ds$/);
+  assert.match(run.state('snapshot/s').output, /\[timed_out after \d+\.\ds\]/);
+});
+
+test('parse: inline tables in an array, a multi-line string in one, and what they refuse', () => {
+  const t = F.parse(`run = [\n  { cmd = """\nmulti\nline\n""", timeout = "90s" },\n  "plain",\n]\nn = [1, 2]\n`);
+  assert.deepEqual(JSON.parse(JSON.stringify(t)), { run: [{ cmd: 'multi\nline\n', timeout: '90s' }, 'plain'], n: [1, 2] });
+  for (const [bad, want] of [
+    ['a = [1, "x"]', /one kind of value/],
+    ['a = [{ cmd = "x" timeout = "1s" }]', /expected , or \}/],
+    ['a = [{ a.b = 1 }]', /dotted key/],
+    ['a = [{ x = [1] }]', /inside an inline table/],
+    ['a = [{ x = 1, x = 2 }]', /set twice/],
+    ['a = [{ __proto__ = 1 }]', /isn't allowed/],
+  ]) assert.throws(() => F.parse(bad), want, bad);
+});
+
 test('run: a step waits for what it needs', async () => {
+
   const run = F.createRun(fakeApi(), F.plan(F.parse(example), runtimes), fast);
   await assert.rejects(run.runStep('service/web'), /needs snapshot\/serving first/);
   await assert.rejects(run.runStep('nope'), /no step/);
@@ -500,6 +544,11 @@ test('format: the Go planner and this one see the same entries in the repository
     assert.deepEqual(go.services, names('services'), file);
     assert.deepEqual(go.machines, names('machines'), file);
     assert.deepEqual(go.links, names('links'), file);
+    // And each snapshot command's time limit, in seconds
+    const p = F.plan(f, runtimes);
+    for (const st of p.steps.filter((x) => x.kind === 'snapshot')) {
+      assert.deepEqual(st.runTimeoutsMs.map((ms) => ms / 1000), go.limits[st.name], `${file}: ${st.name}`);
+    }
     assert.equal(go.name, f.name ?? go.name, file);
   }
 });

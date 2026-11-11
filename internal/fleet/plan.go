@@ -591,14 +591,18 @@ func (p *Plan) snapshot(api API, o Object, s SnapshotSpec, logf func(string, ...
 		return err
 	}
 	defer api.RemoveMachine(setup)
-	for _, cmd := range s.Run {
-		logf("  %s: %s", setup, brief(cmd))
-		res, err := api.Job(setup, control.JobRequest{Cmd: cmd, Timeout: 600})
+	for i, c := range s.Run {
+		logf("  %s: %s", setup, brief(c.Cmd))
+		limit := s.Limit(c)
+		res, err := api.Job(setup, control.JobRequest{Cmd: c.Cmd, Timeout: limit.Seconds()})
 		if err != nil {
 			return err
 		}
+		if res.TimedOut {
+			return fmt.Errorf("command %d of %d timed out (its limit %s): %q: %s", i+1, len(s.Run), limit, brief(c.Cmd), strings.TrimSpace(string(res.Output)))
+		}
 		if res.Status == nil || *res.Status != 0 {
-			return fmt.Errorf("%q failed (%s): %s", brief(cmd), status(res), strings.TrimSpace(string(res.Output)))
+			return fmt.Errorf("%q failed (%s): %s", brief(c.Cmd), status(res), strings.TrimSpace(string(res.Output)))
 		}
 	}
 	if s.Ready != "" {

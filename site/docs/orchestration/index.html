@@ -127,7 +127,7 @@ snowglobe service rm web</pre>
             there. One file goes from source to running services. It can hold:</p>
           <ul>
             <li>templates: a built site, a URL, or a Dockerfile directory built first;</li>
-            <li>snapshots: a machine of a template set up by commands, saved once a readiness command succeeds;</li>
+            <li>snapshots: a machine of a template set up by commands, saved once a readiness command succeeds. A command is a string, or <code>{ cmd = "...", timeout = "90s" }</code> for one with a time limit of its own; one without gets the snapshot's <code>timeout</code>, or 10 minutes;</li>
             <li>templates of those snapshots;</li>
             <li>services and machines;</li>
             <li>links, a network mode, and each template's egress (<a href="#links">below</a>).</li>
@@ -139,7 +139,10 @@ network = "fetch"
 
 [snapshots.serving]
 template = "py"
-run = ["cd /srv &amp;&amp; python3 -m http.server 8000 &gt;/dev/null 2&gt;&amp;1 &amp;"]
+run = [
+  { cmd = "pip install httpx", timeout = "3m" },   <span class="dim"># a time limit of its own</span>
+  "cd /srv &amp;&amp; python3 -m http.server 8000 &gt;/dev/null 2&gt;&amp;1 &amp;",
+]
 ready = "wget -q -O /dev/null http://127.0.0.1:8000/"
 
 [templates.serving]
