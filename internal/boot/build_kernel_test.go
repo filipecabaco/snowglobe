@@ -63,7 +63,7 @@ func TestAKernelIsBuiltWithDockerOnce(t *testing.T) {
 	calls, _ := os.ReadFile(log)
 	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "build --platform linux/arm64 --tag snowglobe-kernel:build ") ||
-		lines[1] != "run --rm --platform linux/arm64 snowglobe-kernel:build tar -czf - -C / boot/vmlinuz-virt boot/initramfs-virt lib/modules" {
+		lines[1] != "run --rm --platform linux/arm64 snowglobe-kernel:build tar -czf - -C / boot/vmlinuz-virt" {
 		t.Errorf("docker calls: %q", lines)
 	}
 	// Built already: kept

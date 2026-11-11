@@ -106,6 +106,7 @@ Usage:
                                                      --tunnel [HOST:]PORT=URL replaces the site's
                                                      tunnels (a local proxy, say); --allow-private
                                                      lets the guest reach this machine's services
+                                                     --jit on|off over the site's own choice
                                                      --max-runtime 30m ends the run after that long
                                                      (exit 124), --stop-file PATH once PATH exists
                                                      (exit 143): the job running in the guest is
@@ -224,6 +225,12 @@ Build flags:
                   endpoint on this machine, say); the page is unaffected
   --exercise CMD  a command to type into the app after the snapshot, recording the files it reads
                   so they're preloaded too; repeatable. A warm-report.json explains the result
+  --jit on|off    off keeps armless's interpreter instead of compiling hot guest code, in the
+                  page and in snowglobe run: slower, and a smaller machine (default: on)
+  --kernel none   no guest kernel: the image's command is a static aarch64 Linux executable
+                  that runs on its own, its system calls answered by the machine. Snapshots a
+                  tenth the size; runs natively only for now (snowglobe run: the page says so),
+                  with no network, one CPU, no exercises (default: linux)
   --cpus N        guest CPUs, 1 to 8 (default: 1). More than one runs each CPU in its own Web
                   Worker; the page then makes itself cross-origin isolated with a service worker
   --build-cpus N  CPUs to boot and warm up on before the snapshot (default: the larger of --cpus
@@ -255,6 +262,7 @@ An image can carry its own settings as labels, which flags override:
   LABEL snowglobe.ready="iex(1)> " snowglobe.title="My app" snowglobe.memory="256" \
         snowglobe.exercise='["h Enum.map", "Task.async(fn -> 1 end)"]'
   LABEL snowglobe.network="fetch" snowglobe.cpus="2" snowglobe.build-cpus="2"
+  LABEL snowglobe.jit="off" snowglobe.kernel="none"
   LABEL snowglobe.tunnels='["db.internal:5432=wss://db-proxy.example.com/"]'
   LABEL snowglobe.agent="true" snowglobe.agent-exposed-to='["https://agent.example"]'
 
@@ -439,6 +447,8 @@ func runBuild(args []string) error {
 	fs.BoolVar(&o.NoChunks, "no-chunks", false, "")
 	fs.BoolVar(&o.Agent, "agent", false, "")
 	fs.Func("agent-exposed-to", "", func(v string) error { o.AgentExposedTo = append(o.AgentExposedTo, v); return nil })
+	fs.StringVar(&o.JIT, "jit", "", "")
+	fs.StringVar(&o.Kernel, "kernel", "", "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)
@@ -590,6 +600,7 @@ func runRun(args []string) error {
 	fs.Func("max-runtime", "", func(v string) (err error) { o.MaxRuntime, err = parseDuration(v); return err })
 	fs.StringVar(&o.StopFile, "stop-file", "", "")
 	fs.StringVar(&o.LogDir, "log-dir", "", "")
+	fs.StringVar(&o.JIT, "jit", "", "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)

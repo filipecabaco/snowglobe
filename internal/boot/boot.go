@@ -1,5 +1,5 @@
-// Package boot adds the layer that makes an image bootable in armless: kernel, 9p initramfs and
-// consoles, plus the script that runs the app on the browser terminal.
+// Package boot adds the layer that makes an image bootable in armless: a kernel that mounts its
+// root over 9p, and consoles, plus the script that runs the app on the browser terminal.
 package boot
 
 import (

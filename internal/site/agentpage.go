@@ -106,6 +106,7 @@ type Runtime struct {
 	MemoryMB int    `json:"memory_mb"`
 	CPUs     int    `json:"cpus"` // more than one: the page must be cross-origin isolated (its sw.js)
 	Network  string `json:"network"`
+	JIT      bool   `json:"jit"` // false: the machine keeps the interpreter
 }
 
 // Manifest is runtimes.json: the machines, and the files they share
@@ -190,6 +191,7 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 			MemoryMB int    `json:"memory_mb"`
 			Network  string `json:"network"`
 			CPUs     int    `json:"cpus"`
+			JIT      *bool  `json:"jit"` // missing: a site built before the setting, on
 			Agent    *struct {
 				Name      string   `json:"name"`
 				Purpose   string   `json:"purpose"`
@@ -255,7 +257,7 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 		}
 		all = append(all, found{Runtime: Runtime{
 			Name: name, Title: run.Title, Purpose: run.Agent.Purpose, Sample: run.Agent.Sample, Watch: run.Agent.Watch,
-			Base: "../" + e.Name() + "/", BaseURL: string(m[1]), BuildID: buildID, MemoryMB: run.MemoryMB, CPUs: run.CPUs, Network: run.Network,
+			Base: "../" + e.Name() + "/", BaseURL: string(m[1]), BuildID: buildID, MemoryMB: run.MemoryMB, CPUs: run.CPUs, Network: run.Network, JIT: run.JIT == nil || *run.JIT,
 		}, dir: dir, source: run.Source, exposedTo: run.Agent.ExposedTo})
 	}
 	if len(all) == 0 {

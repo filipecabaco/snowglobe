@@ -31,6 +31,7 @@ mod snapshot;
 mod sys;
 mod term;
 mod text;
+mod user;
 
 use std::process::ExitCode;
 
@@ -42,10 +43,12 @@ fn usage() -> ExitCode {
   snowglobe-vm snapshot <system dir> [--memory MB] [--cpus N] [--network none|fetch]
                         [--ready TEXT] [--exercise COMMAND ...]
                         [--tunnel [HOST:]PORT=URL ...] [--egress none|internet|private] [--allow-private]
+                        [--user PROGRAM --user ARG ...]   (no kernel: the program runs on its own)
   snowglobe-vm run <site dir> [--blobs DIR] [--detached] [--socket PATH] [--forward PORT:GUEST ...]
                    [--tunnel [HOST:]PORT=URL ...] [--egress none|internet|private] [--allow-private] [--record-reads FILE]
                    [--workspace DIR --cmd COMMAND [--env K=V ...] [--env-file JSON] [--timeout SECS]]
                    [--max-runtime SECS] [--stop-file PATH ...] [--log-dir DIR]
+                   [--jit on|off]   (over the site's own choice; ARMLESS_JIT=off as well)
                    [--serve SOCKET --jobs-root DIR [--max-jobs N]]   (jobs forked from one restore)
                    [--server SOCKET --workspace DIR --cmd COMMAND ...]  (a job for --serve)
   (a bundle takes run's flags itself: ./site --workspace DIR --cmd COMMAND)
@@ -98,7 +101,7 @@ impl Args {
     }
 }
 
-pub const RUN_FLAGS: &[&str] = &["egress", "max-runtime", "stop-file", "log-dir", "blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "max-machines", "state", "server"];
+pub const RUN_FLAGS: &[&str] = &["egress", "max-runtime", "stop-file", "log-dir", "blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "max-machines", "state", "server", "jit"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -120,7 +123,7 @@ fn main() -> ExitCode {
             if let Some(line) = lifeline::inherited() {
                 lifeline::watch(line, || lifeline::stop("the build that started this snapshot"));
             }
-            Args::parse(rest, &["memory", "cpus", "build-cpus", "network", "ready", "exercise", "cols", "rows", "tunnel"])
+            Args::parse(rest, &["memory", "cpus", "build-cpus", "network", "ready", "exercise", "cols", "rows", "tunnel", "user"])
                 .and_then(|a| snapshot::main(&a))
         },
         "run" => Args::parse(rest, RUN_FLAGS).and_then(|a| run::main(&a, None)),

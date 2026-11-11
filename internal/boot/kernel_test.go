@@ -1,75 +1,51 @@
 package boot
 
 import (
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// findfs is the shell function kernel.Dockerfile adds to Alpine's initramfs init.
-func findfs(t *testing.T) string {
+// kernelConfig is the configuration kernel.Dockerfile builds the kernel with.
+func kernelConfig(t *testing.T) map[string]string {
 	t.Helper()
-	_, rest, ok := strings.Cut(string(kernelDockerfile), "COPY <<'EOF' /tmp/findfs.sh\n")
-	body, _, ok2 := strings.Cut(rest, "\nEOF\n")
+	_, rest, ok := strings.Cut(string(kernelDockerfile), "COPY <<'CONFIG' /snowglobe.config\n")
+	body, _, ok2 := strings.Cut(rest, "\nCONFIG\n")
 	if !ok || !ok2 {
-		t.Fatal("kernel.Dockerfile has no findfs.sh heredoc")
+		t.Fatal("kernel.Dockerfile has no snowglobe.config heredoc")
 	}
-	return body
+	config := map[string]string{}
+	for _, line := range strings.Split(body, "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok && strings.HasPrefix(k, "CONFIG_") {
+			config[k] = v
+		}
+	}
+	return config
 }
 
-// The init calls `$MOCK snowglobe_findfs ...` where it called nlplug-findfs: run the function with
-// the commands it calls faked, each recording its arguments
-func TestFindfsMountsA9pRootWithoutNlplugFindfs(t *testing.T) {
-	for _, c := range []struct {
-		name, rootfstype string
-		shareUp          bool
-		want             string // the calls made, and what it printed
-	}{
-		{"another root: nlplug-findfs as before", "ext4", false, "nlplug-findfs -p /sbin/mdev /dev/vda\n"},
-		{"9p: its transport, then the share", "9p", true, "modprobe 9pnet_virtio\ngrep -qsx host9p\n"},
-		{"9p, no share: says so (the mount then fails)", "9p", false, "modprobe 9pnet_virtio\nno 9p share host9p after 5 s\n"},
+// With no initramfs and no modules, the kernel must have built in everything that mounts the root
+// over 9p, gives init a console, and drives armless's devices
+func TestTheKernelHasArmlesssMachineBuiltIn(t *testing.T) {
+	config := kernelConfig(t)
+	for _, opt := range []string{
+		"VIRTIO_PCI", "PCI_HOST_GENERIC", "NET_9P_VIRTIO", "9P_FS", "VIRTIO_CONSOLE", "VIRTIO_NET",
+		"SERIAL_8250_CONSOLE", "ARM_GIC", "RTC_DRV_PL031", "VMGENID", "ARM_PSCI_FW", "HOTPLUG_CPU",
+		"DEVTMPFS_MOUNT", "PROC_FS", "SYSFS", "TMPFS", "UNIX98_PTYS", "UNIX", "INET", "PACKET",
+		"FUTEX", "EPOLL", "SYSVIPC", "IPV6",
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			bin := t.TempDir()
-			calls := filepath.Join(bin, "calls")
-			fake := func(name, body string) {
-				script := "#!/bin/sh\n" + body + "\n"
-				if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
-					t.Fatal(err)
-				}
-			}
-			record := `echo "$(basename "$0") $*" >> ` + calls
-			fake("nlplug-findfs", record)
-			fake("modprobe", record)
-			fake("sleep", "")
-			grep := `echo "grep $1 $2" >> ` + calls + `; exit 1`
-			if c.shareUp {
-				grep = `echo "grep $1 $2" >> ` + calls + `; exit 0`
-			}
-			fake("grep", grep)
-			root := "host9p"
-			if c.rootfstype != "9p" {
-				root = "/dev/vda"
-			}
-			cmd := exec.Command("sh", "-c", findfs(t)+"\nsnowglobe_findfs -p /sbin/mdev \"$KOPT_root\"")
-			cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "KOPT_rootfstype=" + c.rootfstype, "KOPT_root=" + root}
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("%v: %s", err, out)
-			}
-			recorded, _ := os.ReadFile(calls)
-			got := string(recorded) + strings.TrimPrefix(string(out), "snowglobe: ")
-			if !c.shareUp && c.rootfstype == "9p" {
-				// Every check of the share is a call: keep the first, then what it said
-				lines := strings.Split(got, "\n")
-				got = lines[0] + "\n" + lines[len(lines)-2] + "\n"
-			}
-			if got != c.want {
-				t.Errorf("got %q, want %q", got, c.want)
-			}
-		})
+		if config["CONFIG_"+opt] != "y" {
+			t.Errorf("CONFIG_%s is not built in", opt)
+		}
+	}
+	if config["CONFIG_MODULES"] == "y" {
+		t.Error("modules: nothing would load them")
+	}
+}
+
+// The kernel's source is the one release, checked
+func TestTheKernelsSourceIsPinned(t *testing.T) {
+	d := string(kernelDockerfile)
+	if !strings.Contains(d, "ARG SHA256=") || !strings.Contains(d, "sha256sum -c") {
+		t.Error("the kernel tarball is not checked against its sha256")
 	}
 }
 

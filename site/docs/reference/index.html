@@ -98,6 +98,8 @@
                 <tr><td>--tunnel [HOST:]PORT=URL</td><td>snowglobe.tunnels</td><td class="wrap-cell">carry TCP to HOST:PORT over a WebSocket; repeatable</td></tr>
                 <tr><td>--tunnel-token URL</td><td>snowglobe.tunnel-token</td><td class="wrap-cell">where a fresh token comes from, for <code>{token}</code> in tunnel URLs</td></tr>
                 <tr><td>--allow-private</td><td></td><td class="wrap-cell">let the build reach loopback and private addresses</td></tr>
+                <tr><td>--jit on|off</td><td>snowglobe.jit</td><td class="wrap-cell">off keeps the interpreter instead of compiling hot guest code, in the page and natively: slower, smaller (default <code>on</code>)</td></tr>
+                <tr><td>--kernel none</td><td>snowglobe.kernel</td><td class="wrap-cell">no guest kernel: the command is a static aarch64 Linux executable that runs on its own; a tenth of the snapshot, native runs only for now (no network, one CPU, no exercises)</td></tr>
                 <tr><td>--builder B</td><td></td><td class="wrap-cell"><code>docker</code> (default) or <code>native</code></td></tr>
                 <tr><td>--sandbox</td><td></td><td class="wrap-cell">snapshot for running natively (run, bundle) rather than in a page</td></tr>
                 <tr><td>--no-chunks</td><td></td><td class="wrap-cell">store every file in one blob, however large</td></tr>
@@ -118,6 +120,7 @@
                 <tr><td>-p [IP:]HOST:GUEST</td><td class="wrap-cell">forward a host port to a guest port (needs <code>--network fetch</code>)</td></tr>
                 <tr><td>--record-reads FILE</td><td class="wrap-cell">write every file the guest reads, for <code>warm</code></td></tr>
                 <tr><td>--tunnel · --allow-private</td><td class="wrap-cell">replace the site's tunnels · let the guest reach this machine</td></tr>
+                <tr><td>--jit on|off</td><td class="wrap-cell">the JIT for this run, over the site's own choice</td></tr>
                 <tr><td>--max-runtime · --stop-file · --log-dir</td><td class="wrap-cell">see <a href="../agents/#limits">limits, stopping and logs</a></td></tr>
               </tbody>
             </table>
@@ -137,7 +140,7 @@
                 <tr><td>SNOWGLOBE_BOOT_STALL_SECS</td><td class="wrap-cell">how long a boot may do nothing before it counts as stalled (default 300; <code>0</code>: no limit)</td></tr>
                 <tr><td>SNOWGLOBE_CACHE</td><td class="wrap-cell">where native runs keep what they learn and the snapshots' memory images (default <code>~/.cache/snowglobe</code>)</td></tr>
                 <tr><td>SNOWGLOBE_RAM_IMAGE=off</td><td class="wrap-cell">restore into memory of the run's own instead of sharing the snapshot's image</td></tr>
-                <tr><td>ARMLESS_JIT=off</td><td class="wrap-cell">keep armless's interpreter instead of its native JIT</td></tr>
+                <tr><td>ARMLESS_JIT=off</td><td class="wrap-cell">keep armless's interpreter instead of its native JIT, on this host, over the site's choice (<code>run --jit</code> still wins)</td></tr>
                 <tr><td>ARMLESS_JIT_PREWARM=off</td><td class="wrap-cell">don't compile what earlier runs recorded at start</td></tr>
                 <tr><td>HTTPS_PROXY · HTTP_PROXY · NO_PROXY · SSL_CERT_FILE</td><td class="wrap-cell">passed to <code>snowglobe run</code>'s container</td></tr>
               </tbody>

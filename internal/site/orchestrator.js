@@ -175,6 +175,7 @@
         wasm: manifest.armless.wasm ? abs(manifest.armless.wasm) : undefined,
         wasm_smp: manifest.armless.wasm_smp ? abs(manifest.armless.wasm_smp) : undefined,
         memory_mb: r.memory_mb, cpus,
+        jit: r.jit !== false,
         filesystem: { json: "system/filesystem.json", baseurl: r.baseurl ?? "system/filesystem/" },
         initial_state: "system/state.bin.zst",
         warm: "system/warm.pack",

@@ -205,8 +205,8 @@ jobs:
             tar -czf "release/$name.tar.gz" "$name"
           done
 
-      # The kernel archive builds without Docker add (snowglobe build --builder native): linux-virt,
-      # its 9p initramfs and modules, built for arm64 (under QEMU here)
+      # The kernel archive builds without Docker add (snowglobe build --builder native): a kernel for
+      # armless's machine, cross-compiled here (only its last stage, a copy, is arm64, under QEMU)
       - name: Kernel archive for builds without Docker
         run: |
           docker run --privileged --rm tonistiigi/binfmt --install arm64

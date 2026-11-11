@@ -188,6 +188,9 @@
     const cpus = {{.CPUs}};
     const isolationKey = "snowglobe-isolate:" + new URL("./", location.href).pathname;
     let isolationNeeded = cpus > 1 && !crossOriginIsolated;
+    // A site with no kernel (snowglobe build --kernel none) runs natively (snowglobe run): the
+    // page has no machine for it yet, so it says so rather than boot
+    const nativeOnly = {{.NativeOnly}};
     if (isolationNeeded) {
       let tried = false;
       try { tried = sessionStorage.getItem(isolationKey) === "1"; } catch {}
@@ -204,7 +207,7 @@
     // Rendered by snowglobe. Everything below must match the snapshot (snowglobe-vm snapshot):
     // the same RAM size, CPUs and devices
     const sessions = new SnowglobeSessionUI({ build: {{.BuildID}}, memory: {{.MemoryMB}}, cpus, network: {{.Network}} });
-    if (!isolationNeeded && !await sessions.prepare()) {
+    if (!isolationNeeded && !nativeOnly && !await sessions.prepare()) {
       status.textContent = "workspace needs attention";
       status.dataset.state = "error";
       document.getElementById("sessions").open = true;
@@ -232,6 +235,7 @@
       wasm_smp: versioned("armless/armless-smp.wasm"),
       memory_mb: {{.MemoryMB}},
       cpus,
+      jit: {{.JIT}},
       // armless samples its memory only when asked (?debug=memory); see memory-debug.js
       debug: SnowglobeMemoryDebug.enabled(),
       filesystem: { json: versioned("system/filesystem.json"), baseurl: "system/filesystem/" },
@@ -246,7 +250,7 @@
       {{- end}}
     } });
     // The terminal is set up (and the screen replayed) before the guest runs
-    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"));
+    const booted = isolationNeeded || nativeOnly ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"));
     const emulator = host.emulator;
     // For tests and benchmarks: the machine (console_input, the console event)
     window.snowglobe = { get emulator() { return host.emulator; }, memory: () => host.memoryReport() };
@@ -289,6 +293,7 @@
       setStatus("loading", "isolating");
       if (!("serviceWorker" in navigator)) setStatus("error", "needs a browser with service workers");
     }
+    if (nativeOnly) setStatus("error", "runs natively only: snowglobe run");
 
     // What the machine says about itself. A failure starts the page over (once)
     host.on("progress", (e) => {
