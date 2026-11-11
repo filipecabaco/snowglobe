@@ -35,7 +35,6 @@ RUN install -d -o postgres -g postgres -m 700 /var/lib/postgresql/data && \
 
 COPY --from=build /release /app
 COPY start.sh /app/start.sh
-COPY demo.iex.exs /root/.iex.exs
 
 # A browser tab is one node: without distribution the prompt is a plain iex(1)>
 ENV LANG=C.UTF-8 HOME=/root RELEASE_DISTRIBUTION=none
@@ -47,4 +46,4 @@ CMD ["/app/start.sh"]
 LABEL snowglobe.title="Elixir + Postgres in the browser" \
       snowglobe.ready="iex(1)> " \
       snowglobe.memory="640" snowglobe.cpus="2" snowglobe.build-cpus="2" \
-      snowglobe.exercise='["sql \"SHOW server_version\"", "sql \"SELECT app, count(*) AS modules, pg_size_pretty(sum(bytes)) AS size FROM modules GROUP BY app ORDER BY sum(bytes) DESC LIMIT 8\"", "Repo.all(from m in ModuleRow, where: m.app == \"postgrex\", order_by: [desc: m.functions], limit: 5, select: {m.name, m.functions})", "sql \"SELECT app, name, functions, rank() OVER (PARTITION BY app ORDER BY functions DESC) FROM modules WHERE app IN (\u0027ecto\u0027, \u0027postgrex\u0027) ORDER BY 4, 1 LIMIT 6\"", "h Ecto.Query.from"]'
+      snowglobe.exercise='["PostgresTab.Repo.query!(\"SHOW server_version\").rows", "PostgresTab.sql(\"SELECT n, n * n AS square FROM generate_series(1, 5) AS n\")", "PostgresTab.sql(\"CREATE TABLE notes (id bigserial PRIMARY KEY, body text NOT NULL)\")", "PostgresTab.Repo.insert_all(\"notes\", [%{body: \"written in a browser tab\"}, %{body: \"and read back with Ecto\"}])", "import Ecto.Query; PostgresTab.Repo.all(from n in \"notes\", order_by: n.id, select: {n.id, n.body})", "h Ecto.Query.from"]'

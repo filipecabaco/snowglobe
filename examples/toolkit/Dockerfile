@@ -15,20 +15,11 @@ RUN apk add --no-cache \
       vips-tools vips-poppler font-dejavu \
       py3-img2pdf python3 \
       jq sqlite \
-      ffmpeg && \
-    printf '%s\n' \
-      '' \
-      '  A toolkit machine: poppler, qpdf, tesseract, vips, jq, sqlite, ffmpeg and python,' \
-      '  sandboxed. Try:' \
-      '' \
-      "    vips text /tmp/t.png 'hello from a sandbox' --dpi 300 && tesseract /tmp/t.png -" \
-      "    ffmpeg -v error -f lavfi -i testsrc=d=1:s=320x240 -frames:v 1 /tmp/f.png && vipsheader /tmp/f.png" \
-      "    echo '[{\"n\":1},{\"n\":2}]' | jq 'map(.n) | add'" \
-      '' > /etc/motd-toolkit
+      ffmpeg
 
 ENV LANG=C.UTF-8 PS1='toolkit $ ' OMP_THREAD_LIMIT=1
 WORKDIR /root
-CMD ["/bin/sh", "-c", "cat /etc/motd-toolkit; exec /bin/sh"]
+CMD ["/bin/sh"]
 
 LABEL snowglobe.title="Toolkits: poppler, tesseract, vips, ffmpeg, sqlite" \
       snowglobe.ready="toolkit $ " \

@@ -5,7 +5,7 @@ WORKDIR /app
 COPY app/package.json app/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY app/ ./
-RUN npm run build && ./node_modules/.bin/esbuild seed.mjs --bundle --platform=node --format=esm --outfile=seed.bundle.mjs
+RUN npm run build
 
 # Supabase: the Supabase CLI's native local stack (Postgres, PostgREST and Auth as plain processes,
 # no Docker) running inside the guest, with the API answering curl in the same shell.
@@ -39,7 +39,7 @@ RUN apk add --no-cache bash tar curl jq postgresql-client libstdc++ libgcc socat
     ln -sf /bin/bash /usr/bin/bash
 
 # The Supabase CLI: its linux-arm64-musl build, a single Bun-compiled binary, straight from npm's
-# registry (no Node). It runs the static server and seed with BUN_BE_BUN=1. Its other binary,
+# registry (no Node). It runs the static server with BUN_BE_BUN=1. Its other binary,
 # supabase-go (the older Go CLI, for commands not yet moved over), isn't needed here.
 ADD --checksum=sha256:e2ea546b73b7835234489beed4a90b9788cca81c4635781baab4ae689c766cc3 \
     https://registry.npmjs.org/@supabase/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.118.0-beta.90.tgz /tmp/cli.tgz
@@ -72,7 +72,6 @@ RUN supabase init --yes >/dev/null && \
 COPY --chown=supa app/supabase/migrations supabase/migrations
 RUN ["bash", "-c", "CI=1 supabase stack start --runtime native --eager -x realtime -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null && supabase stack stop </dev/null"]
 COPY --from=frontend --chown=supa /app/dist ./dist
-COPY --from=frontend --chown=supa /app/seed.bundle.mjs ./seed.mjs
 USER root
 COPY --chmod=755 start.sh /usr/local/bin/conduit-demo
 COPY server.mjs /home/supa/app/server.mjs
@@ -85,4 +84,4 @@ LABEL snowglobe.title="Conduit + Supabase" \
       snowglobe.agent-purpose="Conduit blogging app and Supabase together; open port 4173 to use the app" \
       snowglobe.agent-sample='curl -s http://127.0.0.1:4173/ | head -c 200' \
       snowglobe.ready="supa:~/app$ " \
-      snowglobe.exercise='["curl -s http://127.0.0.1:4173/ | head -c 200", "psql \"$DB_URL\" -c \"select title from articles order by created_at\""]'
+      snowglobe.exercise='["curl -s http://127.0.0.1:4173/ | head -c 200", "psql \"$DB_URL\" -c \"select count(*) from articles\""]'

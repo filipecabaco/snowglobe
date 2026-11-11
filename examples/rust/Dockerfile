@@ -9,21 +9,11 @@ RUN RUSTFLAGS="-C linker=rust-lld" cargo build --release --locked --target aarch
 
 FROM alpine:3.24.2
 COPY --from=build /src/target/aarch64-unknown-linux-musl/release/jtab /usr/local/bin/jtab
-COPY data /root/data
-RUN printf '%s\n' \
-      '' \
-      '  Rust + clap + serde_json + comfy-table: jtab renders JSON as tables, in this tab. Try:' \
-      '' \
-      '    jtab data/languages.json' \
-      '    jtab data/languages.json --where typing=static --columns name,year,runs_here_as --sort year -r' \
-      "    echo '[{\"lang\":\"rust\",\"stars\":5},{\"lang\":\"go\",\"stars\":4}]' | jtab --sort stars" \
-      '    jtab --help' \
-      '' > /etc/motd-rust
 
 ENV LANG=C.UTF-8 PS1='\w $ '
 WORKDIR /root
-CMD ["/bin/sh", "-c", "cat /etc/motd-rust; exec /bin/sh"]
+CMD ["/bin/sh"]
 
 LABEL snowglobe.title="Rust + clap in the browser" \
       snowglobe.ready="~ $ " \
-      snowglobe.exercise='["jtab data/languages.json", "jtab data/languages.json --where typing=static --sort year -r", "echo [] | jtab", "jtab --help"]'
+      snowglobe.exercise='["echo '"'"'[{\"name\":\"Rust\",\"year\":2015,\"typing\":\"static\"},{\"name\":\"Python\",\"year\":1991,\"typing\":\"dynamic\"},{\"name\":\"Go\",\"year\":2009,\"typing\":\"static\"}]'"'"' | jtab --where typing=static --columns name,year --sort year -r", "echo '"'"'[{\"lang\":\"rust\",\"stars\":5},{\"lang\":\"go\",\"stars\":4}]'"'"' | jtab --sort stars", "echo [] | jtab", "jtab --help"]'

@@ -267,14 +267,12 @@ FROM alpine:3.24.2
 RUN apk add --no-cache python3 &amp;&amp; \
     python3 -m venv /opt/venv &amp;&amp; \
     /opt/venv/bin/pip install --no-cache-dir rich==15.0.0
-COPY startup.py /root/startup.py
-ENV LANG=C.UTF-8 PATH=/opt/venv/bin:$PATH \
-    PYTHONSTARTUP=/root/startup.py
+ENV LANG=C.UTF-8 PATH=/opt/venv/bin:$PATH
 WORKDIR /root
 CMD ["python3"]
 LABEL snowglobe.title="Python + Rich in the browser" \
       snowglobe.ready="&gt;&gt;&gt; " \
-      snowglobe.exercise='["inspect(str.split)", "1 / 0"]'</pre>
+      snowglobe.exercise='["from rich import inspect; inspect(str.split)", "1 / 0"]'</pre>
               </div>
             </div>
             <div class="step">
@@ -447,14 +445,14 @@ $ snowglobe apply</pre>
       { dir: "conduit", tag: "Conduit + Supabase in one VM", name: "Conduit", stack: "A RealWorld blogging app with accounts, Markdown articles, comments, favorites, follows and feeds. React and supabase-js talk to Postgres, Auth and PostgREST in the same VM. Open the agent studio, select conduit, then Open the app on port 4173.", show: [0, 1], command: "bash, with Conduit and Supabase running" },
       { dir: "supabase", tag: "Postgres, PostgREST and Auth, and a notes app", name: "Supabase", stack: "The Supabase CLI's native stack (Postgres, PostgREST and Auth as plain processes, no Docker) on 2 CPUs, and a small notes app on it, run by the Bun inside the CLI: Auth for users, the Data API to store and search notes, row level security keeping each user's notes their own.", show: [0, 1, 2, 3, 4, 5], command: "bash, with the stack running and notes on the PATH" },
       { dir: "iex", tag: "Erlang and Elixir from Alpine", name: "Elixir IEx", stack: "Just IEx, from Alpine's Elixir and Erlang packages: processes, tasks and docs, in a tab.", show: [0, 2, 3, 4] },
-      { dir: "postgres", tag: "A Postgres 18 server, with psql", name: "PostgreSQL", stack: "A Postgres 18 server from Alpine's packages, with psql attached and a small planets table to query.", show: [0, 1, 2, 3] },
-      { dir: "elixir", tag: "Ecto and Postgrex on Postgres 18", name: "Elixir + Postgres", stack: "A Mix release with Ecto and Postgrex, talking to a PostgreSQL 18 server running in the same tab.", show: [0, 1, 2, 3] },
+      { dir: "postgres", tag: "A Postgres 18 server, with psql", name: "PostgreSQL", stack: "A Postgres 18 server from Alpine's packages, with psql attached and an empty database to start from.", show: [0, 1, 2, 3] },
+      { dir: "elixir", tag: "Ecto and Postgrex on Postgres 18", name: "Elixir + Postgres", stack: "A Mix release with Ecto and Postgrex, talking to a PostgreSQL 18 server running in the same tab.", show: [0, 1, 3, 4] },
       { dir: "python", tag: "CPython 3.14 with Rich", name: "Python + Rich", stack: "CPython 3.14 with Rich rendering tables, syntax and tracebacks.", show: [0, 1, 2, 6] },
-      { dir: "typescript", tag: "Node 24, tsx and Zod, online", name: "TypeScript + Zod", stack: "Node 24 and tsx, with Zod validating live HTTPS responses; fetch() and WebSockets go out through your browser.", show: [0, 1, 6, 7, 8] },
+      { dir: "typescript", tag: "Node 24, tsx and Zod, online", name: "TypeScript + Zod", stack: "Node 24 and tsx, with Zod installed; fetch() and WebSockets go out through your browser.", show: [2, 3, 7, 8, 9] },
       { dir: "go", tag: "Game of Life with Bubble Tea", name: "Go + Bubble Tea", stack: "An interactive Game of Life built with Bubble Tea and Lip Gloss.", show: "screen" },
-      { dir: "rust", tag: "jtab: JSON as tables, with clap", name: "Rust + clap", stack: "jtab, a CLI rendering JSON as tables: clap, serde_json, comfy-table.", show: [1, 2], command: "sh, with jtab on the PATH and sample data in ./data" },
-      { dir: "java", tag: "jshell with Gson", name: "Java + Gson", stack: "jshell on OpenJDK 11 with Gson on the classpath.", show: [0, 1, 2, 3] },
-      { dir: "duckdb", tag: "Analytical SQL over CSV, Parquet and JSON", name: "DuckDB", stack: "The DuckDB CLI, querying CSV, JSON and Parquet files in the tab: group-bys, aggregates and a Parquet export, offline.", show: [0, 1, 2, 3], command: "sh, with duckdb on the PATH and sample files in ./data" },
+      { dir: "rust", tag: "jtab: JSON as tables, with clap", name: "Rust + clap", stack: "jtab, a CLI rendering JSON as tables: clap, serde_json, comfy-table.", show: [0, 1], command: "sh, with jtab on the PATH" },
+      { dir: "java", tag: "jshell with Gson", name: "Java + Gson", stack: "jshell on OpenJDK 11 with Gson on the classpath.", show: [1, 3, 4, 5] },
+      { dir: "duckdb", tag: "Analytical SQL over CSV, Parquet and JSON", name: "DuckDB", stack: "The DuckDB CLI in the tab: analytical SQL, with CSV, JSON and Parquet files written and read back, offline.", show: [0, 1, 2, 3] },
       { dir: "web", tag: "React 19 with Vite, on Node 24", name: "React + Vite", stack: "Node 24 from Alpine's packages and a React app with Vite and supabase-js installed: built offline in the tab, served on the machine's network address, and rebuilt on every change.", show: [0, 1, 2], command: "sh, in the React app at /root/app, served on port 4173" },
       { dir: "curl", tag: "A shell online through your browser", name: "curl + jq", stack: "Plain Alpine packages in a shell, online through your browser: curl against live APIs, piped into jq.", show: [0, 1, 2, 3], command: "sh, with curl and jq from Alpine's packages" },
     ];

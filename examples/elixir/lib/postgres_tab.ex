@@ -2,9 +2,6 @@ defmodule PostgresTab do
   @moduledoc """
   A PostgreSQL server inside this browser tab, reached through Ecto and Postgrex: Alpine's own
   postgres binary for 64-bit ARM Linux, running on an emulated ARM CPU next to this BEAM.
-
-  The `modules` table holds every module loaded in this BEAM, with its application, function
-  count, exports and size.
   """
 
   alias PostgresTab.Repo

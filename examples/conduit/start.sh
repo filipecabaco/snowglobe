@@ -28,7 +28,6 @@ export API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY
   for v in API_URL DB_URL ANON_KEY SERVICE_ROLE_KEY PUBLISHABLE_KEY SECRET_KEY; do printf "export %s='%s'\n" "$v" "${!v}"; done
   echo "export SUPABASE_API_PORT=54321"
 } > "$HOME/.stack-env"
-BUN_BE_BUN=1 supabase run seed.mjs || exit 1
 BUN_BE_BUN=1 supabase run server.mjs > /tmp/conduit-server.log 2>&1 &
 for attempt in $(seq 1 30); do
   curl -fsS http://127.0.0.1:4173/ >/dev/null && break
@@ -36,6 +35,5 @@ for attempt in $(seq 1 30); do
 done
 curl -fsS http://127.0.0.1:4173/ >/dev/null || { cat /tmp/conduit-server.log; exit 1; }
 echo 'Conduit is ready on port 4173. In the agent studio select conduit, then Open the app.'
-echo 'Demo sign-in: demo@conduit.local / conduit-demo-2026'
 export PS1='\u:\w$ '
 exec bash --norc -i

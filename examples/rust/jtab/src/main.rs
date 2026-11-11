@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 #[derive(Parser)]
 #[command(
     version,
-    after_help = "Examples:\n  jtab data/languages.json --sort year --reverse\n  jtab data/languages.json --where typing=static --columns name,year\n  echo '[{\"a\":1},{\"a\":2}]' | jtab"
+    after_help = "Examples:\n  jtab languages.json --sort year --reverse\n  jtab languages.json --where typing=static --columns name,year\n  echo '[{\"a\":1},{\"a\":2}]' | jtab"
 )]
 struct Args {
     /// JSON file to read (reads stdin when omitted)

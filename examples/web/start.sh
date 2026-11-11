@@ -3,7 +3,6 @@
 # the agent page's preview reaches it), and built again on every change to its sources. The first
 # build finishes before the prompt, so the machine's snapshot already serves the page.
 # The same process is npm's registry on 127.0.0.1:4874 (/root/.npmrc), so npm install works in the browser.
-cat /etc/motd-web
 cd /root/app
 serve --watch --registry 4874 dist 4173 >/tmp/serve.log 2>&1 &
 i=0

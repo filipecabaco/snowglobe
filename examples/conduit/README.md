@@ -2,8 +2,8 @@
 
 The RealWorld blogging app in one Snowglobe ARM64 Linux VM: a React frontend,
 Supabase Auth, PostgREST, and Postgres. Every application operation uses
-`@supabase/supabase-js`, including the demo seed. There is no separate application
-API or direct SQL client in the frontend. SQL is used only to install the schema.
+`@supabase/supabase-js`. There is no separate application API or direct SQL
+client in the frontend. SQL is used only to install the schema.
 
 ## Run
 
@@ -30,12 +30,11 @@ local Supabase gateway, preserving the user's JWT and public API key. A generate
 `config.js` exposes only the anon key. Relative asset/API URLs and hash routing
 also work under the studio's service-worker preview prefix.
 
-Sign in as **demo@conduit.local** with **conduit-demo-2026**, or create an account.
-The sample starts with three articles. It supports registration/login/logout,
-profile settings, Markdown article CRUD, tags, paginated global and following
-feeds, comments, favorites, and follows. Email confirmation is disabled by the
+The app starts empty: create an account and write the first article. It supports
+registration/login/logout, profile settings, Markdown article CRUD, tags, paginated global
+and following feeds, comments, favorites, and follows. Email confirmation is disabled by the
 local stack. Each browser VM has its own data; use Snowglobe's save/resume controls
-to preserve changes. The demo credentials are public fixtures, not real accounts.
+to preserve changes.
 
 ## Standalone client-only hosting
 
@@ -88,7 +87,8 @@ CONDUIT_URL=http://localhost:14173 npm run test:integration
 
 For the browser flow check, install the existing `bench/` Playwright dependencies
 and Chromium, then run `node examples/conduit/browser.test.mjs` from the repo root
-against the disposable guest (the same `CONDUIT_URL` applies).
+against the disposable guest (the same `CONDUIT_URL` applies). It signs up a writer with one
+article through the API first, for the UI user to follow.
 
 The integration check creates two accounts and exercises article CRUD, comments,
 favorites, follows, tags, joined feeds, and rejected anonymous/cross-user writes.
