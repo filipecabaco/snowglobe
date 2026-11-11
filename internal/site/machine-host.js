@@ -276,12 +276,14 @@
       transport,
       config: cfg,
       on,
-      /** Boot from a state: a URL (default: the site's snapshot), or a captured Blob and its encoding. */
-      boot: (state = cfg.initial_state, encoding = "raw") => t.call("boot", [state, encoding]),
+      /** Boot from a state: a URL (default: the site's snapshot), or a captured Blob and its encoding,
+       *  and with no kernel the process captured with it (capture()'s `process`). */
+      boot: (state = cfg.initial_state, encoding = "raw", process = null) => t.call("boot", [state, encoding, process]),
       run: () => t.call("run"),
       input: (data) => t.send("input", [data]),
       resize: (cols, rows) => t.send("resize", [cols, rows]),
-      /** { encoding, state: Blob }: its state, captured (stopped, unless keepRunning). */
+      /** { encoding, state: Blob, process?: Blob }: its state (and with no kernel its program's
+       *  process), captured (stopped, unless keepRunning). */
       capture: (opts) => t.call("capture", [opts ?? {}]),
       /** End it and let its memory go. */
       destroy: () => t.call("destroy").finally(() => dropStreams(errorFrom({ name: "AbortError", message: "the machine was put away" }))),

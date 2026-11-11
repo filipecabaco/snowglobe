@@ -59,7 +59,7 @@ check('snapshot capture pauses all CPUs and resumes even if capture fails', asyn
 check('capture does not restart a previously paused guest', async () => {
   let runs = 0;
   const vm = { running: false, stop: async () => {}, save_state: async () => new Uint8Array([42]), run: () => runs++ };
-  assert.deepEqual(await S.capture(vm), new Uint8Array([42]));
+  assert.deepEqual(await S.capture(vm), { state: new Uint8Array([42]), process: null });
   assert.equal(runs, 0);
 });
 check('capture takes the snapshot in pieces where the machine hands it out so', async () => {
@@ -67,7 +67,31 @@ check('capture takes the snapshot in pieces where the machine hands it out so', 
   const vm = { running: false, stop: async () => {}, run: () => {},
     save_state: async () => { throw new Error('the one buffer, not wanted'); },
     save_state_pieces: async () => pieces };
-  assert.equal(await S.capture(vm), pieces);
+  assert.equal((await S.capture(vm)).state, pieces);
+});
+check("with no kernel, capture takes the program's process in the same stop, after the machine's state", async () => {
+  const calls = [];
+  const vm = { running: true, user: true, stop: async () => calls.push('stop'), run: () => calls.push('run'),
+    save_state: async () => { calls.push('state'); return new Uint8Array([1]); },
+    save_process: async () => { calls.push('process'); return new Uint8Array([9, 9]); } };
+  assert.deepEqual(await S.capture(vm), { state: new Uint8Array([1]), process: new Uint8Array([9, 9]) });
+  assert.deepEqual(calls, ['stop', 'state', 'process', 'run']);
+});
+check('a backup with a process round trips it between the state and the console; one without has none', async () => {
+  const c = { ...checkpoint(), process: new Blob([new Uint8Array([7, 8, 9])]) };
+  const result = await S.decodeBackup(await S.encodeBackup(c));
+  assert.deepEqual(new Uint8Array(await result.state.arrayBuffer()), new Uint8Array([1, 2, 3]));
+  assert.deepEqual(new Uint8Array(await result.process.arrayBuffer()), new Uint8Array([7, 8, 9]));
+  assert.deepEqual(S.consoleEvents(await result.console.arrayBuffer()), [{ bytes: new Uint8Array([27, 91, 50, 74]) }, { cols: 90, rows: 30 }]);
+  assert.equal((await S.decodeBackup(await S.encodeBackup(checkpoint()))).process, undefined);
+  // Its size is covered by the checksum like the rest of the header
+  const bytes = new Uint8Array(await (await S.encodeBackup(c)).arrayBuffer());
+  const headerSize = new DataView(bytes.buffer).getUint32(11, true);
+  const header = new TextDecoder().decode(bytes.subarray(15, 15 + headerSize));
+  const altered = new TextEncoder().encode(header.replace('"processBytes":3,"consoleBytes":' + c.console.size, '"processBytes":2,"consoleBytes":' + (c.console.size + 1)));
+  assert.equal(altered.length, headerSize);
+  bytes.set(altered, 15);
+  await assert.rejects(S.decodeBackup(new Blob([bytes])), /checksum/i);
 });
 check('pieces pack to the snapshot they make up', async () => {
   const pieces = [new Uint8Array(6000).fill(7), new Uint8Array(4000).fill(9)];

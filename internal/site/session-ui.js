@@ -251,6 +251,8 @@
         if (saved) {
           this.progress("Restoring workspace…", "Please wait while your saved machine and terminal are restored.");
           this.initialState = URL.createObjectURL(await S.stateBlob(saved));
+          // With no kernel, the program's process goes back with the machine (machine-core.js boot)
+          this.processState = saved.process ?? null;
           this.savedRevision = this.revision = saved.revision ?? 0;
           this.records = [saved.console];
           this.replay = S.consoleEvents(await saved.console.arrayBuffer());
@@ -288,6 +290,7 @@
       this.applyResize = applyResize;
       if (this.initialState) URL.revokeObjectURL(this.initialState);
       this.initialState = null;
+      this.processState = null;
       this.replay = null;
       this.term = term;
       this.controls();
@@ -344,12 +347,12 @@
     }
     async checkpoint(label = "Saving", captured) {
       this.progress(`${label}… Copying workspace`, "Terminal briefly paused while a consistent copy is captured.");
-      let console, revision, bytes;
+      let console, revision, snap;
       this.pauseInput(true);
       try {
         await paint();
         if (this.closed) throw new DOMException("The page is closing", "AbortError");
-        bytes = await S.capture(this.vm, () => {
+        snap = await S.capture(this.vm, () => {
           console = new Blob(this.records); revision = this.revision;
           this.records = [console]; // compact the tape's record list without dropping bytes
           captured?.();
@@ -358,9 +361,11 @@
       finally { this.pauseInput(false); this.applyResize?.(); }
       if (this.closed) await this.vm.stop();
       this.progress(`${label}… Preparing data`, this.workHint());
-      const packed = await S.packState(bytes);
+      const packed = await S.packState(snap.state);
+      // With no kernel, its program's process (a few KB, kept as it is) goes with the machine's state
+      const process = snap.process ? { process: new Blob([snap.process]) } : {};
       return { version: 1, id: this.active.id, name: this.active.name, config: this.config,
-        savedAt: Math.max(Date.now(), (this.active.savedAt ?? 0) + 1), console, revision, ...packed };
+        savedAt: Math.max(Date.now(), (this.active.savedAt ?? 0) + 1), console, revision, ...packed, ...process };
     }
     async save() {
       if (!this.store || this.blocked || !this.vm) throw new Error("Workspace storage is unavailable");

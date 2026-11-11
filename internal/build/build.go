@@ -77,10 +77,10 @@ type Options struct {
 	// WebAssembly in the page) or keep the interpreter, which is slower and smaller. Empty: the
 	// label snowglobe.jit, else on
 	JIT string
-	// Kernel is "linux" (the default) or "none": the image's command is a static aarch64 Linux
-	// executable that runs with no guest kernel, its system calls answered by the machine
-	// (armless user mode). Much smaller snapshots, and it runs natively only for now (snowglobe
-	// run): no network, one CPU, no exercises, no agent page
+	// Kernel is "linux" (the default) or "none": the image's command is an aarch64 Linux program
+	// that runs with no guest kernel, its system calls answered by the machine (armless user mode),
+	// in the page as natively. Much smaller snapshots; no network, one CPU, no exercises, no agent
+	// page for now
 	Kernel string
 }
 
@@ -90,6 +90,10 @@ type Settings struct {
 	// Kernel: "linux" or "none"; Argv is the command's words, which "none" runs
 	Kernel string
 	Argv   []string
+	// SkippedExercises: the image's exercises a build with no kernel leaves out
+	SkippedExercises int
+	// SkippedAgent: the image is one of the agent page's machines, which a build with no kernel isn't
+	SkippedAgent bool
 	// JIT: runs compile hot guest code (the default) rather than keep the interpreter
 	JIT         bool
 	Command     string
@@ -219,7 +223,13 @@ func Run(o Options, version string) error {
 	fmt.Printf("    command: %s\n    ready:   %s\n    memory:  %d MB\n    network: %s\n    cpus:    %d (booted on %d)\n    jit:     %s\n",
 		s.Command, describeReady(s.Ready), s.Memory, s.Network, s.CPUs, s.BuildCPUs, onOff(s.JIT))
 	if s.Kernel == "none" {
-		fmt.Println("    kernel:  none (the command runs on its own; natively only)")
+		fmt.Println("    kernel:  none (the command runs on its own, with no kernel)")
+		if s.SkippedExercises > 0 {
+			fmt.Printf("    exercises: the image's %d left out (not with --kernel none yet)\n", s.SkippedExercises)
+		}
+		if s.SkippedAgent {
+			fmt.Println("    agent:   not on the agent page (its label; the agent page's jobs need a shell, so a kernel)")
+		}
 	}
 	for _, t := range s.Tunnels {
 		fmt.Printf("    tunnel:  %s:%d -> %s\n", first(t.Host, "*"), t.Port, t.URL)
@@ -295,7 +305,7 @@ func Run(o Options, version string) error {
 			}
 			if nativeBuild {
 				cmd := exec.Command(vm, tools.SnapshotArgs(filepath.Join(out, "system"), s.Memory, s.Ready, s.Exercise,
-					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, userArgv(s))...)
+					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, userProgram(s))...)
 				cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 				// It ends with this build, however the build ends (a SIGTERM, a kill -9, the
 				// daemon that started the build stopping): never left booting on its own
@@ -304,7 +314,7 @@ func Run(o Options, version string) error {
 				}
 				return cmd.Run()
 			}
-			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, userArgv(s))
+			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, userProgram(s))
 		}
 		return retryStalled(snapshot, os.Stderr)
 	}); err != nil {
@@ -343,7 +353,7 @@ func Run(o Options, version string) error {
 
 // Page is the page a build with these settings renders.
 func Page(s *Settings, version string) site.Page {
-	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, CPUs: s.CPUs, JIT: s.JIT, NativeOnly: s.Kernel == "none",
+	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, CPUs: s.CPUs, JIT: s.JIT, User: s.Kernel == "none",
 		Tunnels: s.Tunnels, TunnelToken: s.TunnelToken, ConsoleCols: tools.ConsoleCols, ConsoleRows: tools.ConsoleRows,
 		Agent: s.Agent, AgentExposedTo: s.AgentExposedTo, Version: version}
 }
@@ -638,12 +648,17 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 			return nil, errors.New("kernel none: no network yet (the program runs with no sockets)")
 		case s.CPUs != 1:
 			return nil, errors.New("kernel none: one CPU (the program's threads take turns on it)")
-		case len(s.Exercise) > 0:
-			return nil, errors.New("kernel none: no exercises (there is no shell to type them into)")
-		case s.Agent:
-			return nil, errors.New("kernel none: not on the agent page (it runs natively only)")
+		case len(o.Exercise) > 0:
+			return nil, errors.New("kernel none: no exercises yet (the files they read aren't recorded for the warm pack)")
+		case o.Agent:
+			return nil, errors.New("kernel none: not on the agent page (its jobs need a shell, so a kernel)")
 		}
 		s.BuildCPUs = 1
+		// The image's own exercises and agent page (its labels) are left out rather than refused
+		s.SkippedExercises = len(s.Exercise)
+		s.Exercise = nil
+		s.SkippedAgent = s.Agent
+		s.Agent, s.AgentExposedTo = false, nil
 	default:
 		return nil, fmt.Errorf("kernel %q: linux or none", s.Kernel)
 	}
@@ -765,10 +780,11 @@ func onOff(b bool) string {
 	return "off (the interpreter: slower, smaller)"
 }
 
-// userArgv is the program a build with no kernel runs (snowglobe-vm snapshot --user), or none.
-func userArgv(s *Settings) []string {
+// userProgram is what a build with no kernel runs (snowglobe-vm snapshot --user): the image's program,
+// environment and working directory. Nil for a site with a kernel.
+func userProgram(s *Settings) *tools.UserProgram {
 	if s.Kernel != "none" {
 		return nil
 	}
-	return s.Argv
+	return &tools.UserProgram{Argv: s.Argv, Env: s.Console.Env, Cwd: s.Console.Workdir}
 }

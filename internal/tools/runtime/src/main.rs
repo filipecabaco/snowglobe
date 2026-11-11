@@ -43,7 +43,7 @@ fn usage() -> ExitCode {
   snowglobe-vm snapshot <system dir> [--memory MB] [--cpus N] [--network none|fetch]
                         [--ready TEXT] [--exercise COMMAND ...]
                         [--tunnel [HOST:]PORT=URL ...] [--egress none|internet|private] [--allow-private]
-                        [--user PROGRAM --user ARG ...]   (no kernel: the program runs on its own)
+                        [--user PROGRAM --user ARG ... [--user-env NAME=VALUE ...] [--user-cwd DIR]]   (no kernel: the program runs on its own)
   snowglobe-vm run <site dir> [--blobs DIR] [--detached] [--socket PATH] [--forward PORT:GUEST ...]
                    [--tunnel [HOST:]PORT=URL ...] [--egress none|internet|private] [--allow-private] [--record-reads FILE]
                    [--workspace DIR --cmd COMMAND [--env K=V ...] [--env-file JSON] [--timeout SECS]]
@@ -123,7 +123,7 @@ fn main() -> ExitCode {
             if let Some(line) = lifeline::inherited() {
                 lifeline::watch(line, || lifeline::stop("the build that started this snapshot"));
             }
-            Args::parse(rest, &["memory", "cpus", "build-cpus", "network", "ready", "exercise", "cols", "rows", "tunnel", "user"])
+            Args::parse(rest, &["memory", "cpus", "build-cpus", "network", "ready", "exercise", "cols", "rows", "tunnel", "user", "user-env", "user-cwd"])
                 .and_then(|a| snapshot::main(&a))
         },
         "run" => Args::parse(rest, RUN_FLAGS).and_then(|a| run::main(&a, None)),

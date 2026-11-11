@@ -217,7 +217,7 @@ func TestThePageMakesItsMachineWithTheFactory(t *testing.T) {
 	page, dir := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none"})
 	lacks(t, "the page", page, `<script src="machine-core.js?v=`, `<script src="machine-host.js?v=`,
 		`SnowglobeHost.createMachine({ base: document.baseURI, transport: "inline"`, `baseurl: "system/filesystem/"`,
-		`warm: versioned("system/warm.pack")`, `host.boot(sessions.initialState ?? versioned("system/state.bin.zst"))`, `await host.run()`)
+		`warm: versioned("system/warm.pack")`, `host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null)`, `await host.run()`)
 	for _, f := range []string{"machine-core.js", "machine-host.js"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("the site lacks %s", f)
@@ -288,7 +288,7 @@ func TestBuildFilesCarryTheAssetVersion(t *testing.T) {
 	for _, url := range []string{`versioned("armless/armless.wasm")`, `versioned("armless/armless-smp.wasm")`,
 		`versioned("system/filesystem.json")`, `initial_state: versioned("system/state.bin.zst")`,
 		`versioned("system/warm.pack")`, `versioned("system/tls.json")`, `fetch(versioned("system/console.bin"))`,
-		`host.boot(sessions.initialState ?? versioned("system/state.bin.zst"))`} {
+		`host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null)`} {
 		lacks(t, "the page", page, url)
 	}
 	for _, bare := range []string{`"armless/armless.wasm"`, `"system/state.bin.zst"`, `"system/filesystem.json"`, `"system/warm.pack"`,
@@ -321,4 +321,37 @@ func TestBuildFilesCarryTheAssetVersion(t *testing.T) {
 	// Render computes it unless given
 	given, _ := render(t, Page{MemoryMB: 256, CPUs: 1, Network: "none", Assets: "fixed"})
 	lacks(t, "the page", given, `const assets = "fixed";`, `<script src="sessions.js?v=fixed">`)
+}
+
+func TestASiteWithNoKernelRestoresItsProcessWithItsState(t *testing.T) {
+	page, _ := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none", User: true})
+	lacks(t, "the page", page, `const user = true ;`, `user_state: versioned("system/user.bin")`,
+		`initial_state: versioned("system/state.bin.zst")`, `sessions.processState ?? null`, `await sessions.prepare()`)
+	if strings.Contains(page, "natively only") {
+		t.Error("a site with no kernel runs in the page")
+	}
+	page, _ = render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none"})
+	if strings.Contains(page, "user_state") || !strings.Contains(page, "const user = false ;") {
+		t.Error("a site with a kernel has no process of its own")
+	}
+
+	// The process is half of the snapshot: saves are bound to it too
+	dir := t.TempDir()
+	for _, name := range []string{"system/filesystem.json", "system/state.bin.zst", "system/user.bin", "armless/armless.js", "armless/armless.wasm"} {
+		os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755)
+		os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644)
+	}
+	p := Page{MemoryMB: 256, CPUs: 1, Network: "none", User: true}
+	before, err := Fingerprint(dir, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "system/user.bin"), []byte("another process"), 0o644)
+	if after, _ := Fingerprint(dir, p); after == before {
+		t.Error("a changed user.bin didn't change the fingerprint")
+	}
+	os.Remove(filepath.Join(dir, "system/user.bin"))
+	if _, err := Fingerprint(dir, p); err == nil {
+		t.Error("a site with no kernel and no user.bin must fail")
+	}
 }

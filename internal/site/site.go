@@ -62,9 +62,9 @@ type Page struct {
 	// JIT: the machine compiles hot guest code to WebAssembly (armless's jit); false keeps the
 	// interpreter, slower and smaller
 	JIT bool
-	// NativeOnly: the site has no kernel (snowglobe build --kernel none), so only snowglobe run runs
-	// it; the page says so instead of booting
-	NativeOnly bool
+	// User: the site has no kernel (snowglobe build --kernel none): its program runs on its own in
+	// armless's user mode, a process (system/user.bin) restored with the machine's state. One CPU
+	User bool
 	// Guest TCP destinations the page carries over WebSockets (armless's network.tunnels)
 	Tunnels []tunnel.Tunnel
 	// Where the page gets a fresh access token for each tunnel connection whose URL has {token}
@@ -93,6 +93,10 @@ func Fingerprint(out string, p Page) (string, error) {
 	files = append(files, wasm)
 	if p.Network == "fetch" {
 		files = append(files, "system/tls.json")
+	}
+	// With no kernel, the program's process is half of the snapshot
+	if p.User {
+		files = append(files, "system/user.bin")
 	}
 	for _, name := range files {
 		f, err := os.Open(filepath.Join(out, name))

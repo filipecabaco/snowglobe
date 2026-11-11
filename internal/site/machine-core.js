@@ -23,6 +23,8 @@
     const at = (url) => typeof url === "string" ? new URL(url, base).href : url;
     const r = { ...o, wasm: at(o.wasm), wasm_smp: at(o.wasm_smp), initial_state: at(o.initial_state),
       filesystem: { json: at(o.filesystem.json), baseurl: at(o.filesystem.baseurl) } };
+    // A site with no kernel: its program's process, saved with the machine (system/user.bin)
+    if (o.user_state) r.user_state = at(o.user_state);
     if (o.network) r.network = { ...o.network, tls: at(o.network.tls) };
     if (o.warm) r.warm = at(o.warm);
     return r;
@@ -552,12 +554,20 @@
     }
 
     /** A new machine from a state (a URL, or a Blob of a captured state packed with `encoding`,
-     *  as capture() and saves have it), ready to run(). */
-    async boot(initialState, encoding = "raw") {
+     *  as capture() and saves have it), ready to run(). A site with no kernel (the config's
+     *  user_state: armless's user mode) runs a process the machine's state doesn't hold: `process`
+     *  is the one saved with that state (a Blob or bytes, as capture() has it); the site's own
+     *  snapshot goes with the site's own process. */
+    async boot(initialState, encoding = "raw", process = null) {
       if (this.vm) throw new Error("the machine is already booted");
       let url = initialState;
       let made = null;
-      if (typeof Blob !== "undefined" && initialState instanceof Blob) {
+      // A saved state: a Blob, or an object URL of one (the terminal page's restored workspace)
+      const saved = (typeof Blob !== "undefined" && initialState instanceof Blob) || (typeof initialState === "string" && initialState.startsWith("blob:"));
+      let userState = process ?? (saved ? null : this.config.user_state);
+      if (this.config.user_state && !userState) throw new Error("this saved workspace has no process to run (it was saved without one)");
+      if (typeof Blob !== "undefined" && userState instanceof Blob) userState = new Uint8Array(await userState.arrayBuffer());
+      if (saved && typeof initialState !== "string") {
         const raw = encoding === "raw" ? initialState : await this.sessions.stateBlob({ encoding, state: initialState });
         url = made = URL.createObjectURL(raw);
       }
@@ -581,15 +591,18 @@
           if (allowed.size || names) network.WebSocket = linkSockets(this, allowed, this.WebSocket ?? root.WebSocket, root, names);
         }
         vm = new this.Armless({ fs_cache_mb: FS_CACHE_MB, predecode_mb: PREDECODE_MB, ...this.config, filesystem, network, warm: undefined, initial_state: url,
-          autostart: false });
+          user_state: userState ?? undefined, autostart: false });
         this.vm = vm;
         vm.on("progress", (e) => this.emit("progress", { file: e.file, loaded: e.loaded, total: e.total }));
         vm.on("console", (bytes) => { if (vm === this.vm) this.emit("console", bytes); });
-        vm.on("stop", ({ reason }) => {
+        // With no kernel, the program's end: { reason: "exit", code } or { reason: "fault", message }
+        vm.on("stop", ({ reason, code, message }) => {
           if (vm !== this.vm) return;
           this.state = "stopped";
-          this.emit("stop", { reason });
+          this.emit("stop", { reason, ...(code !== undefined ? { code } : {}), ...(message !== undefined ? { message } : {}) });
         });
+        // With no kernel: the program has gone quiet, waiting for input
+        vm.on("idle", () => { if (vm === this.vm) this.emit("idle"); });
         vm.on("error", (e) => { if (vm === this.vm) this.emit("error", errorOf(e)); });
         this.controller?.bind(vm);
         await vm.ready;
@@ -772,7 +785,8 @@
     input(data) { this.vm?.console_input(data); }
     resize(cols, rows) { this.vm?.console_resize(cols, rows); }
 
-    /** Stop it and capture its state, packed (gzip where the browser can): { encoding, state: Blob }.
+    /** Stop it and capture its state, packed (gzip where the browser can): { encoding, state: Blob },
+     *  and with no kernel its program's process as it is (process: Blob; boot() takes it back).
      *  It stays stopped (a suspend: destroy() next); keepRunning runs it again (a save). */
     async capture({ keepRunning = false } = {}) {
       const vm = this.vm;
@@ -783,9 +797,11 @@
         // In pieces where the machine gives them (packState takes them as they are): never in one
         // buffer, in the machine's memory or this page's
         let bytes = vm.save_state_pieces ? await vm.save_state_pieces() : [await vm.save_state()];
+        // The process in the same stop: the two go together
+        const process = vm.user ? new Blob([await vm.save_process()]) : null;
         const packed = this.sessions ? await this.sessions.packState(bytes) : { encoding: "raw", state: new Blob(bytes) };
         bytes = null;
-        return packed;
+        return process ? { ...packed, process } : packed;
       } catch (e) {
         vm.run();
         throw e;

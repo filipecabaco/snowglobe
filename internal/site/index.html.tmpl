@@ -1,4 +1,5 @@
-<!DOCTYPE html>
+    // A restored workspace's state, and with no kernel its process; else the site's own
+    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null);<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -188,9 +189,9 @@
     const cpus = {{.CPUs}};
     const isolationKey = "snowglobe-isolate:" + new URL("./", location.href).pathname;
     let isolationNeeded = cpus > 1 && !crossOriginIsolated;
-    // A site with no kernel (snowglobe build --kernel none) runs natively (snowglobe run): the
-    // page has no machine for it yet, so it says so rather than boot
-    const nativeOnly = {{.NativeOnly}};
+    // A site with no kernel (snowglobe build --kernel none): its program is a process of its own
+    // (armless's user mode), restored and saved with the machine's state
+    const user = {{.User}};
     if (isolationNeeded) {
       let tried = false;
       try { tried = sessionStorage.getItem(isolationKey) === "1"; } catch {}
@@ -207,7 +208,7 @@
     // Rendered by snowglobe. Everything below must match the snapshot (snowglobe-vm snapshot):
     // the same RAM size, CPUs and devices
     const sessions = new SnowglobeSessionUI({ build: {{.BuildID}}, memory: {{.MemoryMB}}, cpus, network: {{.Network}} });
-    if (!isolationNeeded && !nativeOnly && !await sessions.prepare()) {
+    if (!isolationNeeded && !await sessions.prepare()) {
       status.textContent = "workspace needs attention";
       status.dataset.state = "error";
       document.getElementById("sessions").open = true;
@@ -240,6 +241,10 @@
       debug: SnowglobeMemoryDebug.enabled(),
       filesystem: { json: versioned("system/filesystem.json"), baseurl: "system/filesystem/" },
       initial_state: versioned("system/state.bin.zst"),
+      {{- if .User}}
+      // The program's process, as the build left it with that state
+      user_state: versioned("system/user.bin"),
+      {{- end}}
       // The files the app is most likely to need, in one background download once it runs
       warm: versioned("system/warm.pack"),
       {{- if eq .Network "fetch"}}
@@ -249,8 +254,9 @@
       network: { tls: versioned("system/tls.json"){{if .Tunnels}}, tunnels: {{if .TunnelToken}}withTokens({{.Tunnels}}){{else}}{{.Tunnels}}{{end}}{{end}} },
       {{- end}}
     } });
-    // The terminal is set up (and the screen replayed) before the guest runs
-    const booted = isolationNeeded || nativeOnly ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"));
+    // The terminal is set up (and the screen replayed) before the guest runs. A restored workspace
+    // brings its state, and with no kernel its program's process; else the site's own
+    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null);
     const emulator = host.emulator;
     // For tests and benchmarks: the machine (console_input, the console event)
     window.snowglobe = { get emulator() { return host.emulator; }, memory: () => host.memoryReport() };
@@ -293,7 +299,6 @@
       setStatus("loading", "isolating");
       if (!("serviceWorker" in navigator)) setStatus("error", "needs a browser with service workers");
     }
-    if (nativeOnly) setStatus("error", "runs natively only: snowglobe run");
 
     // What the machine says about itself. A failure starts the page over (once)
     host.on("progress", (e) => {
@@ -318,7 +323,19 @@
       sessions.controls();
       setStatus("error", `failed: ${error.message || error}`);
     });
-    host.on("stop", ({ reason }) => setStatus("stopped", reason === "poweroff" ? "powered off" : `stopped (${reason})`));
+    host.on("stop", ({ reason, code, message }) => {
+      if (reason === "exit") setStatus("stopped", `exited (${code})`);
+      else if (reason === "fault") setStatus("error", `crashed: ${message || "a fault"}`);
+      else setStatus("stopped", reason === "poweroff" ? "powered off" : `stopped (${reason})`);
+      // With no kernel, the program is the machine: once it has ended there is nothing left to
+      // save, and a save would replace the last one (its program still running) with its end
+      if (user) {
+        sessions.blocked = true;
+        sessions.message(reason === "exit" ? "The program exited" : "The program crashed", false,
+          "Saving is off, so your last save is kept. Reload to start again from it (or from the beginning, with none).");
+        sessions.controls();
+      }
+    });
 
     // The app's console output up to the snapshot, so the terminal shows what it printed
     const screen = sessions.replay ? Promise.resolve(null) : fetch(versioned("system/console.bin"))
