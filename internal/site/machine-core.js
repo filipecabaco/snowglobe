@@ -360,12 +360,18 @@
    * The machine's own cache of file contents (armless's fs_cache_mb), decompressed, in its memory,
    * which never shrinks: armless's default is 256 MB, and the guest keeps what it reads in its own
    * page cache anyway. What it drops comes again from the warm pack, kept compressed in this page
-   * (and let go with the machine), or the blob store.
+   * (and let go with the machine), or the blob store. The guest mounts its files with cache=loose,
+   * so what it reads is in its page cache as well: 16 MB, against 64, took the Supabase demo's
+   * memory down by 48 MB with its workload no slower.
    */
-  const FS_CACHE_MB = 64;
+  const FS_CACHE_MB = 16;
+  /** The pre-decoded instructions each CPU keeps (armless's predecode_mb, 24 by default), held for
+   *  the life of the machine: 8 a CPU saved the Supabase demo 32 MB, its workload no slower. */
+  const PREDECODE_MB = 8;
   /** The pack's first files (the build read them first), up to this many bytes decompressed, go
-   *  into the machine as they arrive; the rest wait in the pack until the guest reads them. */
-  const PACK_GIVE_BYTES = 48 << 20;
+   *  into the machine as they arrive; the rest wait in the pack until the guest reads them. Less
+   *  than the machine's cache holds, or it drops them before the guest reads them. */
+  const PACK_GIVE_BYTES = 12 << 20;
 
   class WarmPack {
     /** `now()` the clock in ms. */
@@ -576,7 +582,7 @@
           const names = links && Object.keys(links).length ? links : null;
           if (allowed.size || names) network.WebSocket = linkSockets(this, allowed, this.WebSocket ?? root.WebSocket, root, names);
         }
-        vm = new this.Armless({ fs_cache_mb: FS_CACHE_MB, ...this.config, filesystem, network, warm: undefined, initial_state: url,
+        vm = new this.Armless({ fs_cache_mb: FS_CACHE_MB, predecode_mb: PREDECODE_MB, ...this.config, filesystem, network, warm: undefined, initial_state: url,
           autostart: false });
         this.vm = vm;
         vm.on("progress", (e) => this.emit("progress", { file: e.file, loaded: e.loaded, total: e.total }));
@@ -878,6 +884,27 @@
       return { wasmBytes: this.vm?.memory?.buffer?.byteLength ?? 0 };
     }
 
+    /**
+     * What the machine's memory holds, for the memory debug (memory-debug.js digests it): armless's
+     * report (it scans the memory, a few ms per 100 MB), the samples it took with the `debug`
+     * option, and what this machine was set up with. null where armless has no report.
+     */
+    memoryReport() {
+      const vm = this.vm;
+      if (!vm?.memory_report) return null;
+      return {
+        report: vm.memory_report(),
+        samples: vm.debug?.samples ?? [],
+        info: {
+          memory_mb: this.config.memory_mb ?? null,
+          fs_cache_mb: vm.options?.fs_cache_mb ?? FS_CACHE_MB,
+          pack_give_mb: PACK_GIVE_BYTES >> 20,
+          pack_given_bytes: this.packGivenBytes ?? 0,
+          sampling: !!vm.debug,
+        },
+      };
+    }
+
     // The guest's files are fetched one blocking request at a time the first time each is read.
     // warm.pack bundles the files the app is most likely to need into one background download, read
     // as it arrives (WarmPack): its first files go into the machine once their bytes are in, and a
@@ -923,6 +950,7 @@
             if (givenBytes >= PACK_GIVE_BYTES) continue;
             any = true;
             givenBytes += size ?? bytes.length;
+            this.packGivenBytes = givenBytes;
             if (!vm.has_blob(name)) { vm.provide_blob(name, bytes); supplied++; } // else the guest already has it
             this.failedBlobs.delete(name);
             if (pack.now() >= until) break;

@@ -68,6 +68,10 @@ RUN supabase init --yes >/dev/null && \
     realtime_env=$(echo ~/.supabase/cache/stack/slim-services/realtime/*/linux-arm64/*/bin/.runtime-env.sh) && \
     test -f "$realtime_env" && grep -q 'RELEASE_MODE:-"embedded"' "${realtime_env%/.runtime-env.sh}/realtime" && \
     echo 'export RELEASE_MODE="${RELEASE_MODE:-interactive}"' >> "$realtime_env" && \
+    echo "export ELIXIR_ERL_OPTIONS='+fnu +S 1:1 +SDio 1 +sbwt none +sbwtdcpu none +sbwtdio none +Mea min +MMmcs 0 +MBacul 0'" >> "$realtime_env" && \
+    auth_env=$(echo ~/.supabase/cache/stack/slim-services/auth/*/linux-arm64/*/bin/.runtime-env.sh) && \
+    test -f "$auth_env" && \
+    printf '%s\n' 'export GOMEMLIMIT=32MiB GOGC=25 GOMAXPROCS=1' >> "$auth_env" && \
     cd ~/.supabase/cache/stack/slim-services/postgres/*/linux-arm64/*/ && \
     test -x bin/postgres && \
     rm -rf lib/wrappers-*.so share/postgresql/extension/wrappers* \
@@ -105,12 +109,13 @@ CMD ["/usr/local/bin/supabase-demo"]
 
 # The network is on so the API can be reached from outside the machine: the agent page's preview
 # (and snowglobe run -p 54321:54321) connect to 54321 on its network address. It is also one of the
-# agent page's machines (/agent/ on the demo site), where agents build apps on it. 768 MB: the
-# idle stack with Realtime holds about 400 MB plus 90 MB of Postgres shared memory (Realtime's BEAM
-# is about 200 MB of it, and the CLI keeps a Bun process per service), which leaves room for the
-# programs' pages and a couple of notes runs at once
+# agent page's machines (/agent/ on the demo site), where agents build apps on it. 448 MB: the
+# guest's RAM counts in the browser tab whether the stack uses it or not, and an iPhone gives a tab
+# little. 384 MB was tried: the guest's OOM killer took out Realtime during boot and the first
+# exercise. The stack (Realtime's BEAM is the biggest part, and the CLI keeps a Bun process per
+# service) leaves room for the programs' pages and a couple of notes runs at once
 LABEL snowglobe.title="Supabase in the browser" \
-      snowglobe.memory="768" snowglobe.cpus="2" \
+      snowglobe.memory="448" snowglobe.cpus="2" \
       snowglobe.network="fetch" \
       snowglobe.agent="true" \
       snowglobe.agent-purpose="Supabase for web app building: Postgres, Auth and the Data API, with a preview" \

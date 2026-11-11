@@ -945,10 +945,10 @@ test('the warm pack is read as it arrives: a file it holds comes from it, not a 
   assert.equal(core.filesStatus().fromPack, 1);
 });
 
-test('the pack\'s first 48 MB go into the machine; the rest stay in the pack for reads, until the machine goes', async () => {
-  // Files that decompress to 30 MB each (the index says so; their bytes here are short)
+test('the pack\'s first 12 MB go into the machine; the rest stay in the pack for reads, until the machine goes', async () => {
+  // Files that decompress to 8 MB each (the index says so; their bytes here are short)
   const files = [['a.bin.zst', 'alpha'], ['b.bin.zst', 'bravo'], ['c.bin.zst', 'charlie']];
-  const index = new TextEncoder().encode(JSON.stringify(files.map(([n, s]) => [n, 30 << 20, s.length])));
+  const index = new TextEncoder().encode(JSON.stringify(files.map(([n, s]) => [n, 8 << 20, s.length])));
   const pack = new Uint8Array(4 + index.length + files.reduce((n, [, s]) => n + s.length, 0));
   new DataView(pack.buffer).setUint32(0, index.length, true);
   pack.set(index, 4);
@@ -960,7 +960,7 @@ test('the pack\'s first 48 MB go into the machine; the rest stay in the pack for
   s.push(pack);
   s.close();
   await warming;
-  assert.deepEqual(vm.provided, ['a.bin.zst', 'b.bin.zst'], 'up to 48 MB decompressed, then no more');
+  assert.deepEqual(vm.provided, ['a.bin.zst', 'b.bin.zst'], 'up to 12 MB decompressed, then no more');
   // The rest comes from the pack when the guest reads it, and isn't fetched ahead either
   assert.equal(textOf(await core.fetchBlob('c.bin.zst')), 'charlie');
   core._prefetch('c.bin.zst');

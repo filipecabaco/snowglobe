@@ -349,7 +349,11 @@ test('plan: the repository example links a viewer to a Supabase database over tw
   assert.deepEqual(byKey['machine/db'].needs, ['snapshot/db']);
   assert.equal(byKey['service/viewer'].port, 8080);
   // The scripts in the file are what the machines run
-  assert.match(byKey['snapshot/db'].run[0], /alter publication supabase_realtime add table public\.ticks/);
+  // The database step: wait for Postgres, the table, Realtime, the loop, each a command of its own
+  assert.equal(byKey['snapshot/db'].run.length, 4);
+  assert.match(byKey['snapshot/db'].run[0], /until psql/);
+  assert.match(byKey['snapshot/db'].run[1], /create table if not exists public\.ticks/);
+  assert.match(byKey['snapshot/db'].run[2], /alter publication supabase_realtime add table public\.ticks/);
   assert.match(byKey['snapshot/viewer'].run[0], /createClient\('http:\/\/supabase\.internal:54321'/);
   assert.match(byKey['snapshot/viewer'].run[0], /postgres_changes/);
   assert.ok(!p.notes.some((n) => /links\./.test(n)));

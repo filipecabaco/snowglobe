@@ -88,7 +88,7 @@ func AgentScripts() map[string][]byte {
 		"agent.js": agentJS, "agent-webmcp.js": agentWebMCPJS, "agent-panel.js": agentPanelJS, "machine.js": machineJS,
 		"machine-worker.js": machineWorkerJS, "transfer.js": transferJS, "scheduler.js": schedulerJS,
 		"orchestrator.js": orchestratorJS, "agent-page.js": agentPageJS, "sessions.js": sessionsJS,
-		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "preview.js": previewJS, "inspect.js": inspectJS, "preview-hook.js": previewHookJS, "ws-client.js": wsClientJS, "builder.js": builderJS, "studio.js": studioJS, "sw.js": agentSW,
+		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "memory-debug.js": memoryDebugJS, "preview.js": previewJS, "inspect.js": inspectJS, "preview-hook.js": previewHookJS, "ws-client.js": wsClientJS, "builder.js": builderJS, "studio.js": studioJS, "sw.js": agentSW,
 	}
 }
 

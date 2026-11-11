@@ -26,8 +26,10 @@ test('exhausted image downloads can be supplied again without replacing guest or
 
 test('missing image files can be filled from the warm pack without JS failure records',async()=>{
  const index=Buffer.from(JSON.stringify([['busybox.zst',3,3]])),pack=Buffer.alloc(4+index.length+3);pack.writeUInt32LE(index.length);index.copy(pack,4);pack.set([1,2,3],4+index.length);
- const supplied=[],core=new Core({config:{warm:'https://files.invalid/warm.pack'},agent:null,blobRetryDelays:[]});core.vm={has_blob:()=>false,provide_blob:(...args)=>supplied.push(args)};core.state='ready';core.fetch=async()=>response(pack);
+ const supplied=[],core=new Core({config:{warm:'https://files.invalid/warm.pack'},agent:null,blobRetryDelays:[]});core.vm={has_blob:()=>false,provide_blob:(...args)=>supplied.push(args),memory_report:()=>({})};core.state='ready';core.fetch=async()=>{core.failedBlobs.add('busybox.zst');return response(pack);};
  assert.deepEqual(await core.recoverFiles(),{repaired:1});assert.equal(supplied[0][0],'busybox.zst');assert.deepEqual(supplied[0][1],Uint8Array.of(1,2,3));
+ assert.equal(core.failedBlobs.size,0,'warm-pack recovery clears the previous failure');
+ assert.equal(core.memoryReport().info.pack_given_bytes,3,'memory diagnostics count recovered warm-pack bytes');
 });
 
 test('upload errors include bounded shell diagnostics and structured step/status without echoed source',()=>{

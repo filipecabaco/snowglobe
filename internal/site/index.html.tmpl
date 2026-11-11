@@ -133,6 +133,7 @@
   <script src="sessions.js?v={{.Assets}}"></script>
   <script src="session-ui.js?v={{.Assets}}"></script>
   <script src="machine-core.js?v={{.Assets}}"></script>
+  <script src="memory-debug.js?v={{.Assets}}"></script>
   <script src="machine-host.js?v={{.Assets}}"></script>
 </head>
 <body>
@@ -231,6 +232,8 @@
       wasm_smp: versioned("armless/armless-smp.wasm"),
       memory_mb: {{.MemoryMB}},
       cpus,
+      // armless samples its memory only when asked (?debug=memory); see memory-debug.js
+      debug: SnowglobeMemoryDebug.enabled(),
       filesystem: { json: versioned("system/filesystem.json"), baseurl: "system/filesystem/" },
       initial_state: versioned("system/state.bin.zst"),
       // The files the app is most likely to need, in one background download once it runs
@@ -246,7 +249,8 @@
     const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"));
     const emulator = host.emulator;
     // For tests and benchmarks: the machine (console_input, the console event)
-    window.snowglobe = { get emulator() { return host.emulator; } };
+    window.snowglobe = { get emulator() { return host.emulator; }, memory: () => host.memoryReport() };
+    if (SnowglobeMemoryDebug.enabled()) SnowglobeMemoryDebug.mount(document.body, async () => [{ name: document.title, snapshot: await host.memoryReport().catch(() => null) }]);
 
     const embedded = new URLSearchParams(location.search).has("embed");
     if (embedded) document.documentElement.classList.add("embed");

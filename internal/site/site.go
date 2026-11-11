@@ -37,6 +37,11 @@ var machineCoreJS []byte
 //go:embed machine-host.js
 var machineHostJS []byte
 
+// The memory debug (off unless a page asks for it): what a machine's memory holds, in words
+//
+//go:embed memory-debug.js
+var memoryDebugJS []byte
+
 var tmpl = template.Must(template.New("index").Parse(page))
 
 // Page holds what varies between sites.
@@ -109,7 +114,7 @@ func Fingerprint(out string, p Page) (string, error) {
 func assetVersion(out, buildID string) (string, error) {
 	h := sha256.New()
 	fmt.Fprintf(h, "snowglobe-assets-v1:%s\n", buildID)
-	for _, script := range [][]byte{sessionsJS, sessionUIJS, machineCoreJS, machineHostJS} {
+	for _, script := range [][]byte{sessionsJS, sessionUIJS, machineCoreJS, machineHostJS, memoryDebugJS} {
 		fmt.Fprintf(h, "%d\n", len(script))
 		h.Write(script)
 	}
@@ -154,7 +159,7 @@ func Render(out string, p Page) error {
 		p.Name = filepath.Base(out)
 	}
 	scripts := map[string][]byte{"sessions.js": sessionsJS, "session-ui.js": sessionUIJS,
-		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS}
+		"machine-core.js": machineCoreJS, "machine-host.js": machineHostJS, "memory-debug.js": memoryDebugJS}
 	for name, source := range scripts {
 		if err := os.WriteFile(filepath.Join(out, name), source, 0o644); err != nil {
 			return err

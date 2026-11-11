@@ -16,7 +16,7 @@
 "use strict";
 
 let core = null;
-const OPS = new Set(["boot", "run", "input", "resize", "capture", "destroy", "memory", "runCommand", "readJob", "cancelJob", "status",
+const OPS = new Set(["boot", "run", "input", "resize", "capture", "destroy", "memory", "memoryReport", "runCommand", "readJob", "cancelJob", "status",
   "readFile", "writeFile", "abort", "recoverFiles", "tcpOpen", "tcpWrite", "tcpEnd", "tcpAbort", "linkIn"]);
 
 function emit(event, payload) {

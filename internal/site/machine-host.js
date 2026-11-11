@@ -286,6 +286,8 @@
       /** End it and let its memory go. */
       destroy: () => t.call("destroy").finally(() => dropStreams(errorFrom({ name: "AbortError", message: "the machine was put away" }))),
       memory: () => t.call("memory"),
+      /** What the memory holds, for memory-debug.js: { report, samples, info }, or null. */
+      memoryReport: () => t.call("memoryReport"),
       runCommand: (input) => t.call("runCommand", [input]),
       readJob: (id) => t.call("readJob", [id]),
       cancelJob: (id) => t.call("cancelJob", [id]),
