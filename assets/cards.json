@@ -49,16 +49,15 @@
       "prompt": "postgres",
       "about": "A PostgreSQL 18 server with psql",
       "lines": [
-        "postgres=# SELECT name, moons, rank()",
-        "postgres-#   OVER (ORDER BY moons DESC)",
-        "postgres-#   FROM planets LIMIT 5;",
-        "!  name   | moons | rank",
-        "---------+-------+------",
-        " Saturn  |   146 |    1",
-        " Jupiter |    95 |    2",
-        " Uranus  |    28 |    3",
-        " Neptune |    16 |    4",
-        " Mars    |     2 |    5",
+        "postgres=# SELECT n, n * n AS square",
+        "postgres-#   FROM generate_series(1, 5) AS n;",
+        "! n | square",
+        "---+--------",
+        " 1 |      1",
+        " 2 |      4",
+        " 3 |      9",
+        " 4 |     16",
+        " 5 |     25",
         "(5 rows)"
       ]
     },
@@ -68,17 +67,17 @@
       "prompt": "iex(",
       "about": "IEx and a PostgreSQL 18 server",
       "lines": [
-        "iex(1)> sql \"SHOW server_version\"",
-        "!server_version",
-        "──────────────",
-        "18.6",
-        "iex(2)> sql \"SELECT app, count(*) FROM modules …\"",
-        "!app      │ count",
-        "─────────┼──────",
-        "elixir   │ 272",
-        "kernel   │ 103",
-        "ecto     │ 100",
-        "postgrex │ 95"
+        "iex(1)> PostgresTab.Repo.query!(\"SHOW server_version\").rows",
+        "[[\"18.6\"]]",
+        "iex(2)> PostgresTab.sql(\"SELECT n, n * n AS square …\")",
+        "!n │ square",
+        "──┼───────",
+        "1 │ 1",
+        "2 │ 4",
+        "3 │ 9",
+        "4 │ 16",
+        "5 │ 25",
+        "5 row(s)"
       ]
     },
     {
@@ -87,10 +86,11 @@
       "prompt": ">>>",
       "about": "CPython 3.14 with Rich",
       "lines": [
+        ">>> from rich import print",
         ">>> print(\"[bold magenta]hello[/] from [green]Rich[/]\")",
         "!hello from Rich",
         ">>> t = Table(\"language\", \"year\")",
-        ">>> t.add_row(\"Python\", \"1991\"); t",
+        ">>> t.add_row(\"Python\", \"1991\"); Console().print(t)",
         "┏━━━━━━━━━━┳━━━━━━┓",
         "┃ language ┃ year ┃",
         "┡━━━━━━━━━━╇━━━━━━┩",
@@ -104,16 +104,17 @@
       "prompt": "> ",
       "about": "Node 24 and tsx, with Zod",
       "lines": [
-        "> User.parse({ name: \"Ada\", email: \"ada@example.com\" })",
-        "{ name: 'Ada', email: 'ada@example.com' }",
+        "> const { z } = await import(\"zod\")",
+        "> const User = z.object({ name: z.string().min(1),",
+        "...   email: z.email() })",
         "> User.safeParse({ name: \"\", email: \"nope\" })",
         "...   .error?.issues.map((i) => i.message)",
         "[",
         "  'Too small: expected string to have >=1 characters',",
         "  'Invalid email address'",
         "]",
-        "> Repo.parse(await (await fetch(…copy/v86)).json())",
-        "{ full_name: 'copy/v86', … }"
+        "> (await (await fetch(…copy/v86)).json()).full_name",
+        "'copy/v86'"
       ]
     },
     {
@@ -143,17 +144,16 @@
       "prompt": "~ $",
       "about": "jtab, a CLI that renders JSON as tables",
       "lines": [
-        "~ $ jtab data/languages.json --where typing=static \\",
+        "~ $ echo '[{\"name\":\"Rust\",\"year\":2015,…}, …]' \\",
+        "      | jtab --where typing=static \\",
         "      --columns name,year --sort year -r",
-        "╭────────────┬──────╮",
-        "│ name       ┆ year │",
-        "╞════════════╪══════╡",
-        "│ Rust       ┆ 2015 │",
-        "│ TypeScript ┆ 2012 │",
-        "│ Go         ┆ 2009 │",
-        "│ Java       ┆ 1995 │",
-        "│ C          ┆ 1972 │",
-        "╰────────────┴──────╯"
+        "╭──────┬──────╮",
+        "│ name ┆ year │",
+        "╞══════╪══════╡",
+        "│ Rust ┆ 2015 │",
+        "│ Go   ┆ 2009 │",
+        "╰──────┴──────╯",
+        "2 row(s)"
       ]
     },
     {
@@ -162,14 +162,15 @@
       "prompt": "jshell>",
       "about": "jshell on OpenJDK 11, with Gson",
       "lines": [
-        "jshell> gson.toJson(new Planet(\"Mars\", 0.107, 2))",
-        "$1 ==> \"{\\n  \\\"name\\\": \\\"Mars\\\", …}\"",
-        "jshell> gson.fromJson(\"{\\\"name\\\": \\\"Jupiter\\\",",
-        "   ...>   \\\"massEarths\\\": 317.8}\", Planet.class)",
-        "$2 ==> Jupiter (317.8 Earth masses, 0 moons)",
+        "jshell> record Point(int x, int y) {}",
+        "|  created record Point",
+        "jshell> gson.toJson(new Point(1, 2))",
+        "$4 ==> \"{\\n  \\\"x\\\": 1,\\n  \\\"y\\\": 2\\n}\"",
+        "jshell> gson.fromJson(\"{\\\"x\\\": 3, \\\"y\\\": 4}\", Point.class)",
+        "$5 ==> Point[x=3, y=4]",
         "jshell> JsonParser.parseString(\"{\\\"a\\\": [1, 2, 3]}\")",
         "   ...>   .getAsJsonObject().get(\"a\")",
-        "$3 ==> [1,2,3]"
+        "$6 ==> [1,2,3]"
       ]
     },
     {

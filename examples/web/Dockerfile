@@ -28,22 +28,6 @@ RUN npx vite build --logLevel warn && rm -rf dist
 COPY --chmod=755 serve.mjs /usr/local/bin/serve
 COPY --chmod=755 start.sh /usr/local/bin/web-demo
 
-RUN printf '%s\n' \
-      '' \
-      '  A blank React project in /root/app (Vite, React, supabase-js, Tailwind v4, TypeScript): src/App.jsx' \
-      '  is an empty page to build on, and src/supabase.js a client for the supabase machine. It is served' \
-      '  on 0.0.0.0:4173 and rebuilt on every change to src/ (serve --watch dist 4173, its log in' \
-      '  /tmp/serve.log). Try:' \
-      '' \
-      '    sed -i "s/Nothing here yet/Hello/" src/App.jsx    # the preview reloads with it' \
-      '    wget -qO- 127.0.0.1:4173/__build                  # how the last build went' \
-      '    npm run build                                     # a one-off build into dist/' \
-      '    npm install date-fns                              # from npm, through the browser (slow)' \
-      '    npm run typecheck                                 # tsc --noEmit (.ts and .tsx build as they are)' \
-      '' \
-      '  Servers must listen on 0.0.0.0 (vite preview --host 0.0.0.0), not localhost.' \
-      '' > /etc/motd-web
-
 ENV LANG=C.UTF-8 PATH=/root/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PS1='\w $ '
 CMD ["/usr/local/bin/web-demo"]
 

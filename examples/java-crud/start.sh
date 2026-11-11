@@ -7,8 +7,12 @@ if ! wget -q -O /dev/null http://127.0.0.1:8080/items 2>/dev/null; then
   java -XX:TieredStopAtLevel=1 -Xshare:auto -cp /app:/opt/lib/sqlite-jdbc.jar CrudServer 8080 /var/lib/crud/items.db \
     > /var/log/crud.log 2>&1 &
   until wget -q -O /dev/null http://127.0.0.1:8080/items 2>/dev/null; do sleep 0.2; done
-  # A first round, so the snapshot holds a server whose code paths have run
+  # A first round, so the snapshot holds a server whose code paths have run, then the rows it
+  # made deleted: the API starts empty
   crud-bench 50 >/dev/null
+  for id in $(wget -q -O - http://127.0.0.1:8080/items | grep -o '"id":[0-9]*' | cut -d: -f2); do
+    ab -q -n 1 -m DELETE "http://127.0.0.1:8080/items/$id" >/dev/null 2>&1
+  done
 fi
 echo "crud API on http://127.0.0.1:8080/items (crud-bench N to drive it)"
 exec /bin/sh -l

@@ -1,5 +1,32 @@
 import { chromium } from "../../bench/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { createClient } from "./app/node_modules/@supabase/supabase-js/dist/index.mjs";
+const base = process.env.CONDUIT_URL || "http://127.0.0.1:14173";
+// The app starts empty: a writer with one article, through the same API, for the UI user to follow
+const config = await fetch(base + "/config.js").then((r) => r.text());
+const { anonKey } = JSON.parse(config.slice(config.indexOf("=") + 1, -1));
+const writerClient = createClient(base + "/supabase", anonKey, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
+const writer = "writer-" + Date.now();
+const writerTitle = "Written by " + writer;
+{
+  const signup = await writerClient.auth.signUp({
+    email: writer + "@example.com",
+    password: "writer-password-2026",
+    options: { data: { username: writer } },
+  });
+  if (signup.error) throw signup.error;
+  const r = await writerClient.from("articles").insert({
+    slug: writer,
+    title: writerTitle,
+    description: "An article to follow",
+    body: "Followed in the browser check.",
+    tags: ["follow"],
+    author_id: signup.data.user.id,
+  });
+  if (r.error) throw r.error;
+}
 const browser = await chromium.launch({
   headless: true,
   args: ["--no-sandbox"],
@@ -8,9 +35,9 @@ const page = await browser.newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 try {
-  await page.goto((process.env.CONDUIT_URL || "http://127.0.0.1:14173") + "/");
+  await page.goto(base + "/");
   await page
-    .getByRole("heading", { name: "Welcome to Conduit", exact: true })
+    .getByRole("heading", { name: writerTitle, exact: true })
     .waitFor();
   await page.getByRole("link", { name: "Sign up", exact: true }).click();
   const username = "ui-" + Date.now();
@@ -67,15 +94,15 @@ try {
     .getByText("Test comment", { exact: true })
     .waitFor({ state: "hidden" });
   await page.getByRole("link", { name: "Home", exact: true }).click();
-  await page.getByRole("link", { name: "demo", exact: true }).first().click();
-  await page.getByRole("button", { name: "Follow demo", exact: true }).click();
+  await page.getByRole("link", { name: writer, exact: true }).first().click();
+  await page.getByRole("button", { name: "Follow " + writer, exact: true }).click();
   await page
-    .getByRole("button", { name: "Unfollow demo", exact: true })
+    .getByRole("button", { name: "Unfollow " + writer, exact: true })
     .waitFor();
   await page.getByRole("link", { name: "Home", exact: true }).click();
   await page.getByRole("button", { name: "Your Feed", exact: true }).click();
   await page
-    .getByRole("heading", { name: "Welcome to Conduit", exact: true })
+    .getByRole("heading", { name: writerTitle, exact: true })
     .waitFor();
   assert.equal(
     await page
@@ -100,7 +127,7 @@ try {
     .getByRole("button", { name: "Delete article", exact: true })
     .click();
   await page
-    .getByRole("heading", { name: "Welcome to Conduit", exact: true })
+    .getByRole("heading", { name: writerTitle, exact: true })
     .waitFor();
   await page.getByRole("link", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Log out", exact: true }).click();

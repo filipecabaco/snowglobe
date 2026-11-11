@@ -60,9 +60,6 @@ else
       "(the agent page's preview won't reach it): $(tail -n 3 "$expose_log")"
   fi
 fi
-# curl with the service role's key, for the REST API
-sb-auth() { curl -sS -H "apikey: $SERVICE_ROLE_KEY" -H "Authorization: Bearer $SERVICE_ROLE_KEY" "$@"; }
-export -f sb-auth
 
 # Warm everything a visitor's first commands go through, so it's done in the snapshot rather than
 # on their clock: a first signup loads Auth's sign-up path (bcrypt, JWT signing) and opens its
@@ -83,24 +80,6 @@ fi
 notes logout >/dev/null 2>&1
 psql "$DB_URL" -qc "delete from auth.users where email = 'warmup@example.com'; truncate notes restart identity" >/dev/null 2>&1
 
-
-cat <<'MOTD'
-
-  Supabase's local stack, running natively in this machine: Postgres, PostgREST, Auth and
-  Realtime. notes is a small app on it, run by Bun: Auth for users, the Data API for notes, row
-  level security keeping each user's notes their own, Realtime streaming them live. Try:
-
-    notes signup ada@example.com lovelace-1815
-    notes add first program, for the analytical engine
-    notes search engine
-    notes ls
-    notes signup grace@example.com hopper-1906 && notes ls     # Grace can't see Ada's notes
-    notes watch 10 & sleep 2; notes add live, by Realtime; wait   # an insert, as it happens
-    psql "$DB_URL" -c "select email from auth.users"
-    sb-auth "$API_URL/rest/v1/notes" | jq                     # the service role sees them all
-    supabase stack status
-
-MOTD
 export PS1='\u:\w$ '
 export PS1
 exec bash --norc -i

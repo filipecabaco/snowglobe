@@ -470,7 +470,7 @@ it there with Bun (`BUN_BE_BUN=1 supabase run serve.ts`, `Bun.serve({hostname: "
 - runtime `web`: build web apps: a blank React project on Supabase, rebuilt and served on port 4173 as it changes (Vite, Tailwind, TypeScript, npm) (the app in `/root/app`, watched: each command's changes are reported; try `cd /root/app && sed -i 's/Nothing here yet/Hello/' src/App.jsx`)
 - runtime `python`: run Python: scripts, numpy and pandas for data work; pip install adds packages from PyPI (try `python3 -c 'import numpy, pandas; print(numpy.__version__, pandas.__version__)'`)
 - runtime `duckdb`: DuckDB for analytics: SQL over CSV, Parquet and JSON files (try `duckdb -c 'select 6 * 7'`)
-- runtime `postgres`: PostgreSQL for database work: load CSV files and query them with psql (try `psql -h /run/postgresql -U postgres -tAc 'select count(*) from planets'`)
+- runtime `postgres`: PostgreSQL for database work: load CSV files and query them with psql (try `psql -h /run/postgresql -U postgres -tAc 'select version()'`)
 
 `python` can `pip install <package>`: wheels from PyPI, fetched through the visitor's browser (numpy and pandas are already in
 the image). A package with no wheel for 64-bit ARM musl Linux fails with pip's "No matching distribution" error.

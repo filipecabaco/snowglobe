@@ -438,7 +438,6 @@ function Feed({ username }) {
               <br />
               One Linux VM. Your own copy.
             </p>
-            <a href="#/login">Try the demo account</a>
           </aside>
         )}
       </main>
@@ -635,13 +634,6 @@ function Auth({ signup }) {
         />
         <button disabled={busy}>{signup ? "Sign up" : "Sign in"}</button>
       </form>
-      {!signup && (
-        <p className="hint">
-          Demo: <strong>demo@conduit.local</strong>
-          <br />
-          Password: <strong>conduit-demo-2026</strong>
-        </p>
-      )}
     </main>
   );
 }
