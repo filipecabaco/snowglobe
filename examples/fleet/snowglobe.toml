@@ -21,8 +21,10 @@ network = "fetch"
 # The database, set up once: the table, published to Realtime, and a row a second from a loop
 [snapshots.db]
 template = "supabase"
+# Each command has a time limit of its own (timeout), so a slow one on a phone is cut off and named
+# rather than using up the step
 run = [
-'''
+{ timeout = "2m", cmd = '''
 . /home/supa/.stack-env
 # A slow machine (a phone) can still be starting the database: wait for it, up to 90s, and if it never
 # answers say what is there, so the failure explains itself (psql exits 2 when it can't connect)
@@ -41,17 +43,17 @@ until psql -tA "$DB_URL" -c 'select 1' >/dev/null 2>&1; do
   sleep 1
 done
 echo "postgres answered after ${n}s"
-  ''',
+  ''' },
 # Each statement a command of its own, so a slow or stuck one is named in the log. lock_timeout: a
 # statement waiting on another's lock (Realtime's, say) fails after 60s and says so, rather than
 # using up the whole step
-'''
+{ timeout = "90s", cmd = '''
 . /home/supa/.stack-env
 PGOPTIONS='-c lock_timeout=60s' psql -q -v ON_ERROR_STOP=1 "$DB_URL" \
   -c 'create table if not exists public.ticks (id bigserial primary key, v numeric not null, at timestamptz not null default now())' \
   -c 'grant select on public.ticks to anon, authenticated' && echo "table ready"
-  ''',
-'''
+  ''' },
+{ timeout = "90s", cmd = '''
 . /home/supa/.stack-env
 # Realtime streams the table's inserts. Added once: a second run of this step finds it there already
 if psql -tA "$DB_URL" -c "select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'ticks'" | grep -q 1; then
@@ -60,10 +62,10 @@ else
   PGOPTIONS='-c lock_timeout=60s' psql -q -v ON_ERROR_STOP=1 "$DB_URL" -c 'alter publication supabase_realtime add table public.ticks' &&
     echo "published to Realtime"
 fi
-  ''',
-'''
+  ''' },
+{ timeout = "30s", cmd = '''
 . /home/supa/.stack-env; (while true; do psql -q "$DB_URL" -c "insert into public.ticks (v) values (round((random() * 10 + 100)::numeric, 2))"; sleep 1; done >/dev/null 2>&1 &)
-  ''',
+  ''' },
 ]
 ready = ". /home/supa/.stack-env; psql -tA \"$DB_URL\" -c 'select count(*) from public.ticks' | grep -q '^[1-9]'"
 timeout = "4m"

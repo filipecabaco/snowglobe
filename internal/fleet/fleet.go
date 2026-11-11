@@ -78,12 +78,82 @@ type TemplateSpec struct {
 }
 
 // SnapshotSpec is a machine of a template set up by commands (each must succeed), saved once
-// Ready succeeds (retried until Timeout, default 2m).
+// Ready succeeds (retried until Timeout, default 2m). A command's time is its own timeout, or else
+// Timeout, or else 10m.
 type SnapshotSpec struct {
-	Template string   `toml:"template" json:"template"`
-	Run      []string `toml:"run" json:"run,omitempty"`
-	Ready    string   `toml:"ready" json:"ready,omitempty"`
-	Timeout  string   `toml:"timeout" json:"timeout,omitempty"`
+	Template string    `toml:"template" json:"template"`
+	Run      []Command `toml:"run" json:"run,omitempty"`
+	Ready    string    `toml:"ready" json:"ready,omitempty"`
+	Timeout  string    `toml:"timeout" json:"timeout,omitempty"`
+}
+
+// Command is one of a snapshot's setup commands: a string, or { cmd = "...", timeout = "90s" } for
+// one with a time limit of its own.
+type Command struct {
+	Cmd     string `json:"cmd"`
+	Timeout string `json:"timeout,omitempty"`
+}
+
+// CommandTimeout is a command's time when neither it nor its snapshot says.
+const CommandTimeout = 10 * time.Minute
+
+// UnmarshalTOML reads a command as a string or as a table of cmd and timeout.
+func (c *Command) UnmarshalTOML(v any) error {
+	switch v := v.(type) {
+	case string:
+		c.Cmd = v
+		return nil
+	case map[string]any:
+		for k, x := range v {
+			s, ok := x.(string)
+			if !ok {
+				return fmt.Errorf("run: %s: a string", k)
+			}
+			switch k {
+			case "cmd":
+				c.Cmd = s
+			case "timeout":
+				c.Timeout = s
+			default:
+				return fmt.Errorf("run: unknown key %s (a command is cmd and timeout)", k)
+			}
+		}
+		if strings.TrimSpace(c.Cmd) == "" {
+			return fmt.Errorf("run: a command table needs cmd")
+		}
+		return nil
+	}
+	return fmt.Errorf("run: a command, as a string or { cmd, timeout }")
+}
+
+// MarshalJSON gives a command with no timeout of its own as its string, so a file's hashes (and
+// so what is already set up) don't change for commands written as before.
+func (c Command) MarshalJSON() ([]byte, error) {
+	if c.Timeout == "" {
+		return json.Marshal(c.Cmd)
+	}
+	type plain Command
+	return json.Marshal(plain(c))
+}
+
+// UnmarshalJSON reads what MarshalJSON writes.
+func (c *Command) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		*c = Command{}
+		return json.Unmarshal(data, &c.Cmd)
+	}
+	type plain Command
+	return json.Unmarshal(data, (*plain)(c))
+}
+
+// Limit is how long the command may run: its own timeout, the snapshot's, or CommandTimeout.
+func (s SnapshotSpec) Limit(c Command) time.Duration {
+	for _, v := range []string{c.Timeout, s.Timeout} {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return CommandTimeout
 }
 
 // ServiceSpec is a service (see `snowglobe service add`).
@@ -179,9 +249,9 @@ func Load(path string) (*File, error) {
 	// multi-line string, and a \r at the end of a shell line is part of its last word: the commands
 	// get LF endings, as the browser page's reader gives them
 	for n, s := range f.Snapshots {
-		run := make([]string, len(s.Run))
+		run := make([]Command, len(s.Run))
 		for i, c := range s.Run {
-			run[i] = strings.ReplaceAll(c, "\r\n", "\n")
+			run[i] = Command{Cmd: strings.ReplaceAll(c.Cmd, "\r\n", "\n"), Timeout: c.Timeout}
 		}
 		s.Run, s.Ready = run, strings.ReplaceAll(s.Ready, "\r\n", "\n")
 		f.Snapshots[n] = s
@@ -249,6 +319,9 @@ func (f *File) check() error {
 			bad("snapshot %s: no template %s in the file", n, s.Template)
 		}
 		duration("snapshot "+n+": timeout", s.Timeout)
+		for i, c := range s.Run {
+			duration(fmt.Sprintf("snapshot %s: run[%d]: timeout", n, i), c.Timeout)
+		}
 	}
 	for n, s := range f.Services {
 		name("service", n)

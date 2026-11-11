@@ -1,10 +1,12 @@
 package fleet
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/filipecabaco/snowglobe/internal/control"
 	"github.com/filipecabaco/snowglobe/internal/daemon"
@@ -24,12 +26,15 @@ type fake struct {
 	// times first
 	status     map[string]int
 	readyAfter map[string]int
+	// The time limit each command was given, and commands that run out of it
+	limits   map[string]float64
+	timesOut map[string]bool
 }
 
 func newFake() *fake {
 	return &fake{templates: map[string]daemon.Template{}, snapshots: map[string]daemon.Snapshot{},
 		services: map[string]daemon.ServiceStatus{}, machines: map[string]daemon.Machine{}, links: map[string]daemon.Link{},
-		status: map[string]int{}, readyAfter: map[string]int{}}
+		status: map[string]int{}, readyAfter: map[string]int{}, limits: map[string]float64{}, timesOut: map[string]bool{}}
 }
 
 func notFound(what string) error { return daemon.ErrNotFound(what) }
@@ -134,6 +139,10 @@ func (f *fake) RemoveMachine(n string) error {
 }
 func (f *fake) Job(n string, r control.JobRequest) (*control.JobResult, error) {
 	f.calls = append(f.calls, "job "+n+": "+r.Cmd)
+	f.limits[r.Cmd] = r.Timeout
+	if f.timesOut[r.Cmd] {
+		return &control.JobResult{TimedOut: true, Output: []byte("still going")}, nil
+	}
 	s := f.status[r.Cmd]
 	if f.readyAfter[r.Cmd] > 0 {
 		f.readyAfter[r.Cmd]--
@@ -500,10 +509,66 @@ func TestLoadCRLFCommandsGetLF(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := f.Snapshots["s"]
-	if strings.Contains(strings.Join(got.Run, "")+got.Ready, "\r") {
+	if len(got.Run) != 1 || strings.Contains(got.Run[0].Cmd+got.Ready, "\r") {
 		t.Fatalf("a command kept its CR: %q %q", got.Run, got.Ready)
 	}
-	if want := "mkdir -p /a\ncat <<EOF\nhi\nEOF\n"; len(got.Run) != 1 || got.Run[0] != want {
+	if want := "mkdir -p /a\ncat <<EOF\nhi\nEOF\n"; got.Run[0].Cmd != want {
 		t.Fatalf("run = %q, want %q", got.Run, want)
+	}
+}
+
+func TestASnapshotCommandIsAStringOrATableWithATimeoutOfItsOwn(t *testing.T) {
+	text := strings.Replace(example, `run = ["pip install httpx", "python3 -m http.server 8000 &"]`,
+		"run = [\n  { cmd = '''\npip install httpx\n''', timeout = \"90s\" },\n  \"python3 -m http.server 8000 &\",\n]\ntimeout = \"3m\"", 1)
+	f := load(t, text)
+	s := f.Snapshots["ready"]
+	if len(s.Run) != 2 || s.Run[0] != (Command{Cmd: "pip install httpx\n", Timeout: "90s"}) || s.Run[1] != (Command{Cmd: "python3 -m http.server 8000 &"}) {
+		t.Fatalf("run = %+v", s.Run)
+	}
+	// Its own timeout, else the snapshot's, else 10m
+	if s.Limit(s.Run[0]) != 90*time.Second || s.Limit(s.Run[1]) != 3*time.Minute || (SnapshotSpec{}).Limit(Command{Cmd: "x"}) != CommandTimeout {
+		t.Errorf("limits: %s %s", s.Limit(s.Run[0]), s.Limit(s.Run[1]))
+	}
+	api := newFake()
+	p, _ := f.Plan(api)
+	var b builds
+	if err := p.Apply(api, b.build, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if api.limits["pip install httpx\n"] != 90 || api.limits["python3 -m http.server 8000 &"] != 180 {
+		t.Errorf("the jobs' limits: %v", api.limits)
+	}
+	// A command that runs out of its time says so, with its limit
+	api = newFake()
+	api.timesOut["pip install httpx\n"] = true
+	p, _ = f.Plan(api)
+	if err := p.Apply(api, b.build, quiet); err == nil || !strings.Contains(err.Error(), `command 1 of 2 timed out (its limit 1m30s): "pip install httpx`) {
+		t.Errorf("timed out: %v", err)
+	}
+}
+
+func TestACommandWithNoTimeoutOfItsOwnHashesAsBefore(t *testing.T) {
+	got, _ := json.Marshal(SnapshotSpec{Template: "t", Run: []Command{{Cmd: "a"}, {Cmd: "b", Timeout: "9s"}}})
+	if want := `{"template":"t","run":["a",{"cmd":"b","timeout":"9s"}]}`; string(got) != want {
+		t.Errorf("json = %s, want %s", got, want)
+	}
+	var back SnapshotSpec
+	if err := json.Unmarshal(got, &back); err != nil || len(back.Run) != 2 || back.Run[0].Cmd != "a" || back.Run[1].Timeout != "9s" {
+		t.Errorf("back = %+v %v", back, err)
+	}
+}
+
+func TestABadCommandTableIsRefused(t *testing.T) {
+	for bad, want := range map[string]string{
+		`{ cmd = "x", timeout = "soon" }`: `run[0]: timeout: "soon" is not a duration`,
+		`{ cmd = "x", retries = "2" }`:    "unknown key retries",
+		`{ timeout = "9s" }`:              "needs cmd",
+		`{ cmd = "x", timeout = 9 }`:      "timeout: a string",
+	} {
+		text := strings.Replace(example, `run = ["pip install httpx", "python3 -m http.server 8000 &"]`, "run = ["+bad+"]", 1)
+		_, err := Load(write(t, text))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", bad, err, want)
+		}
 	}
 }

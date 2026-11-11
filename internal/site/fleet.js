@@ -123,7 +123,7 @@
       if (end < 0) throw new TomlError("a string that doesn't end", line);
       return { value: s.slice(1, end), rest: s.slice(end + 1) };
     }
-    const m = /^([^\s,\]#]+)/.exec(s);
+    const m = /^([^\s,\]}#]+)/.exec(s);
     if (!m) throw new TomlError("a value is missing", line);
     const word = m[1];
     const rest = s.slice(word.length);
@@ -159,6 +159,37 @@
 
   const BLOCKED = new Set(["__proto__", "constructor", "prototype"]);
 
+  /**
+   * An inline table from the start of `s`, `{ key = value, ... }`: { value, rest }. Its keys are
+   * plain and its values are strings, numbers or booleans (a multi-line string runs on over lines,
+   * as TOML allows); not arrays or tables inside it.
+   */
+  function readInlineTable(s, line, more) {
+    const out = Object.create(null);
+    const at = () => more?.at?.() ?? line;
+    let rest = s.slice(1).replace(/^[ \t]+/, "");
+    if (rest[0] === "}") return { value: out, rest: rest.slice(1) };
+    for (;;) {
+      const k = readKey(rest, at());
+      if (k.path.length !== 1) throw new TomlError("a dotted key in an inline table isn't supported", at());
+      if (k.rest[0] !== "=") throw new TomlError("expected = after the key", at());
+      const key = k.path[0];
+      if (BLOCKED.has(key)) throw new TomlError(`the key ${key} isn't allowed`, at());
+      if (key in out) throw new TomlError(`${key} is set twice in the inline table`, at());
+      const v = k.rest.slice(1).replace(/^[ \t]+/, "");
+      if (v[0] === "[" || v[0] === "{") throw new TomlError("arrays and tables inside an inline table aren't supported", at());
+      const r = readValue(v, at(), more);
+      out[key] = r.value;
+      rest = r.rest.replace(/^[ \t]+/, "");
+      if (rest[0] === ",") { rest = rest.slice(1).replace(/^[ \t]+/, ""); continue; }
+      if (rest[0] === "}") return { value: out, rest: rest.slice(1) };
+      throw new TomlError("expected , or } in the inline table", at());
+    }
+  }
+
+  /** The kind of value an array holds: strings and inline tables may share one (a command, or a command with options). */
+  const kindOf = (v) => (typeof v === "string" || (v && typeof v === "object" && !Array.isArray(v)) ? "string-or-table" : typeof v);
+
   function into(obj, path, line) {
     let at = obj;
     for (const k of path) {
@@ -179,7 +210,8 @@
   /**
    * The fleet file's TOML. Tables ([a.b]), key = value with strings (basic and literal), integers,
    * floats, booleans and arrays (across lines, with comments), and multi-line strings (three quotes
-   * of either kind); not dates, inline tables or arrays of tables, each of which says so. Tables and
+   * of either kind), and inline tables inside an array (a command with options); not dates, inline
+   * tables as values or arrays of tables, each of which says so. Tables and
    * values have no prototype.
    */
   function parse(text) {
@@ -225,9 +257,9 @@
             continue;
           }
           if (rest[0] === "]") { rest = rest.slice(1); break; }
-          if (rest[0] === "[" || rest[0] === "{") throw new TomlError("arrays of arrays and inline tables aren't supported", i + 1);
-          const r = readValue(rest, i + 1, more);
-          if (items.length && typeof r.value !== typeof items[0]) throw new TomlError("an array of one kind of value", i + 1);
+          if (rest[0] === "[") throw new TomlError("arrays of arrays aren't supported", i + 1);
+          const r = rest[0] === "{" ? readInlineTable(rest, i + 1, more) : readValue(rest, i + 1, more);
+          if (items.length && kindOf(r.value) !== kindOf(items[0])) throw new TomlError("an array of one kind of value", i + 1);
           items.push(r.value);
           sep = true;
           rest = r.rest.replace(/^[ \t]+/, "");
@@ -385,6 +417,19 @@
 
   const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+  /** A snapshot command's time when neither it nor its snapshot says (fleet.CommandTimeout), and how long ready is retried. */
+  const COMMAND_TIMEOUT_MS = 10 * 60000;
+  const READY_TIMEOUT_MS = 2 * 60000;
+
+  /** Milliseconds as a duration is written in the file, as Go writes one: 90000 is "1m30s". */
+  function spoken(ms) {
+    if (ms < 1000) return `${ms}ms`;
+    const s = Math.round(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return `${h ? `${h}h` : ""}${h || m ? `${m}m` : ""}${s % 60}s`;
+  }
+
   /** "30m", "2m30s", "90s", "1h", "250ms": milliseconds, or null if it isn't one. */
   function duration(s) {
     if (typeof s !== "string") return null;
@@ -500,17 +545,37 @@
       if (r.error) { bad(where, r.error); continue; }
       if (r.snapshot) { bad(where, `its template ${s.template} is itself a snapshot's; the page can't stack them`); continue; }
       if (s.run !== undefined && !Array.isArray(s.run)) { bad(where, "run: an array of commands (run = [...]), even for one"); continue; }
-      const run = s.run ?? [];
-      if (run.some((c) => typeof c !== "string" || !c.trim())) { bad(where, "run: commands, each a string"); continue; }
+      // A command is a string, or { cmd, timeout } with a time limit of its own
+      const run = [];
+      const runLimits = [];
+      let runBad = null;
+      for (const [i, c] of (s.run ?? []).entries()) {
+        const table = c && typeof c === "object";
+        const cmd = table ? c.cmd : c;
+        if (typeof cmd !== "string" || !cmd.trim()) { runBad = `run: commands, each a string or { cmd, timeout }${table ? ` (run[${i}] has no cmd)` : ""}`; break; }
+        const extra = table ? Object.keys(c).filter((k) => k !== "cmd" && k !== "timeout") : [];
+        if (extra.length) { runBad = `run[${i}]: unknown key ${extra[0]} (a command is cmd and timeout)`; break; }
+        let limit = null;
+        if (table && c.timeout !== undefined) {
+          limit = duration(c.timeout);
+          if (!limit) { runBad = `run[${i}]: timeout: a duration like "90s", not ${JSON.stringify(c.timeout)}`; break; }
+        }
+        run.push(cmd);
+        runLimits.push(limit);
+      }
+      if (runBad) { bad(where, runBad); continue; }
       if (s.ready !== undefined && (typeof s.ready !== "string" || !s.ready.trim())) { bad(where, "ready: a command, as a string"); continue; }
-      let timeout = 120000;
+      let timeout = null;
       if (s.timeout !== undefined) {
         timeout = duration(s.timeout);
         if (!timeout) { bad(where, `timeout: a duration like "2m", not ${JSON.stringify(s.timeout)}`); continue; }
       }
       okSnapshots.add(name);
       steps.push({
-        key: snapshotKey(name), kind: "snapshot", name, runtime: r.runtime, needs: [], run, ready: s.ready ?? null, timeoutMs: timeout,
+        key: snapshotKey(name), kind: "snapshot", name, runtime: r.runtime, needs: [], run,
+        // Each command's time: its own timeout, else the snapshot's, else COMMAND_TIMEOUT_MS (as `snowglobe apply`)
+        runTimeoutsMs: runLimits.map((l) => l ?? timeout ?? COMMAND_TIMEOUT_MS),
+        ready: s.ready ?? null, timeoutMs: timeout ?? READY_TIMEOUT_MS,
         summary: `Set up ${r.runtime}: ${run.length} command${run.length === 1 ? "" : "s"}${s.ready ? ", then wait until it is ready" : ""}`,
       });
     }
@@ -655,13 +720,15 @@
         for (const [i, command] of step.run.entries()) {
           set(step.key, { detail: `command ${i + 1} of ${step.run.length}` });
           const began = now();
-          const r = await exec(step.runtime, command, Math.ceil(step.timeoutMs / 1000));
+          const limitMs = step.runTimeoutsMs?.[i] ?? step.timeoutMs;
+          const r = await exec(step.runtime, command, Math.ceil(limitMs / 1000));
           const took = `${((now() - began) / 1000).toFixed(1)}s`;
           // What each command printed and how it ended, so a failure on a slow device says what happened
           log += `$ ${command}\n${r.output}${r.output && !r.output.endsWith("\n") ? "\n" : ""}${r.output.trim() ? "" : "(no output)\n"}[${r.exit === null ? r.state : `exit ${r.exit}`} after ${took}]\n`;
           if (r.exit !== 0) {
             set(step.key, { output: tail(log) });
             console.warn(`fleet ${step.key}: command ${i + 1} of ${step.run.length} in ${step.runtime} ${r.exit === null ? `ended ${r.state}` : `exited ${r.exit}`} after ${took}\n${log}`);
+            if (r.state === "timed_out") throw new Error(`command ${i + 1} of ${step.run.length} timed out (its limit ${spoken(limitMs)}) after ${took}`);
             throw new Error(`command ${i + 1} ${r.exit === null ? `ended ${r.state}${r.error ? ` (${r.error})` : ""}` : `exited ${r.exit}`} after ${took}`);
           }
         }
