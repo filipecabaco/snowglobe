@@ -227,10 +227,9 @@ Build flags:
                   so they're preloaded too; repeatable. A warm-report.json explains the result
   --jit on|off    off keeps armless's interpreter instead of compiling hot guest code, in the
                   page and in snowglobe run: slower, and a smaller machine (default: on)
-  --kernel none   no guest kernel: the image's command is a static aarch64 Linux executable
-                  that runs on its own, its system calls answered by the machine. Snapshots a
-                  tenth the size; runs natively only for now (snowglobe run: the page says so),
-                  with no network, one CPU, no exercises (default: linux)
+  --kernel none   no guest kernel: the image's command, an aarch64 Linux program, runs on its
+                  own, its system calls answered by the machine, in the page and natively.
+                  Snapshots a tenth the size; no network, one CPU, no exercises (default: linux)
   --cpus N        guest CPUs, 1 to 8 (default: 1). More than one runs each CPU in its own Web
                   Worker; the page then makes itself cross-origin isolated with a service worker
   --build-cpus N  CPUs to boot and warm up on before the snapshot (default: the larger of --cpus

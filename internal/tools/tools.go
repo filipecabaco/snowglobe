@@ -240,7 +240,7 @@ func NativeSource(version string) *native.Image {
 //
 // After the snapshot it types each exercise command into the app and records what it reads.
 func (i *Image) Snapshot(out string, memoryMB int, ready string, exercises []string, network string,
-	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox bool, user []string) error {
+	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox bool, user *UserProgram) error {
 	args := append([]string{VM}, SnapshotArgs("/out/system", memoryMB, ready, exercises, network, tunnels, allowPrivate, cpus, buildCPUs, sandbox, user)...)
 	var extra []string
 	if network != "none" {
@@ -254,11 +254,19 @@ func (i *Image) Snapshot(out string, memoryMB int, ready string, exercises []str
 // booting again is worth one try.
 const ExitBootStalled = 75
 
+// UserProgram is what a site with no kernel runs (snowglobe build --kernel none): the image's program
+// and its arguments, its environment (NAME=VALUE) and its working directory.
+type UserProgram struct {
+	Argv []string
+	Env  []string
+	Cwd  string
+}
+
 // SnapshotArgs are snowglobe-vm's arguments to boot the site's system directory and snapshot it,
 // in the tools container or natively. With user (a program and its arguments), there is no kernel to
 // boot: the program runs, and is snapshotted, on its own (snowglobe build --kernel none).
 func SnapshotArgs(system string, memoryMB int, ready string, exercises []string, network string,
-	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox bool, user []string) []string {
+	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox bool, user *UserProgram) []string {
 	args := []string{"snapshot", system,
 		"--memory", fmt.Sprint(memoryMB), "--network", network,
 		"--cpus", fmt.Sprint(cpus), "--build-cpus", fmt.Sprint(buildCPUs),
@@ -272,8 +280,16 @@ func SnapshotArgs(system string, memoryMB int, ready string, exercises []string,
 	for _, e := range exercises {
 		args = append(args, "--exercise", e)
 	}
-	for _, a := range user {
-		args = append(args, "--user", a)
+	if user != nil {
+		for _, a := range user.Argv {
+			args = append(args, "--user", a)
+		}
+		for _, e := range user.Env {
+			args = append(args, "--user-env", e)
+		}
+		if user.Cwd != "" {
+			args = append(args, "--user-cwd", user.Cwd)
+		}
 	}
 	return append(args, TunnelArgs(tunnels, allowPrivate)...)
 }

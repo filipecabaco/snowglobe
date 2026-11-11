@@ -83,7 +83,7 @@
       await this.open();
       if (!this.store) throw new Error(this.error ?? "no storage");
       const c = { version: 1, id: SAVE_ID, name: this.name, config: this.config, savedAt: Date.now(),
-        encoding: packed.encoding, state: packed.state, console: new Blob([]) };
+        encoding: packed.encoding, state: packed.state, console: new Blob([]), ...(packed.process ? { process: packed.process } : {}) };
       await this.store.put(c);
       this.saved = S().metadata(c);
     }
@@ -449,7 +449,7 @@
       m.host = host;
       try {
         const saved = m.inMemory ?? await m.slot.load();
-        if (saved) await host.boot(saved.state, saved.encoding);
+        if (saved) await host.boot(saved.state, saved.encoding, saved.process ?? null);
         else await host.boot();
         await host.run();
         m.inMemory = null;

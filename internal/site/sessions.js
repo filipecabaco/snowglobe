@@ -29,10 +29,15 @@
     const hash = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
     return Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, "0")).join("");
   }
+  // A checkpoint's bytes after its header: the machine's state, the process's (a site with no
+  // kernel: armless's user mode, whose program is a process the machine's state doesn't hold), then
+  // the console. processBytes is in the header only when there is a process, so a backup of a
+  // machine with a kernel is what it always was.
+  const sizes = c => ({ stateBytes: c.state.size, ...(c.process ? { processBytes: c.process.size } : {}), consoleBytes: c.console.size });
   async function encodeBackup(c) {
     validate(c);
-    const payload = new Blob([c.state, c.console]);
-    const info = { ...metadata(c), stateBytes: c.state.size, consoleBytes: c.console.size };
+    const payload = new Blob(c.process ? [c.state, c.process, c.console] : [c.state, c.console]);
+    const info = { ...metadata(c), ...sizes(c) };
     const header = utf8.encode(JSON.stringify({ ...info,
       checksum: await digest(new Blob([JSON.stringify(info), payload])) }));
     const length = new Uint8Array(4);
@@ -50,13 +55,16 @@
     try { h = JSON.parse(text.decode(await blob.slice(prefixSize, prefixSize + size).arrayBuffer())); }
     catch { throw new Error("Invalid session backup metadata"); }
     validate(h);
+    const processBytes = h.processBytes ?? 0;
     if (!Number.isSafeInteger(h.stateBytes) || h.stateBytes < 1 ||
+        !Number.isSafeInteger(processBytes) || processBytes < 0 || (h.processBytes !== undefined && processBytes < 1) ||
         !Number.isSafeInteger(h.consoleBytes) || h.consoleBytes < 0 ||
-        prefixSize + size + h.stateBytes + h.consoleBytes !== blob.size) throw new Error("Truncated or invalid session backup");
+        prefixSize + size + h.stateBytes + processBytes + h.consoleBytes !== blob.size) throw new Error("Truncated or invalid session backup");
     const payload = blob.slice(prefixSize + size);
-    const info = { ...metadata(h), stateBytes: h.stateBytes, consoleBytes: h.consoleBytes };
+    const info = { ...metadata(h), stateBytes: h.stateBytes, ...(processBytes ? { processBytes } : {}), consoleBytes: h.consoleBytes };
     if (await digest(new Blob([JSON.stringify(info), payload])) !== h.checksum) throw new Error("Session backup checksum mismatch");
-    const c = { ...metadata(h), state: payload.slice(0, h.stateBytes), console: payload.slice(h.stateBytes) };
+    const c = { ...metadata(h), state: payload.slice(0, h.stateBytes), console: payload.slice(h.stateBytes + processBytes) };
+    if (processBytes) c.process = payload.slice(h.stateBytes, h.stateBytes + processBytes);
     consoleEvents(await c.console.arrayBuffer());
     return c;
   }
@@ -78,13 +86,19 @@
    * else its bytes.
    */
   function snapshot(vm) { return vm.save_state_pieces ? vm.save_state_pieces() : vm.save_state(); }
+  /**
+   * { state, process }: the stopped machine's snapshot (snapshot()), and with no kernel (armless's
+   * user mode, vm.user) its program's process (save_process(): a small buffer), taken in the same
+   * stop so the two go together; null with a kernel, whose processes are in the machine's state.
+   */
   async function capture(vm, onPaused = () => {}) {
     const running = vm.running;
     try {
       await vm.stop(); // including all SMP workers; host input is gated by the UI during capture
-      const bytes = await snapshot(vm);
+      const state = await snapshot(vm);
+      const process = vm.user ? await vm.save_process() : null;
       onPaused();
-      return bytes;
+      return { state, process };
     } finally { if (running) vm.run(); }
   }
 

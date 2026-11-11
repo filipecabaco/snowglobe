@@ -1075,3 +1075,66 @@ test('a pack slow to start doesn\'t hold the guest\'s reads: past a short wait f
   assert.ok(fetched.includes('https://b/a.bin.zst'));
   s.close();
 });
+
+// ------------------------------------------------------------------ a site with no kernel (user mode)
+
+class UserArmless {
+  constructor(o) { this.options = o; this.ready = Promise.resolve(); this.user = !!o.user_state; this.handlers = {}; this.calls = []; UserArmless.last = this; }
+  on(name, fn) { this.handlers[name] = fn; }
+  run() { this.running = true; this.calls.push('run'); }
+  async stop() { this.running = false; this.calls.push('stop'); }
+  async save_state_pieces() { this.calls.push('state'); return [new Uint8Array([1, 2])]; }
+  async save_process() { this.calls.push('process'); return new Uint8Array([7, 7, 7]); }
+  destroy() {}
+}
+
+test('no kernel: the process (user_state) is an absolute URL, and boots with the site\'s own snapshot', async () => {
+  const cfg = MC.located('https://x.example/py/', { wasm: 'a.wasm', initial_state: 'system/state.bin.zst?v=1', user_state: 'system/user.bin?v=1',
+    filesystem: { json: 'system/filesystem.json', baseurl: 'system/filesystem/' } });
+  assert.equal(cfg.user_state, 'https://x.example/py/system/user.bin?v=1');
+  assert.equal(MC.located('https://x.example/py/', { filesystem: {} }).user_state, undefined, 'a site with a kernel has none');
+
+  const core = new MC.Core({ config: cfg, Armless: UserArmless, agent: null });
+  await core.boot(cfg.initial_state);
+  assert.equal(UserArmless.last.options.initial_state, 'https://x.example/py/system/state.bin.zst?v=1');
+  assert.equal(UserArmless.last.options.user_state, 'https://x.example/py/system/user.bin?v=1');
+});
+
+test('no kernel: a capture has the process, taken in the same stop; a boot from it restores both, and a saved state without one is refused', async () => {
+  const cfg = { initial_state: 'https://x/s', user_state: 'https://x/u', filesystem: { json: 'f', baseurl: 'b' } };
+  const events = [];
+  const core = new MC.Core({ config: cfg, Armless: UserArmless, agent: null, sessions: null, emit: (e, p) => events.push([e, p]) });
+  await core.boot('https://x/s');
+  core.run();
+  const vm = UserArmless.last;
+  const packed = await core.capture({ keepRunning: true });
+  assert.deepEqual(vm.calls.slice(-4), ['stop', 'state', 'process', 'run']);
+  assert.deepEqual(new Uint8Array(await packed.state.arrayBuffer()), new Uint8Array([1, 2]));
+  assert.deepEqual(new Uint8Array(await packed.process.arrayBuffer()), new Uint8Array([7, 7, 7]));
+
+  // The program's end and its going quiet are said as armless says them
+  vm.handlers.idle();
+  vm.handlers.stop({ reason: 'exit', code: 3 });
+  assert.deepEqual(events.filter(([e]) => e === 'idle' || e === 'stop'), [['idle', undefined], ['stop', { reason: 'exit', code: 3 }]]);
+
+  const again = new MC.Core({ config: cfg, Armless: UserArmless, agent: null });
+  await again.boot(packed.state, 'raw', packed.process);
+  assert.deepEqual(UserArmless.last.options.user_state, new Uint8Array([7, 7, 7]));
+  assert.ok(UserArmless.last.options.initial_state.startsWith('blob:'));
+
+  // Never the site's own process with a saved machine: they wouldn't match
+  const mismatched = new MC.Core({ config: cfg, Armless: UserArmless, agent: null });
+  await assert.rejects(mismatched.boot(packed.state), /no process/);
+  await assert.rejects(mismatched.boot(URL.createObjectURL(packed.state)), /no process/);
+  assert.equal(mismatched.vm, null);
+});
+
+test('with a kernel: no process is captured or passed', async () => {
+  class KernelArmless extends UserArmless { constructor(o) { super(o); this.user = false; } }
+  const core = new MC.Core({ config: { initial_state: 'https://x/s', filesystem: { json: 'f', baseurl: 'b' } }, Armless: KernelArmless, agent: null, sessions: null });
+  await core.boot('https://x/s');
+  assert.equal(KernelArmless.last.options.user_state, undefined);
+  const packed = await core.capture();
+  assert.equal(packed.process, undefined);
+  assert.ok(!KernelArmless.last.calls.includes('process'));
+});

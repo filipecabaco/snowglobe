@@ -75,7 +75,7 @@ pub fn main(args: &Args) -> Result<u8, String> {
     // A site with no kernel (snowglobe build --kernel none): the program runs on its own, nothing to boot
     let user = args.all("user");
     if !user.is_empty() {
-        return crate::user::snapshot(&system, &spec, ready.as_deref(), &user);
+        return crate::user::snapshot(args, &system, &spec, ready.as_deref(), &user);
     }
     let site = crate::site::Site::system(&system);
     let (mut vm, clock) = machine::new_vm(&spec, &site)?;

@@ -46,7 +46,7 @@ func TestResolveKernel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Kernel != "linux" || userArgv(s) != nil || Page(s, "test").NativeOnly {
+	if s.Kernel != "linux" || userProgram(s) != nil || Page(s, "test").User {
 		t.Errorf("a site has a kernel unless asked otherwise: %+v", s)
 	}
 
@@ -57,18 +57,18 @@ func TestResolveKernel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Kernel != "none" || !slices.Equal(userArgv(s), []string{"/probe", "hold", "a b"}) || s.BuildCPUs != 1 {
+	if s.Kernel != "none" || !slices.Equal(userProgram(s).Argv, []string{"/probe", "hold", "a b"}) || s.BuildCPUs != 1 {
 		t.Errorf("the label: %+v", s)
 	}
-	if !Page(s, "test").NativeOnly {
-		t.Error("a page with no kernel says it runs natively")
+	if !Page(s, "test").User {
+		t.Error("a page with no kernel restores its program's process (user mode)")
 	}
 	s, err = Resolve(Options{Kernel: "none", Cmd: "/app serve --port 1"}, image(nil, "sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(userArgv(s), []string{"/app", "serve", "--port", "1"}) {
-		t.Errorf("--cmd is split into words: %q", userArgv(s))
+	if !slices.Equal(userProgram(s).Argv, []string{"/app", "serve", "--port", "1"}) {
+		t.Errorf("--cmd is split into words: %q", userProgram(s).Argv)
 	}
 
 	// What a machine with no kernel can't do yet
@@ -82,5 +82,39 @@ func TestResolveKernel(t *testing.T) {
 		if _, err := Resolve(o, image(nil, "sh")); err == nil || !strings.Contains(err.Error(), "kernel") {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+func TestAProgramWithNoKernelHasTheImagesEnvironmentAndExercisesLeftOut(t *testing.T) {
+	img := image(map[string]string{"snowglobe.kernel": "none", "snowglobe.exercise": `["print(1)", "2 + 2"]`}, "python3")
+	img.Config.Env = []string{"PATH=/opt/venv/bin:/usr/bin", "LANG=C.UTF-8"}
+	img.Config.WorkingDir = "/root"
+	s, err := Resolve(Options{}, img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := userProgram(s)
+	if !slices.Equal(u.Env, img.Config.Env) || u.Cwd != "/root" || !slices.Equal(u.Argv, []string{"python3"}) {
+		t.Errorf("the image's program, environment and working directory: %+v", u)
+	}
+	if len(s.Exercise) != 0 || s.SkippedExercises != 2 {
+		t.Errorf("the image's exercises are left out, and counted: %v %d", s.Exercise, s.SkippedExercises)
+	}
+	if _, err := Resolve(Options{Exercise: []string{"x"}}, img); err == nil {
+		t.Error("an exercise asked for with --exercise is refused")
+	}
+}
+
+func TestAnImagesAgentLabelIsLeftOutWithNoKernel(t *testing.T) {
+	labels := map[string]string{"snowglobe.kernel": "none", "snowglobe.agent": "true", "snowglobe.agent-exposed-to": `["https://agent.example"]`}
+	s, err := Resolve(Options{}, image(labels, "duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Agent || s.AgentExposedTo != nil || !s.SkippedAgent {
+		t.Errorf("the label is left out, and said so: %+v", s)
+	}
+	if _, err := Resolve(Options{Agent: true}, image(labels, "duckdb")); err == nil {
+		t.Error("--agent is refused")
 	}
 }
