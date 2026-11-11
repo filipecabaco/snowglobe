@@ -395,6 +395,7 @@ test('plan: the repository example links a viewer to a Supabase database over tw
   // The scripts in the file are what the machines run
   // The database step: wait for Postgres, the table, Realtime, the loop, each a command of its own
   assert.equal(byKey['snapshot/db'].run.length, 4);
+  assert.deepEqual(byKey['snapshot/db'].runTimeoutsMs, [120000, 90000, 90000, 30000], 'each with a time limit of its own');
   assert.match(byKey['snapshot/db'].run[0], /until psql/);
   assert.match(byKey['snapshot/db'].run[1], /create table if not exists public\.ticks/);
   assert.match(byKey['snapshot/db'].run[2], /alter publication supabase_realtime add table public\.ticks/);
