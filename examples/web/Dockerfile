@@ -22,6 +22,12 @@ COPY app/src ./src
 RUN mkdir -p supabase/migrations
 # npm install at run time goes through serve's registry relay (start.sh): in the browser the
 # registry is reached as the page's own fetch(), and only a request with no npm headers passes CORS
+RUN printf '%s\n' 'registry=http://127.0.0.1:4874/' 'fund=false' 'audit=false' 'update-notifier=false' 'prefer-offline=true' > /root/.npmrc
+# The app builds (checked here; the machine builds it again at boot)
+RUN npx vite build --logLevel warn && rm -rf dist
+COPY --chmod=755 serve.mjs /usr/local/bin/serve
+COPY --chmod=755 start.sh /usr/local/bin/web-demo
+
 ENV LANG=C.UTF-8 PATH=/root/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PS1='\w $ '
 CMD ["/usr/local/bin/web-demo"]
 
