@@ -41,11 +41,25 @@ until psql -tA "$DB_URL" -c 'select 1' >/dev/null 2>&1; do
   sleep 1
 done
 echo "postgres answered after ${n}s"
-psql -q "$DB_URL" <<'SQL'
-create table if not exists public.ticks (id bigserial primary key, v numeric not null, at timestamptz not null default now());
-grant select on public.ticks to anon, authenticated;
-alter publication supabase_realtime add table public.ticks;
-SQL
+  ''',
+# Each statement a command of its own, so a slow or stuck one is named in the log. lock_timeout: a
+# statement waiting on another's lock (Realtime's, say) fails after 60s and says so, rather than
+# using up the whole step
+'''
+. /home/supa/.stack-env
+PGOPTIONS='-c lock_timeout=60s' psql -q -v ON_ERROR_STOP=1 "$DB_URL" \
+  -c 'create table if not exists public.ticks (id bigserial primary key, v numeric not null, at timestamptz not null default now())' \
+  -c 'grant select on public.ticks to anon, authenticated' && echo "table ready"
+  ''',
+'''
+. /home/supa/.stack-env
+# Realtime streams the table's inserts. Added once: a second run of this step finds it there already
+if psql -tA "$DB_URL" -c "select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'ticks'" | grep -q 1; then
+  echo "already published to Realtime"
+else
+  PGOPTIONS='-c lock_timeout=60s' psql -q -v ON_ERROR_STOP=1 "$DB_URL" -c 'alter publication supabase_realtime add table public.ticks' &&
+    echo "published to Realtime"
+fi
   ''',
 '''
 . /home/supa/.stack-env; (while true; do psql -q "$DB_URL" -c "insert into public.ticks (v) values (round((random() * 10 + 100)::numeric, 2))"; sleep 1; done >/dev/null 2>&1 &)
