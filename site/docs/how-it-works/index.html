@@ -54,8 +54,8 @@
             <li><strong>Machines.</strong> Natively, the snapshot's memory becomes an image the host maps
               copy-on-write into every instance, and a template restores once and forks a machine per command, per
               <code>snowglobe up</code> or per service replica, each sharing what it doesn't write.</li>
-            <li><strong>Warm pack.</strong> The files read while booting and exercising are bundled into one download
-              the page fetches in the background.</li>
+            <li><strong>Warm pack.</strong> The files a restored machine reads (left to settle, then exercised) are
+              bundled into one download, in the order it first read them, which the page streams in the background.</li>
           </ol>
 
           <h2 class="h3" id="troubleshooting">When a build goes wrong</h2>

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/filipecabaco/snowglobe/internal/rootfs"
 )
@@ -27,21 +26,21 @@ func Warm(site string, readsFiles []string) (WarmStats, error) {
 		blobs = filepath.Join(filepath.Dir(site), "blobs")
 	}
 
+	// Each file once, in the order the runs first read it: the pack streams them so
 	recorded := map[string]bool{}
+	var names []string
 	for _, f := range readsFiles {
 		r, err := rootfs.ReadReads(f)
 		if err != nil {
 			return WarmStats{}, err
 		}
-		for name := range r.All() {
-			recorded[name] = true
+		for _, name := range r.All() {
+			if !recorded[name] {
+				recorded[name] = true
+				names = append(names, name)
+			}
 		}
 	}
-	names := make([]string, 0, len(recorded))
-	for name := range recorded {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 
 	added, files, bytes, err := rootfs.ExtendWarmPack(system, blobs, names)
 	if err != nil {

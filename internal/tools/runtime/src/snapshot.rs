@@ -5,9 +5,11 @@
 //! - state.bin.zst  the snapshot (zstd)
 //! - console.bin    the app's console output so far, which the page replays into the terminal
 //! - run-meta.json  boot time and sizes
-//! - reads.json     every file the guest fetched while booting, and while running each
-//!   --exercise command typed in after the snapshot (with the file cache emptied, as a
-//!   visitor's tab starts): what a visitor would otherwise wait on the network for
+//! - reads.json     every file the guest fetched while booting; then, from the snapshot on (with
+//!   the file cache emptied, as a visitor's tab starts), while it settled and while it ran each
+//!   --exercise command typed in: what a restored machine reads, what a visitor would otherwise
+//!   wait on the network for. Each list in the order the guest first fetched its files, which is
+//!   the order the warm pack streams them in
 //! - transcript.json  what each exercise command printed
 //!
 //! The serial port (ttyS0) carries boot logs and a root shell used for housekeeping; the app
@@ -17,7 +19,7 @@
 //! as fast as a many-CPU one. Before the snapshot the guest takes the extra CPUs offline and
 //! the snapshot keeps only the first --cpus; the exercises then run on those alone.
 
-use std::collections::{BTreeMap, BTreeSet};
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -26,7 +28,7 @@ use armless::runner::Runner;
 use armless::vm::BootError;
 use serde_json::json;
 
-use crate::machine::{self, Activity, Spec};
+use crate::machine::{self, Activity, Reads, Spec};
 use crate::text;
 use crate::Args;
 
@@ -42,6 +44,11 @@ const QUIET: Duration = Duration::from_secs(5);
 /// long (or after the cap): a runtime can go quiet while it loads modules.
 const EXERCISE_QUIET: Duration = Duration::from_millis(2500);
 const EXERCISE_CAP: Duration = Duration::from_secs(180);
+/// After the snapshot, before the first exercise, the machine runs on its own as a restored one
+/// does until the visitor types: what it fetches then (its services waking, timers firing) is
+/// recorded until it has been quiet this long, or for at most SETTLE_CAP.
+const SETTLE_QUIET: Duration = Duration::from_millis(2500);
+const SETTLE_CAP: Duration = Duration::from_secs(10);
 /// Sooner, once it has printed its app's prompt again (the screen's last line before it was
 /// typed) and been quiet this long: what a REPL or shell prints when a command is done. An app
 /// whose prompt changes (`iex(2)>`) waits for EXERCISE_QUIET.
@@ -99,7 +106,7 @@ pub fn main(args: &Args) -> Result<u8, String> {
     }
 
     let activity = Activity::new(true);
-    *activity.reads.lock().unwrap() = Some(BTreeSet::new());
+    *activity.reads.lock().unwrap() = Some(Reads::new());
     let board = vm.board.clone();
     let _host = machine::host(&board, &site, &spec.network, machine::Net::from_args(args, None)?, &activity);
     let mut runner = Runner::new(vm, clock, false);
@@ -157,7 +164,7 @@ pub fn main(args: &Args) -> Result<u8, String> {
     // keeps its page cache (the files it read stay read).
     let sandbox = args.has("sandbox");
     let mut transcript = Vec::new();
-    let mut exercise_reads = BTreeMap::new();
+    let mut exercise_reads = Vec::new();
     if sandbox {
         exercise(&board, &runner, &activity, &exercises, &mut transcript, &mut exercise_reads);
     } else {
@@ -191,18 +198,17 @@ pub fn main(args: &Args) -> Result<u8, String> {
     // What the JIT compiled up to the snapshot: the profile with --sandbox, or if there are no
     // exercises to take one from
     let saved_profile = runner.jit_profile();
+    let mut restore_reads = Vec::new();
     if !sandbox {
         // A restore starts with no compiled code: start the exercises the same way, so that what
         // the JIT compiles for them is what a restored machine needs first. Typed in from a cold
         // file cache, as a visitor's tab starts
         runner.jit_flush();
         board.forget_blobs();
+        restore_reads = settle(&runner, &activity);
         exercise(&board, &runner, &activity, &exercises, &mut transcript, &mut exercise_reads);
     }
-    write_json(
-        &system.join("reads.json"),
-        &json!({ "boot": boot_reads.into_iter().collect::<Vec<_>>(), "exercise": exercise_reads }),
-    )?;
+    write_json(&system.join("reads.json"), &reads_json(boot_reads.into_vec(), restore_reads, &exercise_reads))?;
     write_json(&system.join("transcript.json"), &serde_json::Value::Array(transcript))?;
     // The code a run compiles at once after its restore (`run`), instead of interpreting it until
     // it gets hot: guest physical addresses, so the same for every host
@@ -344,6 +350,52 @@ fn dump_cpus(runner: &Runner, cpus: usize) {
     }
 }
 
+/// reads.json: `boot`, `restore` (fetched while the machine settled after the snapshot) and
+/// `exercises` ([{command, reads}], in the order typed, a command typed twice twice), each list
+/// in first-fetched order; `exercise` is the same by command (a command typed twice: what either
+/// time fetched), for older readers.
+fn reads_json(boot: Vec<String>, restore: Vec<String>, exercises: &[(String, Vec<String>)]) -> serde_json::Value {
+    let mut by_command: Vec<(String, Reads)> = Vec::new();
+    for (command, reads) in exercises {
+        match by_command.iter_mut().find(|(c, _)| c == command) {
+            Some((_, r)) => r.extend(reads.iter().cloned()),
+            None => {
+                let mut r = Reads::new();
+                r.extend(reads.iter().cloned());
+                by_command.push((command.clone(), r));
+            },
+        }
+    }
+    let exercise: serde_json::Map<String, serde_json::Value> =
+        by_command.into_iter().map(|(c, r)| (c, json!(r.into_vec()))).collect();
+    let ordered: Vec<serde_json::Value> =
+        exercises.iter().map(|(c, r)| json!({ "command": c, "reads": r })).collect();
+    json!({ "boot": boot, "restore": restore, "exercises": ordered, "exercise": exercise })
+}
+
+/// Let the restored machine run on its own a while, as a visitor's does before they type, and
+/// record what it fetches: done once it has fetched, printed and computed nothing for
+/// SETTLE_QUIET (an open request counts as busy), or after SETTLE_CAP.
+fn settle(runner: &Runner, activity: &std::sync::Arc<Activity>) -> Vec<String> {
+    *activity.reads.lock().unwrap() = Some(Reads::new());
+    activity.touch();
+    let begun = Instant::now();
+    let mut load = machine::Load::new(runner);
+    loop {
+        std::thread::sleep(Duration::from_millis(100));
+        if load.busy(runner) {
+            activity.touch();
+        }
+        let idle = if activity.connected() { Duration::ZERO } else { activity.idle_for() };
+        if idle >= SETTLE_QUIET || begun.elapsed() >= SETTLE_CAP {
+            break;
+        }
+    }
+    let reads = activity.reads.lock().unwrap().take().unwrap_or_default();
+    eprint!("\nSettled after the snapshot ({} files, {:.1}s)", reads.len(), begun.elapsed().as_secs_f64());
+    reads.into_vec()
+}
+
 pub(crate) fn write_json(path: &std::path::Path, v: &serde_json::Value) -> Result<(), String> {
     std::fs::write(path, serde_json::to_vec(v).unwrap()).map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -355,11 +407,11 @@ fn exercise(
     activity: &std::sync::Arc<Activity>,
     exercises: &[String],
     transcript: &mut Vec<serde_json::Value>,
-    exercise_reads: &mut BTreeMap<String, Vec<String>>,
+    exercise_reads: &mut Vec<(String, Vec<String>)>,
 ) {
     for command in exercises {
         let boot_reads = activity.reads.lock().unwrap().take();
-        *activity.reads.lock().unwrap() = Some(BTreeSet::new());
+        *activity.reads.lock().unwrap() = Some(Reads::new());
         let begun = Instant::now();
         let (from, prompt) = {
             let s = activity.screen.lock().unwrap();
@@ -393,7 +445,7 @@ fn exercise(
         eprint!(" ({} files, {:.1}s)", reads.len(), begun.elapsed().as_secs_f64());
         let output = String::from_utf8_lossy(activity.screen.lock().unwrap().since(from)).into_owned();
         transcript.push(json!({ "command": command, "output": output }));
-        exercise_reads.insert(command.clone(), reads.into_iter().collect::<Vec<_>>());
+        exercise_reads.push((command.clone(), reads.into_vec()));
     }
     if !exercises.is_empty() {
         eprintln!();
@@ -517,7 +569,7 @@ mod tests {
         let activity = Activity::new(false);
         activity.observe(&Event::Console(b"welcome\r\n~ $ ".to_vec()));
         app(board.clone(), activity.clone(), vec![("a", b"ls\r\nbin\r\n~ $ "), ("b", b"pwd\r\n/root\r\n~ $ ")]);
-        let (mut transcript, mut reads) = (Vec::new(), BTreeMap::new());
+        let (mut transcript, mut reads) = (Vec::new(), Vec::new());
         let begun = Instant::now();
         exercise(&board, &runner, &activity, &["ls".into(), "pwd".into()], &mut transcript, &mut reads);
         // Done at the prompt, not after the long quiet
@@ -526,8 +578,7 @@ mod tests {
             transcript,
             [json!({ "command": "ls", "output": "ls\r\nbin\r\n~ $ " }), json!({ "command": "pwd", "output": "pwd\r\n/root\r\n~ $ " })]
         );
-        assert_eq!(reads["ls"], ["a"]);
-        assert_eq!(reads["pwd"], ["b"]);
+        assert_eq!(reads, [("ls".to_string(), vec!["a".to_string()]), ("pwd".to_string(), vec!["b".to_string()])]);
         // After the snapshot nothing records reads but the exercises
         assert!(activity.reads.lock().unwrap().is_none());
     }
@@ -537,16 +588,61 @@ mod tests {
         let (board, runner) = testing::machine("snapshot-exercise-sandbox");
         let activity = Activity::new(false);
         activity.observe(&Event::Console(b"~ $ ".to_vec()));
-        *activity.reads.lock().unwrap() = Some(BTreeSet::from(["boot".to_string()]));
+        let mut boot = Reads::new();
+        boot.insert("boot".to_string());
+        *activity.reads.lock().unwrap() = Some(boot);
         app(board.clone(), activity.clone(), vec![("lib", b"x\r\n~ $ ")]);
-        let (mut transcript, mut reads) = (Vec::new(), BTreeMap::new());
+        let (mut transcript, mut reads) = (Vec::new(), Vec::new());
         exercise(&board, &runner, &activity, &["x".into()], &mut transcript, &mut reads);
-        assert_eq!(reads["x"], ["lib"]);
+        assert_eq!(reads, [("x".to_string(), vec!["lib".to_string()])]);
         let boot: Vec<String> = activity.reads.lock().unwrap().iter().flatten().cloned().collect();
         assert_eq!(boot, ["boot", "lib"]);
         // No exercises: nothing to do
         exercise(&board, &runner, &activity, &[], &mut transcript, &mut reads);
         assert_eq!(transcript.len(), 1);
+    }
+
+    #[test]
+    fn reads_json_keeps_first_fetched_order_and_every_exercise_in_turn() {
+        let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let exercises = vec![
+            ("ls".to_string(), v(&["z", "a"])),
+            ("pwd".to_string(), v(&["m"])),
+            ("ls".to_string(), v(&["b", "a"])),
+        ];
+        let doc = reads_json(v(&["k2", "k1"]), v(&["r"]), &exercises);
+        assert_eq!(
+            doc,
+            json!({
+                "boot": ["k2", "k1"],
+                "restore": ["r"],
+                "exercises": [
+                    { "command": "ls", "reads": ["z", "a"] },
+                    { "command": "pwd", "reads": ["m"] },
+                    { "command": "ls", "reads": ["b", "a"] },
+                ],
+                // By command, a command typed twice keeping what each time fetched
+                "exercise": { "ls": ["z", "a", "b"], "pwd": ["m"] },
+            })
+        );
+    }
+
+    #[test]
+    fn settling_records_what_the_machine_fetches_on_its_own_until_it_is_quiet() {
+        let (board, runner) = testing::machine("snapshot-settle");
+        let activity = Activity::new(false);
+        let a = activity.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            a.observe(&Event::Blob("wal".into()));
+            a.observe(&Event::Blob("stats".into()));
+            a.observe(&Event::Blob("wal".into()));
+        });
+        let begun = Instant::now();
+        assert_eq!(settle(&runner, &activity), ["wal", "stats"]);
+        assert!(begun.elapsed() >= SETTLE_QUIET && begun.elapsed() < SETTLE_CAP, "{:?}", begun.elapsed());
+        assert!(activity.reads.lock().unwrap().is_none(), "recording stops");
+        drop(board);
     }
 
     #[test]

@@ -68,17 +68,30 @@ LABEL snowglobe.title="Python in the browser" \
 
           <h2 class="h3" id="exercises">Exercises and the warm pack</h2>
           <p>The guest fetches its files on demand. To hide that wait, every site preloads a
-            <code>warm.pack</code> in the background. snowglobe fills it by measuring, not guessing:</p>
+            <code>warm.pack</code> in the background. snowglobe fills it by measuring, not guessing, with what a
+            restored machine reads, in the order it first reads it:</p>
           <ul>
-            <li><strong>Boot reads:</strong> every file the guest read while booting.</li>
-            <li><strong>Exercise reads:</strong> after the snapshot, snowglobe types each <code>--exercise</code>
+            <li><strong>Restore reads:</strong> the build drops the guest's file cache before the snapshot, as a
+              visitor's machine starts. After saving it, snowglobe lets the machine run on its own for a few
+              seconds and records what its services read.</li>
+            <li><strong>Exercise reads:</strong> then it types each <code>--exercise</code>
               command into the app and records what it reads. These are the files a visitor's first commands
               would otherwise wait for. A command is done once the app prints its prompt again and goes
               quiet.</li>
             <li><strong>Pattern:</strong> anything matching <code>--warm REGEX</code>, for files no exercise
-              touches.</li>
+              touches, after the rest.</li>
           </ul>
-          <p>Each build prints a breakdown and writes <code>warm-report.json</code>.</p>
+          <p>What only booting read stays out of the pack: the restored machine has it in memory already, or
+            never reads it again. A site with no exercises (or built with <code>--sandbox</code>) packs its boot
+            reads after the rest, the best guess there is.</p>
+          <p>The page reads the pack as it streams in, so the files the guest needs first arrive first. A read of a
+            file the pack brings soon waits for it; one far off (a visitor whose first command isn't the build's) is
+            fetched on its own, and the pack holds back while the guest waits on such fetches, so they have the
+            bandwidth. Files the machine's own cache lets go come again from the pack, or from the copy the page
+            keeps of files it fetched on their own, never from the network a second time.</p>
+          <p>Each build prints a breakdown and writes <code>warm-report.json</code>: what the restored machine read
+            settling, what each exercise read first, what only booting read, the pattern's files and the files
+            never read.</p>
           <p>An app used over the network, not through its console, can be warmed from real traffic instead.
             Record its reads while something talks to it, then add them to the pack:</p>
           <pre>snowglobe run dist --name api --detach -p 5000:5000 --record-reads api-reads.json

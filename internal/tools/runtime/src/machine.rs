@@ -1,6 +1,6 @@
 //! The machine a site runs on, and what it is doing (for "is it quiet yet?").
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -132,8 +132,8 @@ pub struct Activity {
     /// Tunnelled destinations: their connections (a database pool, a LISTEN) stay open while
     /// the app idles, so only their traffic counts as activity
     tunnels: Mutex<Vec<Tunnel>>,
-    /// Files fetched in the current phase, when recording
-    pub reads: Mutex<Option<BTreeSet<String>>>,
+    /// Files fetched in the current phase, when recording, in the order first fetched
+    pub reads: Mutex<Option<Reads>>,
     watchers: Mutex<Vec<Watcher>>,
     pub echo_serial: bool,
     /// The serial shell may still be running a job that never ended (`job`)
@@ -141,6 +141,62 @@ pub struct Activity {
 }
 
 const SCREEN_MAX: usize = 1 << 20;
+
+/// The files a phase fetched, each once, in the order the guest first fetched them: the order a
+/// warm pack built from them streams in.
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct Reads {
+    order: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl Reads {
+    pub fn new() -> Reads {
+        Reads::default()
+    }
+
+    /// Note a file read; false if it was already.
+    pub fn insert(&mut self, name: String) -> bool {
+        if self.seen.contains(&name) {
+            return false;
+        }
+        self.seen.insert(name.clone());
+        self.order.push(name);
+        true
+    }
+
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, String> {
+        self.order.iter()
+    }
+
+    pub fn into_vec(self) -> Vec<String> {
+        self.order
+    }
+}
+
+impl Extend<String> for Reads {
+    fn extend<I: IntoIterator<Item = String>>(&mut self, names: I) {
+        for n in names {
+            self.insert(n);
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Reads {
+    type Item = &'a String;
+    type IntoIter = std::slice::Iter<'a, String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.order.iter()
+    }
+}
 
 impl Activity {
     pub fn new(echo_serial: bool) -> Arc<Activity> {
@@ -518,12 +574,13 @@ mod tests {
     fn files_fetched_are_recorded_only_when_asked() {
         let a = Activity::new(false);
         a.observe(&Event::Blob("before".into()));
-        *a.reads.lock().unwrap() = Some(BTreeSet::new());
+        *a.reads.lock().unwrap() = Some(Reads::new());
         a.observe(&Event::Blob("b".into()));
         a.observe(&Event::Blob("a".into()));
-        a.observe(&Event::Blob("a".into()));
+        a.observe(&Event::Blob("b".into()));
+        // Each once, in the order first fetched
         let reads: Vec<String> = a.reads.lock().unwrap().iter().flatten().cloned().collect();
-        assert_eq!(reads, ["a", "b"]);
+        assert_eq!(reads, ["b", "a"]);
     }
 
     #[test]
