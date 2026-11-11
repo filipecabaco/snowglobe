@@ -1,5 +1,7 @@
 # Supabase: the Supabase CLI's native local stack (Postgres, PostgREST, Auth and Realtime as plain
 # processes, no Docker) running inside the guest, with the API answering curl in the same shell.
+# The CLI sets the stack up here, at build time; the guest's start (start.sh) then launches the
+# same services the way the CLI did, without the CLI (capture.sh says how).
 #
 # The stack's service builds are glibc programs (2.39 or newer) and this guest is Alpine (musl),
 # so Debian's glibc comes along under /usr/glibc with a loader cache of its own: glibc programs
@@ -24,9 +26,9 @@ COPY --from=glibc /out/etc/ld.so.cache /etc/ld.so.cache
 RUN ln -s /usr/glibc/lib/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1 && \
     ln -s /bin/sh /usr/bin/sh
 
-# What the stack's scripts need, and the C++ runtime the CLI (Bun) links against
-# socat carries the API from the machine's network address to the stack (start.sh)
-RUN apk add --no-cache bash tar curl jq postgresql-client libstdc++ libgcc socat && \
+# What the stack's scripts need, and the C++ runtime the CLI (Bun) links against. nginx is the
+# API gateway in the guest, in place of the CLI's (capture.sh)
+RUN apk add --no-cache bash tar curl jq postgresql-client libstdc++ libgcc nginx && \
     ln -sf /bin/bash /usr/bin/bash
 
 # The Supabase CLI: its linux-arm64-musl build, a single Bun-compiled binary, straight from npm's
@@ -43,8 +45,8 @@ RUN adduser -D -s /bin/bash supa
 USER supa
 WORKDIR /home/supa/app
 ENV SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 SUPABASE_NO_UPDATE_NOTIFIER=1
-# The CLI saves this with the stack, and refuses a start asking for another: the first start (below)
-# and the guest's (start.sh) must agree. Long, for a slow build machine's emulated start
+# The CLI saves this with the stack, and refuses a start asking for another: the starts below (and
+# any supabase stack start in the guest) must agree. Long, for a slow build machine
 ENV SUPABASE_DB_HEALTH_TIMEOUT=15m
 # bash runs the steps below as PID 1, so that it reaps the stack's stopped services (BusyBox sh
 # doesn't, and the CLI won't call a stack stopped while its processes linger as zombies)
@@ -57,10 +59,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # their geometry libraries, PL/Perl, PGroonga, and the charset converters for iconv. 390 MB
 # becomes 118. In the same step, so that the image never carries them.
 # Realtime boots in interactive mode, loading its modules as they are first called rather than all
-# of them up front: half the CPU to its listener (0.8 s natively becomes 0.4). The CLI gives a
-# service 60 seconds from launch to bind its listener (fixed, no setting), and on a slow CI runner
-# the guest's boot of the embedded release ran out of it on every attempt. The CLI passes its
-# services none of its own environment and doesn't set RELEASE_MODE; the launcher reads this file.
+# of them up front: half the CPU to its listener (0.8 s natively becomes 0.4), which counts in the
+# guest's emulated boot. The CLI passes its services none of its own environment and doesn't set
+# RELEASE_MODE; the launcher reads this file (and so does start.sh's launch of it).
 RUN supabase init --yes >/dev/null && \
     CI=1 supabase stack start --runtime native --eager --preparation on-demand \
       -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null >/dev/null && \
@@ -90,17 +91,25 @@ COPY --chown=supa app/notes.ts ./
 COPY --chown=supa app/supabase/migrations supabase/migrations
 # The stack's first start (initdb, then the migrations) here, at native speed, and stopped with its
 # data kept: the guest's boot only starts it again, rather than spending most of a minute
-# emulating initdb. The flags are start.sh's: Postgres, PostgREST, Auth and Realtime.
+# emulating initdb. Postgres, PostgREST, Auth and Realtime; while they're up, capture.sh writes
+# down how the CLI launched each one, and the gateway's config, for start.sh to launch them the
+# same way with no CLI running.
+COPY --chown=supa --chmod=755 capture.sh /home/supa/capture.sh
 RUN CI=1 supabase stack start --runtime native --eager --preparation on-demand \
       -x storage -x functions -x studio -x mail -x analytics -x pooler </dev/null && \
-    supabase stack stop </dev/null
+    ~/capture.sh && \
+    supabase stack stop </dev/null && \
+    rm ~/capture.sh
 SHELL ["/bin/sh", "-c"]
 
 USER root
 COPY --chmod=755 start.sh /usr/local/bin/supabase-demo
 # Every login shell (an agent's commands too, as root) gets the stack's variables (API_URL, DB_URL,
-# ANON_KEY, ...), which start.sh writes once the stack is up
-RUN printf '%s\n' '# The local Supabase stack: API_URL, DB_URL, ANON_KEY, ... (written by supabase-demo)' \
+# ANON_KEY, ...), which capture.sh wrote above. The CLI didn't start this stack, so supabase status
+# calls it unavailable; it isn't (and supabase stack start only finds its ports taken).
+RUN printf '%s\n' '# The local Supabase stack: API_URL, DB_URL, ANON_KEY, ... (written at build time by capture.sh)' \
+      '# supabase-demo started it without the Supabase CLI, so supabase status says unavailable: these' \
+      '# variables, curl "$API_URL/auth/v1/health" and psql "$DB_URL" say how it is (logs in ~supa/stack/logs)' \
       '[ -r /home/supa/.stack-env ] && . /home/supa/.stack-env' > /etc/profile.d/supabase.sh
 RUN printf '#!/bin/sh\n# notes on the Bun inside the Supabase CLI\nBUN_BE_BUN=1 exec supabase run /home/supa/app/notes.ts "$@"\n' > /usr/local/bin/notes && \
     chmod 755 /usr/local/bin/notes
@@ -112,8 +121,8 @@ CMD ["/usr/local/bin/supabase-demo"]
 # agent page's machines (/agent/ on the demo site), where agents build apps on it. 448 MB: the
 # guest's RAM counts in the browser tab whether the stack uses it or not, and an iPhone gives a tab
 # little. 384 MB was tried: the guest's OOM killer took out Realtime during boot and the first
-# exercise. The stack (Realtime's BEAM is the biggest part, and the CLI keeps a Bun process per
-# service) leaves room for the programs' pages and a couple of notes runs at once
+# exercise. The stack (Realtime's BEAM is the biggest part) leaves room for the programs' pages and
+# a couple of notes runs at once
 LABEL snowglobe.title="Supabase in the browser" \
       snowglobe.memory="448" snowglobe.cpus="2" \
       snowglobe.network="fetch" \
