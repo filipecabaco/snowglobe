@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Build and host an existing local app in a Linux machine running in your browser.">
+  <title>App Host · Snowglobe</title>
+  <script>try{const theme=localStorage.getItem('snowglobe-theme');if(theme==='dark'||theme==='light')document.documentElement.dataset.theme=theme;}catch{}</script>
+  <link rel="stylesheet" href="../base.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="../theme.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="../"><span class="brand-mark" aria-hidden="true">❄</span> snowglobe <span class="brand-divider">/</span> <span class="brand-section">app host</span></a>
+    <div class="tabs" role="tablist" aria-label="App Host views">
+      <button id="tab-build" type="button" role="tab" aria-selected="true" aria-controls="panel-build" tabindex="0">Build</button>
+      <button id="tab-preview" type="button" role="tab" aria-selected="false" aria-controls="panel-preview" tabindex="-1">Preview <span id="preview-dot" class="preview-dot" hidden aria-label="App deployed"></span></button>
+    </div>
+    <div class="header-end"><span class="browser-label"><span class="status-dot"></span> Runs in your browser</span><button class="theme" id="theme-toggle" type="button" aria-label="Switch to dark theme">Dark</button></div>
+  </header>
+
+  <main id="panel-build" class="build-panel" role="tabpanel" aria-labelledby="tab-build">
+    <section class="intro"><div><p class="eyebrow">LOCAL SOURCE. BROWSER HOSTED.</p><h1>Bring your app.<br>We’ll give it a home.</h1><p class="intro-copy">Share a folder, choose an environment, and run your existing app in a browser-based Linux machine.</p></div><div class="intro-note"><span aria-hidden="true">↗</span><p>Your files stay yours.<br>Builds run on your device.</p></div></section>
+
+    <p id="app-status" class="app-status" role="status" aria-live="polite">Loading App Host…</p>
+    <p id="app-error" class="app-error" role="alert" hidden></p>
+    <div class="workspace">
+      <div class="setup-column">
+        <section class="setup-card" aria-labelledby="folder-title">
+          <div class="section-heading"><span class="step-number">01</span><h2 id="folder-title">Share your app folder</h2><span id="folder-badge" class="small-label">SOURCE</span></div>
+          <div id="folder-empty" class="folder-empty"><svg viewBox="0 0 48 40" width="48" height="40" fill="none" aria-hidden="true"><path d="M3 11V5h15l5 6h22v25H3V11Z" stroke="currentColor" stroke-width="1.5"/><path d="M3 13h42" stroke="currentColor" stroke-width="1.5"/><path d="M24 20v10m-5-5h10" stroke="currentColor" stroke-width="1.5"/></svg><p>The project you already have.<br><span>Select the folder containing your app’s source.</span></p></div>
+          <div id="folder-selected" class="folder-selected" hidden><strong id="folder-name"></strong><p id="folder-meta"></p><details><summary>Shared files</summary><ul id="file-list" class="file-list"></ul></details></div>
+          <div class="folder-actions"><button id="choose-folder" class="choose-button" type="button" disabled>Choose local folder <span aria-hidden="true">↗</span></button><button id="refresh-folder" type="button" hidden>Refresh files</button></div>
+          <p class="hint">Read-only sharing. Local files are never changed. Dependencies, build output, Git data, and credential files such as <code>.env</code> are excluded.</p>
+        </section>
+
+        <section class="setup-card" aria-labelledby="environment-title">
+          <div class="section-heading"><span class="step-number">02</span><h2 id="environment-title">Set up the environment</h2><span id="detection-badge" class="small-label">AUTO DETECT</span></div>
+          <label for="environment">Environment</label><select id="environment"><option value="auto">Detect from my app</option></select>
+          <p id="detection-detail" class="detection-detail">We’ll look at package.json and your project files.</p>
+          <div id="environment-info" class="environment-info" hidden><strong id="environment-name"></strong><p id="environment-description"></p><div class="environment-specs"><span>Alpine Linux · ARM64</span><span id="runtime-spec">Node.js + npm</span></div></div>
+          <details id="build-settings"><summary>Build settings</summary><div class="settings-fields"><label for="build-script">npm script<input id="build-script" value="build" placeholder="build" autocomplete="off" spellcheck="false" maxlength="80"></label><label for="output-folder">Output folder<input id="output-folder" value="dist" placeholder="dist" autocomplete="off" spellcheck="false" maxlength="512"></label></div><p class="hint">Output is relative to the shared folder. Use <code>.</code> to serve the folder itself. The output must contain <code>index.html</code>.</p></details>
+          <p class="hint">Frontend apps and static sites are supported. Next.js, server rendering, workspace installs, and private registries will need additional environments. First-time installs can take several minutes.</p>
+        </section>
+
+        <section class="deploy-card" aria-labelledby="deploy-title"><div class="section-heading"><span class="step-number">03</span><h2 id="deploy-title">Make it live</h2></div><p>A fresh copy of your folder, built inside Snowglobe.</p><div class="deploy-actions"><button id="deploy" class="deploy-button" type="button" disabled>Build & deploy <span aria-hidden="true">→</span></button><button id="cancel-build" type="button" hidden>Cancel build</button></div><p id="deployment-status" class="hint">Your app will appear in Preview when it’s ready.</p></section>
+      </div>
+
+      <section class="logs-card" aria-labelledby="logs-title"><div class="logs-heading"><div><span class="terminal-symbol" aria-hidden="true">›_</span><h2 id="logs-title">Build logs</h2></div><div><span id="log-state" class="log-state">WAITING</span><button id="download-logs" class="icon-button" type="button" aria-label="Download build logs" title="Download build logs" disabled>↓</button></div></div><ol id="build-stages" class="build-stages" aria-label="Build progress"><li data-stage="prepare">Prepare environment</li><li data-stage="copy">Share source</li><li data-stage="install">Install dependencies</li><li data-stage="build">Build application</li><li data-stage="deploy">Deploy preview</li></ol><div class="log-body"><div id="logs-empty" class="logs-empty"><span aria-hidden="true">›_</span><p>A little quiet, for now.</p><small>Your build output will stream here.</small></div><pre id="build-log" aria-label="Build output" tabindex="0"></pre></div><div class="logs-footer"><span id="build-activity">Ready when you are</span><span id="build-elapsed"></span></div></section>
+    </div>
+    <footer class="app-footer"><span>One folder. One small world.</span><span>Keep this tab open while building and previewing.</span></footer>
+  </main>
+
+  <section id="panel-preview" class="preview-panel" role="tabpanel" aria-labelledby="tab-preview" hidden>
+    <div class="preview-toolbar"><div><span class="status-dot" id="preview-status-dot"></span><strong id="preview-name">Application preview</strong><span id="preview-location">No deployment yet</span></div><div><button id="reload-preview" type="button" disabled>↻ <span>Reload</span></button><button id="fullscreen-preview" type="button" disabled>⤢ <span>Full screen</span></button></div></div>
+    <div id="preview-empty" class="preview-empty"><span aria-hidden="true">↗</span><h2>A home for your app.</h2><p>Choose a local folder and build your app to see it here.</p><button id="back-to-build" type="button">Go to Build →</button></div>
+    <iframe id="app-frame" title="Hosted application" hidden referrerpolicy="same-origin" allow="fullscreen"></iframe>
+  </section>
+
+  <script src="sessions.js"></script><script src="agent.js"></script><script src="transfer.js"></script><script src="ws-client.js"></script><script src="machine-core.js"></script><script src="machine-host.js"></script><script src="preview.js"></script>
+  <script type="module" src="app.mjs"></script>
+</body>
+</html>
