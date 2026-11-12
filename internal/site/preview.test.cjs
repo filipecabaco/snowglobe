@@ -157,7 +157,7 @@ test('serve: nothing listening is a clear 502; a server that never answers, a 50
 
 // ---------------------------------------------------------------- the service worker
 
-function loadWorker({ clients = [] } = {}) {
+function loadWorker({ clients = [], apphost = false } = {}) {
   const listeners = {};
   const posted = [];
   const fetched = [];
@@ -169,6 +169,7 @@ function loadWorker({ clients = [] } = {}) {
     clients: { claim: async () => {}, matchAll: async () => clients.map((c) => ({ ...c, postMessage: (msg, transfer) => { posted.push({ msg, transfer }); c.onmessage?.(msg, transfer); } })) },
     URL, Headers, Response, ReadableStream, MessageChannel, Uint8Array, setTimeout, clearTimeout, Promise, TextEncoder, TextDecoder, console,
     DecompressionStream, TransformStream, DOMException, AbortController, Date,
+    SNOWGLOBE_APPHOST: apphost,
     importScripts: (name) => vm.runInContext(fs.readFileSync(path.join(__dirname, name), 'utf8'), ctx),
     fetch: async (req) => { fetched.push(req); return new Response('page', { status: 200, headers: { 'Content-Type': 'text/html' } }); },
   });
@@ -215,6 +216,28 @@ test('service worker: a preview request goes to the agent page over a channel, a
   assert.equal(r.headers.get('Content-Type'), 'text/javascript');
   assert.equal(r.headers.get('X-Frame-Options'), 'SAMEORIGIN', 'framed by this site only');
   assert.equal(r.headers.get('Cross-Origin-Embedder-Policy'), 'require-corp', 'its frame is isolated as the page is');
+});
+
+test('App Host: root-relative fetches and dynamic assets stay in the owning preview', async () => {
+  const page = { id: 'host-page', url: scope, frameType: 'top-level', focused: true,
+    onmessage(msg, [port]) {
+      assert.equal(msg.request.path, '/data.json?version=2');
+      assert.equal(msg.request.runtime, 'web');
+      assert.equal(msg.request.port, 4180);
+      port.postMessage({ type: 'taken' });
+      port.postMessage({ type: 'head', status: 200, statusText: 'OK', headers: [['Content-Type', 'application/json']] });
+      port.postMessage({ type: 'data', bytes: enc('{"local":true}') });
+      port.postMessage({ type: 'end' });
+    } };
+  const { dispatch, fetched } = loadWorker({ apphost: true, clients: [page, {id:'app-frame',url:scope+'preview/web/4180/',frameType:'nested'}] });
+  const result = await dispatch(req('https://x.example/data.json?version=2'), {clientId:'app-frame'});
+  assert.equal(await result.text(), '{"local":true}');
+  assert.equal(fetched.length, 0);
+  const own = await dispatch(req(scope+'guest.mjs'), {clientId:'host-page'});
+  assert.equal(await own.text(), 'page', 'the host still gets its build helpers from the network');
+  assert.equal(fetched.length, 1);
+  assert.equal(await dispatch(req(scope+'preview-hook.js', {destination:'script'}), {clientId:'app-frame'}), null,
+    'the injected preview hook still comes from the site, rather than the app VM');
 });
 
 test('service worker: nothing runs from an address alone', async () => {

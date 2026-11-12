@@ -294,5 +294,20 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(preview(event, route));
     return;
   }
+  // App Host runs existing sites which may fetch('/data.json') or create an image with a
+  // root-relative src. Keep those requests in their own VM, just as rewritten HTML assets are.
+  // This is opt-in for App Host. The hosting page's own requests still use the network.
+  const previewHook = url.pathname === scope.pathname + "preview-hook.js";
+  if (self.SNOWGLOBE_APPHOST && event.clientId && request.mode !== "navigate" && !previewHook) {
+    event.respondWith((async () => {
+      const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const client = all.find((c) => c.id === event.clientId && c.frameType === "nested");
+      const from = client ? P.route(client.url, scope) : null;
+      if (from && !from.error) return preview(event, { ...from, path: url.pathname + url.search });
+      const response = await fetch(request);
+      return request.destination === "worker" ? isolate(response) : response;
+    })());
+    return;
+  }
   if (request.mode === "navigate" || request.destination === "worker") event.respondWith(fetch(request).then(isolate));
 });

@@ -24,6 +24,9 @@ const AgentDir = "agent"
 // machine's worker and the service worker are loaded from the page's own directory
 const FleetDir = "fleet"
 
+// AppHostDir hosts a user's local frontend in a browser VM, using the same runtime catalog.
+const AppHostDir = "apphost"
+
 // RuntimesFile is the agent page's list of its machines, written when the site is assembled
 const RuntimesFile = "runtimes.json"
 
@@ -80,6 +83,17 @@ func FleetScripts() map[string][]byte {
 	files := AgentScripts()
 	files["fleet.js"], files["fleet-page.js"] = fleetJS, fleetPageJS
 	return files
+}
+
+// AppHostScripts are the VM and HTTP preview transports; the app itself lives in site/apphost/.
+func AppHostScripts() map[string][]byte {
+	return map[string][]byte{
+		"sessions.js": sessionsJS, "agent.js": agentJS, "transfer.js": transferJS,
+		"ws-client.js": wsClientJS, "machine-core.js": machineCoreJS,
+		"machine-host.js": machineHostJS, "machine-worker.js": machineWorkerJS,
+		"preview.js": previewJS, "preview-hook.js": previewHookJS,
+		"sw.js": append([]byte("self.SNOWGLOBE_APPHOST = true;\n"), agentSW...),
+	}
 }
 
 // AgentScripts are the files WriteAgentPage puts in the agent page's directory, by name
@@ -154,7 +168,8 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 	}
 	agentRoot := filepath.Join(root, AgentDir)
 	fleetRoot := filepath.Join(root, FleetDir)
-	for _, dir := range []string{agentRoot, fleetRoot} {
+	appHostRoot := filepath.Join(root, AppHostDir)
+	for _, dir := range []string{agentRoot, fleetRoot, appHostRoot} {
 		if err := notALink(dir); err != nil {
 			return nil, err
 		}
@@ -172,9 +187,9 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 	armlessFrom := map[string]string{}
 	for _, e := range entries {
 		dir := filepath.Join(root, e.Name())
-		if e.Name() == AgentDir || e.Name() == FleetDir {
+		if e.Name() == AgentDir || e.Name() == FleetDir || e.Name() == AppHostDir {
 			if isSite(dir) {
-				return nil, fmt.Errorf("%s: a site named %q would be hidden by the agent and fleet pages", dir, e.Name())
+				return nil, fmt.Errorf("%s: a site named %q would be hidden by an application page", dir, e.Name())
 			}
 			continue
 		}
@@ -344,6 +359,16 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 	fleetFiles[RuntimesFile] = files[RuntimesFile]
 	for name, b := range fleetFiles {
 		if err := writeFile(filepath.Join(fleetRoot, name), b); err != nil {
+			return nil, err
+		}
+	}
+	if err := os.MkdirAll(appHostRoot, 0o755); err != nil {
+		return nil, err
+	}
+	appHostFiles := AppHostScripts()
+	appHostFiles[RuntimesFile] = files[RuntimesFile]
+	for name, b := range appHostFiles {
+		if err := writeFile(filepath.Join(appHostRoot, name), b); err != nil {
 			return nil, err
 		}
 	}

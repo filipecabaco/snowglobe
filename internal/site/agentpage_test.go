@@ -163,6 +163,16 @@ func TestWriteAgentPage(t *testing.T) {
 	if string(fleetRuntimes) != string(data) {
 		t.Errorf("fleet/runtimes.json differs from agent/runtimes.json")
 	}
+	for name, want := range AppHostScripts() {
+		got, err := os.ReadFile(filepath.Join(root, AppHostDir, name))
+		if err != nil || string(got) != string(want) {
+			t.Errorf("apphost/%s not written as embedded: %v", name, err)
+		}
+	}
+	appHostRuntimes, _ := os.ReadFile(filepath.Join(root, AppHostDir, RuntimesFile))
+	if string(appHostRuntimes) != string(data) {
+		t.Errorf("apphost/runtimes.json differs from agent/runtimes.json")
+	}
 	// The old addresses go to the page, preselecting
 	stub, _ := os.ReadFile(filepath.Join(root, AgentDir, "python", "index.html"))
 	if !strings.Contains(string(stub), `url=../?runtime=python`) || !strings.Contains(string(stub), `location.replace("../?runtime=python" + location.hash)`) {
@@ -262,7 +272,7 @@ func TestWriteAgentPageRefuses(t *testing.T) {
 			t.Error("a refusal wrote something")
 		}
 	})
-	for _, dir := range []string{AgentDir, FleetDir} {
+	for _, dir := range []string{AgentDir, FleetDir, AppHostDir} {
 		t.Run("a site named "+dir, func(t *testing.T) {
 			root := t.TempDir()
 			fakeSite(t, root, dir, agentRun("A", 1), "x")

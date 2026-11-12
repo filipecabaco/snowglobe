@@ -9,6 +9,9 @@ taken once your app was ready.
 - **Skip the local Docker setup.** The same image runs from the command line with nothing else installed.
 - **Give agents a safe place to work.** Machines are sandboxed and reach nothing unless you allow it.
 - **One format everywhere.** The same site and the same `snowglobe.toml` fleet file run in a tab, natively and hosted.
+- **Host an existing frontend in your browser.** [App Host](https://filipecabaco.github.io/snowglobe/apphost/)
+  shares a local folder, detects its setup, and builds and previews it in a browser VM. Start with
+  static sites, React, Svelte, and Vue frontends; see [supported setups and development](docs/development.md).
 
 The catch: guests are 64-bit ARM Alpine images, emulated by [armless](https://github.com/filipecabaco/armless)
 (ARM compiled to WebAssembly), so they run slower than native.
