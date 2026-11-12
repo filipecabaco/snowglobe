@@ -27,8 +27,9 @@ RUN ln -s /usr/glibc/lib/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1 && \
     ln -s /bin/sh /usr/bin/sh
 
 # What the stack's scripts need, and the C++ runtime the CLI (Bun) links against. nginx is the
-# API gateway in the guest, in place of the CLI's (capture.sh)
-RUN apk add --no-cache bash tar curl jq postgresql-client libstdc++ libgcc nginx && \
+# API gateway in the guest, in place of the CLI's (capture.sh). socat is for what runs on the
+# machine: the fleet page's two-sources template answers on a port of its own with it
+RUN apk add --no-cache bash tar curl jq postgresql-client libstdc++ libgcc nginx socat && \
     ln -sf /bin/bash /usr/bin/bash
 
 # The Supabase CLI: its linux-arm64-musl build, a single Bun-compiled binary, straight from npm's

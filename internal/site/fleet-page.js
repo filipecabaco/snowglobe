@@ -130,6 +130,15 @@
   const stopBtn = $("fleet-stop");
   let stopping = false;
   let ran = false; // something was run since the last Stop, by this file or an earlier one
+  // What a click on Run or Run all started and hasn't finished, from the click on: the machines going
+  // back to their image, the awake limit, the steps. The file can't change under it (busy), or a run
+  // of the old file would go on unseen, with the new file's steps shown and Stop ending those
+  let active = 0;
+  async function act(fn) {
+    active++;
+    render();
+    try { return await fn(); } finally { active--; render(); }
+  }
   const touched = new Set(); // the machines it used
   const machinesList = $("fleet-machines");
   const frame = $("fleet-frame");
@@ -161,7 +170,9 @@
     const g = current ? F.graph(current.plan) : { nodes: [], edges: [] };
     $("fleet-graph-box").hidden = !g.nodes.length;
     if (!g.nodes.length) return svg.replaceChildren();
-    const W = 140, H = 62, GX = 150, GY = 26, PAD = 10;
+    // The gap between columns fits the longest link's label (12px monospace: about 7.2px a character)
+    const W = 140, H = 62, GY = 26, PAD = 10;
+    const GX = Math.max(150, ...g.edges.map((e) => Math.ceil(String(e.label ?? "").length * 7.2) + 24));
     const cols = Math.max(...g.nodes.map((n) => n.rank)) + 1;
     const rowsIn = (r) => g.nodes.filter((n) => n.rank === r).length;
     const rowsMax = Math.max(...Array.from({ length: cols }, (_, r) => rowsIn(r)));
@@ -234,7 +245,7 @@
     render();
   }
 
-  const busy = () => !!current && current.plan.steps.some((s) => current.run.state(s.key).status === "running");
+  const busy = () => active > 0 || !!current && current.plan.steps.some((s) => current.run.state(s.key).status === "running");
   const li = (...kids) => { const el = doc.createElement("li"); el.append(...kids); return el; };
   const el = (tag, cls, txt) => { const e = doc.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
 
@@ -264,10 +275,14 @@
       go.disabled = stopping || busy() || !ready;
       go.title = ready ? "" : `needs ${s.needs.join(", ")} first`;
       go.addEventListener("click", (e) => {
-        if (!e.isTrusted || stopping) return;
-        mark();
+        if (!e.isTrusted || stopping || busy()) return;
         clicked = true;
-        fit().then(() => run.runStep(s.key)).then(() => after(s), (e) => say(e.message));
+        act(async () => {
+          await mark();
+          await fit();
+          await run.runStep(s.key);
+          after(s);
+        }).catch((err) => say(err.message));
       });
       const head = el("div", "step-head");
       const dot = el("span", "dot");
@@ -298,10 +313,32 @@
     if (busy() && !tickTimer) tickTimer = setInterval(() => { if (busy()) render(); else { clearInterval(tickTimer); tickTimer = null; } }, 1000);
   }
 
-  /** A run starts: remember it, and the machines it uses, for Stop (which a later edit of the file doesn't forget). */
-  function mark() {
+  /**
+   * A run starts: remember it, and the machines it uses, for Stop (which a later edit of the file
+   * doesn't forget). The first run since the page opened (or since Stop) starts the machines it uses
+   * from their image, as the steps expect: one kept from an earlier visit still has that visit's
+   * servers listening, so a new server's port would be taken and the old one would answer for it.
+   * The person's click on Run is the yes for it, as their click on Stop is.
+   */
+  async function mark() {
+    const first = !ran;
     ran = true;
     for (const n of current ? F.graph(current.plan).nodes : []) touched.add(n.id);
+    if (!first || !current) return;
+    // A machine's save is read when it first wakes: read it now, to know whether there is one
+    const used = machines.filter((m) => touched.has(m.name));
+    await Promise.all(used.map((m) => m.slot.open()));
+    const kept = used.filter((m) => api._describe(m).saved);
+    if (!kept.length) return;
+    say(`Starting ${kept.map((m) => m.name).join(" and ")} from ${kept.length > 1 ? "their images" : "its image"}, without what an earlier visit left…`);
+    freshFor = new Set(kept.map((m) => m.name));
+    freshOk = true;
+    try {
+      for (const m of kept) await api.startFresh(m.name);
+    } finally {
+      freshOk = false;
+      freshFor = new Set();
+    }
   }
 
   /**
@@ -325,13 +362,18 @@
   }
 
   runAll.addEventListener("click", async (e) => {
-    if (!current || !e.isTrusted || stopping) return;
-    mark();
+    if (!current || !e.isTrusted || stopping || busy()) return;
     clicked = true;
     const { plan, run } = current;
-    say("Running the fleet…");
-    await fit();
-    const ok = await run.runAll();
+    let ok;
+    try {
+      ok = await act(async () => {
+        await mark();
+        say("Running the fleet…");
+        await fit();
+        return run.runAll();
+      });
+    } catch (err) { say(err.message); return; }
     if (stopping) return;
     for (const s of plan.steps) after(s);
     say(ok ? "The fleet is up." : "A step failed. Run all continues from there.");
@@ -370,17 +412,23 @@
     const f = e.target.files?.[0];
     if (!f || busy() || stopping) return;
     if (f.size > 256 << 10) { say("That file is over 256 KiB."); return; }
-    text.value = await f.text();
+    const body = await f.text();
     e.target.value = "";
+    if (busy() || stopping) return say("The file isn't loaded: the fleet started running while it was read.");
+    text.value = body;
     read();
   });
   /** A file beside the page into the text box (the example, or a template). */
   async function load(url, what) {
-    if (busy() || stopping) return;
+    if (stopping) return say(`${what} isn't loaded while the fleet stops: load it again once it has.`);
+    if (busy()) return say(`${what} isn't loaded while a step runs: Stop the fleet first.`);
     try {
       const r = await fetch(url, { cache: "no-cache" });
       if (!r.ok) throw new Error(String(r.status));
-      text.value = await r.text();
+      const body = await r.text();
+      // A run may have started while the file came in: it keeps the file it started from
+      if (busy() || stopping) return say(`${what} isn't loaded: the fleet started running while it came in.`);
+      text.value = body;
       read();
     } catch (e) {
       say(`${what} could not be loaded (${e.message}).`);
