@@ -43,7 +43,7 @@ const QUIET: Duration = Duration::from_secs(5);
 /// An exercise command is done once the guest has neither printed nor fetched a file for this
 /// long (or after the cap): a runtime can go quiet while it loads modules.
 const EXERCISE_QUIET: Duration = Duration::from_millis(2500);
-const EXERCISE_CAP: Duration = Duration::from_secs(180);
+pub(crate) const EXERCISE_CAP: Duration = Duration::from_secs(180);
 /// After the snapshot, before the first exercise, the machine runs on its own as a restored one
 /// does until the visitor types: what it fetches then (its services waking, timers firing) is
 /// recorded until it has been quiet this long, or for at most SETTLE_CAP.
@@ -354,7 +354,7 @@ fn dump_cpus(runner: &Runner, cpus: usize) {
 /// `exercises` ([{command, reads}], in the order typed, a command typed twice twice), each list
 /// in first-fetched order; `exercise` is the same by command (a command typed twice: what either
 /// time fetched), for older readers.
-fn reads_json(boot: Vec<String>, restore: Vec<String>, exercises: &[(String, Vec<String>)]) -> serde_json::Value {
+pub(crate) fn reads_json(boot: Vec<String>, restore: Vec<String>, exercises: &[(String, Vec<String>)]) -> serde_json::Value {
     let mut by_command: Vec<(String, Reads)> = Vec::new();
     for (command, reads) in exercises {
         match by_command.iter_mut().find(|(c, _)| c == command) {
@@ -453,7 +453,7 @@ fn exercise(
 }
 
 /// The app's prompt: the screen's last line, if it has one worth waiting for.
-fn prompt(screen: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn prompt(screen: &[u8]) -> Option<Vec<u8>> {
     let start = screen.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
     let line = &screen[start..];
     let line = &line[line.iter().take_while(|&&b| b == b'\r').count()..];
@@ -463,7 +463,7 @@ fn prompt(screen: &[u8]) -> Option<Vec<u8>> {
 
 /// Whether an exercise command is done: `output` printed since it was typed, `idle` how long
 /// the guest has printed, fetched and computed nothing (zero with a request open).
-fn exercised(output: &[u8], prompt: Option<&[u8]>, idle: Duration) -> bool {
+pub(crate) fn exercised(output: &[u8], prompt: Option<&[u8]>, idle: Duration) -> bool {
     let prompted = prompt.is_some_and(|p| output.len() > p.len() && output.ends_with(p));
     idle >= EXERCISE_QUIET || (prompted && idle >= PROMPT_QUIET)
 }

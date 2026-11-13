@@ -80,6 +80,8 @@ Usage:
                                                      write_file and read_file tools; no Docker.
                      [--log-dir DIR]                 Logs to the cache's snowglobe/logs/mcp
                                                      (or <name> with --name) unless --log-dir
+                     [--cpus N]                      --cpus for a site with no kernel (default:
+                                                     the CPUs it was built on, up to this host's)
   snowglobe mcp --daemon                             serve the daemon to an agent over MCP: templates,
                                                      machines, commands and files, snapshots,
                                                      services, builds, fleets, status and events
@@ -243,7 +245,7 @@ Build flags:
   --kernel none   no guest kernel: the image's command, an aarch64 Linux program, runs on its
                   own, its system calls answered by the machine, in the page and natively.
                   Smaller snapshots; one CPU in the page (the build runs it on --build-cpus at
-                  once), no exercises (default: linux)
+                  once, and natively it runs on as many) (default: linux)
   --cpus N        guest CPUs, 1 to 8 (default: 1). More than one runs each CPU in its own Web
                   Worker; the page then makes itself cross-origin isolated with a service worker
   --build-cpus N  CPUs to boot and warm up on before the snapshot (default: the larger of --cpus
@@ -740,6 +742,7 @@ func runMCP(args []string) error {
 	keep := fs.Bool("keep", false, "")
 	logDir := fs.String("log-dir", "", "")
 	onDaemon := fs.Bool("daemon", false, "")
+	cpus := fs.Int("cpus", 0, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	positional, err := parse(fs, args)
 	if err != nil {
@@ -783,7 +786,7 @@ func runMCP(args []string) error {
 	started := false
 	if err := instance.Shell(*name, "true", false, 30); err != nil {
 		// Not running yet: start it, natively (stdout stays the protocol's)
-		if err := instance.Run(instance.Options{Site: site, Name: *name, Detach: true, Runtime: "native", LogDir: *logDir}, version); err != nil {
+		if err := instance.Run(instance.Options{Site: site, Name: *name, Detach: true, Runtime: "native", LogDir: *logDir, CPUs: *cpus}, version); err != nil {
 			return err
 		}
 		started = true

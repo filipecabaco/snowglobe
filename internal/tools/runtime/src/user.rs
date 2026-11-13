@@ -50,6 +50,8 @@ pub fn snapshot(args: &Args, system: &Path, spec: &Spec, ready: Option<&str>, ar
     let (mut vm, _clock) = machine::new_vm(spec, &site)?;
     let activity = Activity::new(false);
     let _host = machine::host(&vm.board, &site, &spec.network, machine::Net::from_args(args, None)?, &activity);
+    // What it reads as it starts: what its restored process has open, wanted first in the page
+    *activity.reads.lock().unwrap() = Some(machine::Reads::new());
     let mut env: Vec<String> = args.all("user-env");
     if env.is_empty() {
         env = DEFAULT_ENV.iter().map(|s| s.to_string()).collect();
@@ -99,10 +101,65 @@ pub fn snapshot(args: &Args, system: &Path, spec: &Spec, ready: Option<&str>, ar
     }
     let state = vm.save_state_cpus(ship.min(spec.cpus))?;
     crate::snapshot::save(system, &state, boot_seconds, &console)?;
-    crate::snapshot::write_json(&system.join("reads.json"), &json!({ "boot": [], "exercise": {} }))?;
-    crate::snapshot::write_json(&system.join("transcript.json"), &json!([]))?;
+    let boot_reads = activity.reads.lock().unwrap().take().unwrap_or_default().into_vec();
+    // The exercises, typed in after the snapshot (on CPU 0: what they read is what a visitor's
+    // commands would fetch)
+    let mut transcript = Vec::new();
+    let mut exercise_reads = Vec::new();
+    let exercises = args.all("exercise");
+    if !exercises.is_empty() {
+        let smp = Smp::new(&mut p);
+        for command in &exercises {
+            let (output, reads) = exercise(&smp, &mut vm.cpus[0], &activity, &mut console, command);
+            transcript.push(json!({ "command": command, "output": String::from_utf8_lossy(&output) }));
+            exercise_reads.push((command.clone(), reads));
+        }
+        eprintln!();
+    }
+    // Booting's reads are the restore's: the process holds open what it opened as it started
+    crate::snapshot::write_json(&system.join("reads.json"), &crate::snapshot::reads_json(Vec::new(), boot_reads, &exercise_reads))?;
+    crate::snapshot::write_json(&system.join("transcript.json"), &json!(transcript))?;
     std::fs::write(system.join("jit-profile.bin"), armless::jit::profile::write(&[])).map_err(|e| format!("jit-profile.bin: {e}"))?;
     Ok(0)
+}
+
+/// One exercise command typed into the program (on CPU 0), run until it is done as a kernel's
+/// is (snapshot::exercised: quiet, or back at its prompt): what it printed, and the files it
+/// fetched.
+fn exercise<H: armless::Host>(smp: &Smp, cpu: &mut armless::cpu::Cpu<H>, activity: &Arc<Activity>, console: &mut Vec<u8>, command: &str) -> (Vec<u8>, Vec<String>) {
+    *activity.reads.lock().unwrap() = Some(machine::Reads::new());
+    let prompt = crate::snapshot::prompt(console);
+    let from = console.len();
+    let begun = Instant::now();
+    eprint!("\nExercising: {command}");
+    smp.lock().input(format!("{command}\r").as_bytes());
+    activity.touch();
+    loop {
+        let status = smp.run(0, cpu, Duration::from_millis(20));
+        let out = smp.lock().take_output();
+        if !out.is_empty() {
+            console.extend_from_slice(&out);
+            activity.touch();
+        }
+        match status {
+            Status::Running => activity.touch(),
+            Status::Exited(_) | Status::Fault(_) => break,
+            Status::Idle(wake) => {
+                let most = Duration::from_millis(if smp.lock().waiting_on_blobs() { 1 } else { 20 });
+                if smp.lock().waiting_on_blobs() {
+                    activity.touch();
+                }
+                let wait = wake.map_or(most, |w| w.saturating_duration_since(Instant::now()));
+                std::thread::sleep(wait.min(most));
+            },
+        }
+        if crate::snapshot::exercised(&console[from..], prompt.as_deref(), activity.idle_for()) || begun.elapsed() >= crate::snapshot::EXERCISE_CAP {
+            break;
+        }
+    }
+    let reads = activity.reads.lock().unwrap().take().unwrap_or_default().into_vec();
+    eprint!(" ({} files, {:.1}s)", reads.len(), begun.elapsed().as_secs_f64());
+    (console[from..].to_vec(), reads)
 }
 
 /// Runs the program (CPU 0 here, the others `serve`d) until it printed `ready` (or, without one,

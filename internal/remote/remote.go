@@ -342,6 +342,8 @@ var siteFiles = []struct {
 	{"index.html", false}, {"system/filesystem.json", false}, {"system/state.bin.zst", false}, {"system/console.bin", true},
 	// The site's CA: with a network, the guest's HTTPS ends in the machine with it
 	{"system/tls.json", true},
+	// A site with no kernel: its program's process
+	{"system/user.bin", true},
 }
 
 func mirror(c *http.Client, source, dir string) error {

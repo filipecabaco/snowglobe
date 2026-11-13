@@ -41,6 +41,11 @@ func TestMain(m *testing.M) {
 	case os.Getenv("SNOWGLOBE_FAKE_VM") == "fail":
 		fmt.Println("snowglobe-vm: boom: no such site")
 		os.Exit(1)
+	case len(os.Args) > 1 && os.Args[1] == "run":
+		// Started as a VM by a test that set no fake: running the tests again here would start
+		// more of them, without end
+		fmt.Println("snowglobe-vm: a test started the VM without SNOWGLOBE_FAKE_VM")
+		os.Exit(1)
 	default:
 		os.Exit(m.Run())
 	}

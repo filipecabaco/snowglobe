@@ -79,8 +79,7 @@ type Options struct {
 	JIT string
 	// Kernel is "linux" (the default) or "none": the image's command is an aarch64 Linux program
 	// that runs with no guest kernel, its system calls answered by the machine (armless user mode),
-	// in the page as natively. Much smaller snapshots; no network, one CPU, no exercises, no agent
-	// page for now
+	// in the page as natively. Much smaller snapshots; one CPU in the page, no agent page for now
 	Kernel string
 }
 
@@ -90,8 +89,6 @@ type Settings struct {
 	// Kernel: "linux" or "none"; Argv is the command's words, which "none" runs
 	Kernel string
 	Argv   []string
-	// SkippedExercises: the image's exercises a build with no kernel leaves out
-	SkippedExercises int
 	// SkippedAgent: the image is one of the agent page's machines, which a build with no kernel isn't
 	SkippedAgent bool
 	// SkippedCPUs: the CPUs the image asks for (its label) that a build with no kernel runs on one
@@ -226,9 +223,6 @@ func Run(o Options, version string) error {
 		s.Command, describeReady(s.Ready), s.Memory, s.Network, s.CPUs, s.BuildCPUs, onOff(s.JIT))
 	if s.Kernel == "none" {
 		fmt.Println("    kernel:  none (the command runs on its own, with no kernel)")
-		if s.SkippedExercises > 0 {
-			fmt.Printf("    exercises: the image's %d left out (not with --kernel none yet)\n", s.SkippedExercises)
-		}
 		if s.SkippedAgent {
 			fmt.Println("    agent:   not on the agent page (its label; the agent page's jobs need a shell, so a kernel)")
 		}
@@ -676,8 +670,6 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		switch {
 		case o.CPUs > 1:
 			return nil, errors.New("kernel none: one CPU in the page (it builds on several: --build-cpus)")
-		case len(o.Exercise) > 0:
-			return nil, errors.New("kernel none: no exercises yet (the files they read aren't recorded for the warm pack)")
 		case o.Agent:
 			return nil, errors.New("kernel none: not on the agent page (its jobs need a shell, so a kernel)")
 		}
@@ -696,9 +688,8 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		if s.CPUs > 1 {
 			s.SkippedCPUs, s.CPUs = s.CPUs, 1
 		}
-		// The image's own exercises and agent page (its labels) are left out rather than refused
-		s.SkippedExercises = len(s.Exercise)
-		s.Exercise = nil
+		// The image's agent page (its label) is left out rather than refused. Its exercises run, as
+		// a kernel's: typed into the program after the snapshot, the files they read packed
 		s.SkippedAgent = s.Agent
 		s.Agent, s.AgentExposedTo = false, nil
 	default:
