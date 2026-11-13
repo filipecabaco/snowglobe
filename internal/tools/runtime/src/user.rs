@@ -1,8 +1,10 @@
 //! Sites with no kernel (`snowglobe build --kernel none`): the app is the image's own program, run
 //! on armless with no guest kernel (armless user mode, `armless_user`), from the site's filesystem:
 //! a static or dynamically linked program, with the image's environment and working directory, on
-//! a terminal. The build runs it to its ready text and saves the machine (state.bin.zst, as any
-//! site: its RAM and filesystem) and the process (system/user.bin); a run restores both.
+//! a terminal. The build runs it to its ready text, its threads on every CPU it builds on at once
+//! (armless's `Smp`), and saves the machine (state.bin.zst, as any site: its RAM and filesystem)
+//! with the CPUs the site has, and the process (system/user.bin); a run restores both, on the
+//! site's CPUs.
 //!
 //! The program's terminal is the run's console: a terminal `snowglobe run` or an `attach` types
 //! into it and sees it. A job (`snowglobe sh`, exec) types its command and a newline, and is done
@@ -17,7 +19,7 @@ use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use armless_user::{ExecError, Process, Status};
+use armless_user::{ExecError, Process, Smp, Status};
 use serde_json::json;
 
 use crate::machine::{self, Activity, Spec};
@@ -37,12 +39,13 @@ pub fn is_user(site: &Site) -> bool {
 }
 
 /// `snapshot` in user mode: start the program from the site's filesystem (its blobs served as for
-/// a guest), run it until it printed `ready` (or, without one, printed something and went quiet),
-/// then save the machine and the process.
+/// a guest), run it on the build's CPUs (`spec.cpus`) until it printed `ready` (or, without one,
+/// printed something and went quiet), then save the machine, with the site's CPUs (--cpus), and
+/// the process.
 pub fn snapshot(args: &Args, system: &Path, spec: &Spec, ready: Option<&str>, argv: &[String]) -> Result<u8, String> {
     let site = Site::system(system);
-    let spec = Spec { cpus: 1, ..spec.clone() };
-    let (mut vm, _clock) = machine::new_vm(&spec, &site)?;
+    let ship: usize = args.get("cpus").unwrap_or("1").parse().map_err(|_| "--cpus: not a number")?;
+    let (mut vm, _clock) = machine::new_vm(spec, &site)?;
     let activity = Activity::new(false);
     let _host = machine::host(&vm.board, &site, &spec.network, machine::Net::from_args(args, None)?, &activity);
     let mut env: Vec<String> = args.all("user-env");
@@ -53,7 +56,7 @@ pub fn snapshot(args: &Args, system: &Path, spec: &Spec, ready: Option<&str>, ar
         env.push("TERM=xterm-256color".into());
     }
     let cwd = args.get("user-cwd").filter(|c| !c.is_empty()).unwrap_or("/").to_string();
-    eprintln!("Starting {} in user mode (no kernel) ...", argv.join(" "));
+    eprintln!("Starting {} in user mode (no kernel) on {} CPU(s) ...", argv.join(" "), spec.cpus);
     let started = Instant::now();
     // Its executable and loader may wait on blobs, which the host fetches meanwhile
     let mut p = loop {
@@ -66,10 +69,47 @@ pub fn snapshot(args: &Args, system: &Path, spec: &Spec, ready: Option<&str>, ar
     let (cols, rows) = (args.get("cols").and_then(|c| c.parse().ok()).unwrap_or(80), args.get("rows").and_then(|r| r.parse().ok()).unwrap_or(24));
     p.resize(cols, rows);
     let mut console = Vec::new();
+    // CPU 0 on this thread, the others on threads of their own, until it's ready; then they put
+    // their threads back in the process for the snapshot
+    let smp = Smp::new(&mut p);
+    let (first, others) = vm.cpus.split_at_mut(1);
+    let workers = others.len();
+    let cpu = &mut first[0];
+    std::thread::scope(|s| -> Result<(), String> {
+        for (i, c) in others.iter_mut().enumerate() {
+            let smp = &smp;
+            s.spawn(move || smp.serve(i + 1, c));
+        }
+        let up = run_until_ready(&smp, cpu, ready, argv, started, &mut console);
+        smp.pause(workers);
+        smp.stop();
+        up
+    })?;
+    drop(smp);
+    let boot_seconds = started.elapsed().as_secs_f64();
+    eprintln!("\nApp ready after {boot_seconds:.2}s (user mode)");
+    let process = p.save(&vm.cpus[0]);
+    std::fs::write(system.join("user.bin"), &process).map_err(|e| format!("user.bin: {e}"))?;
+    // The site's CPUs only: the others ran threads that are back in the process, and are off
+    let machine = vm.cpus[0].machine.clone();
+    for c in ship..spec.cpus {
+        machine.power_off(c);
+    }
+    let state = vm.save_state_cpus(ship.min(spec.cpus))?;
+    crate::snapshot::save(system, &state, boot_seconds, &console)?;
+    crate::snapshot::write_json(&system.join("reads.json"), &json!({ "boot": [], "exercise": {} }))?;
+    crate::snapshot::write_json(&system.join("transcript.json"), &json!([]))?;
+    std::fs::write(system.join("jit-profile.bin"), armless::jit::profile::write(&[])).map_err(|e| format!("jit-profile.bin: {e}"))?;
+    Ok(0)
+}
+
+/// Runs the program (CPU 0 here, the others `serve`d) until it printed `ready` (or, without one,
+/// printed something and went quiet), and a little longer, its output on stderr and in `console`.
+fn run_until_ready<H: armless::Host>(smp: &Smp, cpu: &mut armless::cpu::Cpu<H>, ready: Option<&str>, argv: &[String], started: Instant, console: &mut Vec<u8>) -> Result<(), String> {
     let mut quiet_since = Instant::now();
     loop {
-        let status = p.run(&mut vm.cpus[0], Duration::from_millis(20));
-        let out = p.take_output();
+        let status = smp.run(0, cpu, Duration::from_millis(20));
+        let out = smp.lock().take_output();
         if !out.is_empty() {
             let _ = std::io::stderr().write_all(&out);
             console.extend_from_slice(&out);
@@ -87,7 +127,7 @@ pub fn snapshot(args: &Args, system: &Path, spec: &Spec, ready: Option<&str>, ar
             Status::Fault(f) => return Err(format!("{}: {f}", argv[0])),
             Status::Idle(wake) => {
                 // A file's contents on their way come soon (see run)
-                let most = Duration::from_millis(if p.waiting_on_blobs() { 1 } else { 20 });
+                let most = Duration::from_millis(if smp.lock().waiting_on_blobs() { 1 } else { 20 });
                 let wait = wake.map_or(most, |w| w.saturating_duration_since(Instant::now()));
                 std::thread::sleep(wait.min(most));
             },
@@ -100,21 +140,12 @@ pub fn snapshot(args: &Args, system: &Path, spec: &Spec, ready: Option<&str>, ar
     // A little longer, so that what it prints right after its ready text is in the screen too
     let settle = Instant::now();
     while settle.elapsed() < Duration::from_millis(300) {
-        if let Status::Exited(_) | Status::Fault(_) = p.run(&mut vm.cpus[0], Duration::from_millis(20)) {
+        if let Status::Exited(_) | Status::Fault(_) = smp.run(0, cpu, Duration::from_millis(20)) {
             break;
         }
-        console.extend(p.take_output());
+        console.extend(smp.lock().take_output());
     }
-    let boot_seconds = started.elapsed().as_secs_f64();
-    eprintln!("\nApp ready after {boot_seconds:.2}s (user mode)");
-    let process = p.save(&vm.cpus[0]);
-    std::fs::write(system.join("user.bin"), &process).map_err(|e| format!("user.bin: {e}"))?;
-    let state = vm.save_state();
-    crate::snapshot::save(system, &state, boot_seconds, &console)?;
-    crate::snapshot::write_json(&system.join("reads.json"), &json!({ "boot": [], "exercise": {} }))?;
-    crate::snapshot::write_json(&system.join("transcript.json"), &json!([]))?;
-    std::fs::write(system.join("jit-profile.bin"), armless::jit::profile::write(&[])).map_err(|e| format!("jit-profile.bin: {e}"))?;
-    Ok(0)
+    Ok(())
 }
 
 /// What the program's thread and the console's clients share.
@@ -147,9 +178,8 @@ struct Io {
 /// site) and the process, serve the site's blobs, and connect the program's terminal to the
 /// console's clients.
 pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<image::Image>, socket: &str, started: Instant) -> Result<u8, String> {
-    let spec = Spec { cpus: 1, ..spec.clone() };
     let (ram, without_pages) = image.map(|i| (i.ram, i.state)).unzip();
-    let (mut vm, _clock) = machine::new_vm_on(&spec, site, true, ram)?;
+    let (mut vm, _clock) = machine::new_vm_on(spec, site, true, ram)?;
     match without_pages {
         Some(state) => vm.load_state(&state)?,
         None => {
@@ -264,7 +294,8 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
                 p.input(&pending);
             }
         }
-        let status = p.run(&mut vm.cpus[0], Duration::from_millis(10));
+        // (On the site's CPUs: with more than one, its threads run on them at once)
+        let status = p.run_on(&mut vm.cpus, Duration::from_millis(10));
         let out = p.take_output();
         let mut io = shared.io.lock().unwrap();
         if !out.is_empty() {

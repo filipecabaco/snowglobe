@@ -233,7 +233,7 @@ func Run(o Options, version string) error {
 			fmt.Println("    agent:   not on the agent page (its label; the agent page's jobs need a shell, so a kernel)")
 		}
 		if s.SkippedCPUs > 0 {
-			fmt.Printf("    cpus:    one, not the image's %d (not with --kernel none yet)\n", s.SkippedCPUs)
+			fmt.Printf("    cpus:    one in the page, not the image's %d (not with --kernel none yet)\n", s.SkippedCPUs)
 		}
 	}
 	for _, t := range s.Tunnels {
@@ -673,17 +673,27 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		// (armless user mode has sockets).
 		switch {
 		case o.CPUs > 1:
-			return nil, errors.New("kernel none: one CPU (the program's threads take turns on it)")
+			return nil, errors.New("kernel none: one CPU in the page (it builds on several: --build-cpus)")
 		case len(o.Exercise) > 0:
 			return nil, errors.New("kernel none: no exercises yet (the files they read aren't recorded for the warm pack)")
 		case o.Agent:
 			return nil, errors.New("kernel none: not on the agent page (its jobs need a shell, so a kernel)")
 		}
-		// An image that asks for more CPUs (its label, for a kernel) runs on one
+		// What an image's program needs with no kernel when that differs from what it needs with one
+		// (label nokernel-memory): no page cache shares its files' pages between its processes
+		if m := label("nokernel-memory"); m != "" && o.Memory == 0 {
+			n, err := strconv.Atoi(m)
+			if err != nil || n < 1 {
+				return nil, fmt.Errorf("label %snokernel-memory: %q is not a number of MB", labelPrefix, m)
+			}
+			s.Memory = n
+		}
+		// The page runs it on one CPU (armless's user mode in a page has one), and an image that asks
+		// for more (its label, for a kernel) gets one there. The build runs it on BuildCPUs, at
+		// once (armless 0.17's user mode on several CPUs), and saves a one-CPU machine
 		if s.CPUs > 1 {
 			s.SkippedCPUs, s.CPUs = s.CPUs, 1
 		}
-		s.BuildCPUs = 1
 		// The image's own exercises and agent page (its labels) are left out rather than refused
 		s.SkippedExercises = len(s.Exercise)
 		s.Exercise = nil
