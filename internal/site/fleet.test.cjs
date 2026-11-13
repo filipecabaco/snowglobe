@@ -687,3 +687,32 @@ test('run: stop also stops what Run all would do next, and says a machine that w
   assert.match(r.problems.join(), /not reset/);
   for (const st of run.steps) assert.equal(run.state(st.key).status, 'pending', st.key);
 });
+
+test('run: a machine that stops answering fails the step at its deadline rather than hanging', async () => {
+  // A phone's worker, frozen or ended without a word: its calls never settle
+  const quick = { ...fast, callMs: 5, timer: (fn) => setTimeout(fn, 1) };
+  const hung = fakeApi();
+  hung.readJob = () => new Promise(() => {});
+  let t = 0;
+  const run = F.createRun(hung, F.plan(F.parse(example), runtimes), { ...quick, now: () => (t += 20000) });
+  const r = await run.runStep('snapshot/serving');
+  assert.equal(r.status, 'failed');
+  assert.match(r.error, /timed out .*did not answer a read of the command/);
+
+  // The commands answer and the ready check's reads don't: its tries run out at the timeout
+  const api = fakeApi();
+  const read = api.readJob.bind(api);
+  const ids = new Set();
+  const runCommand = api.runCommand.bind(api);
+  api.runCommand = async (req, opts) => {
+    const r = await runCommand(req, opts);
+    if (/wget/.test(req.command)) ids.add(r.jobId);
+    return r;
+  };
+  api.readJob = (id) => (ids.has(id) ? new Promise(() => {}) : read(id));
+  let u = 0;
+  const ready = F.createRun(api, F.plan(F.parse(example), runtimes), { ...quick, now: () => (u += 20000) });
+  const s = await ready.runStep('snapshot/serving');
+  assert.equal(s.status, 'failed');
+  assert.match(s.error, /not ready after 120s/);
+});

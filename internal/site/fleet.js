@@ -690,7 +690,10 @@
    * error }; a step runs only once what it needs is done, one step at a time. `onchange` is told of
    * every change; `sleep` and `now` are the clock (tests give theirs).
    */
-  function createRun(api, thePlan, { onchange, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), pollMs = 500 } = {}) {
+  function createRun(api, thePlan, {
+    onchange, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), pollMs = 500,
+    callMs = 30000, graceMs = 30000, timer = setTimeout,
+  } = {}) {
     const states = new Map(thePlan.steps.map((s) => [s.key, { status: "pending", detail: null, output: "", error: null }]));
     const byKey = new Map(thePlan.steps.map((s) => [s.key, s]));
     let chain = Promise.resolve();
@@ -698,15 +701,45 @@
     const changed = () => { try { onchange?.(); } catch {} };
     const set = (key, patch) => { Object.assign(states.get(key), patch); changed(); };
 
-    /** A command in a machine run to its end: { exit, output }. */
+    /** `p`, or a TimeoutError after `callMs`: a machine whose worker stopped answering (a phone's,
+     *  frozen or ended without a word) leaves its calls pending for ever. */
+    function answer(p, what) {
+      let t = null;
+      const late = new Promise((_, reject) => {
+        t = timer(() => {
+          const e = new Error(`the machine did not answer ${what} within ${Math.round(callMs / 1000)}s`);
+          e.name = "TimeoutError";
+          reject(e);
+        }, callMs);
+      });
+      return Promise.race([p, late]).finally(() => clearTimeout(t));
+    }
+
+    /** A command in a machine run to its end: { exit, output }. A job still running `graceMs`
+     *  past its own limit, or whose machine doesn't answer, is given up as timed out, so a ready
+     *  check goes on to its next try and a step to its own deadline. */
     async function exec(runtime, command, timeoutSeconds) {
-      const { jobId } = await api.runCommand({ runtime, command, timeoutSeconds }, { source: "fleet" });
+      const began = now();
+      const { jobId } = await answer(api.runCommand({ runtime, command, timeoutSeconds }, { source: "fleet" }), "the command");
+      const giveUpAt = began + timeoutSeconds * 1000 + graceMs;
+      let silent = null;
       for (;;) {
         if (stopping) {
-          try { await api.cancelJob?.(jobId); } catch {}
+          try { await answer(Promise.resolve(api.cancelJob?.(jobId)), "a cancel"); } catch {}
           throw new Error("stopped");
         }
-        const v = await api.readJob(jobId);
+        if (now() >= giveUpAt) {
+          try { await answer(Promise.resolve(api.cancelJob?.(jobId)), "a cancel"); } catch {}
+          return { exit: null, output: "", state: "timed_out", error: silent ?? "it ran past its time limit" };
+        }
+        let v;
+        try {
+          v = await answer(api.readJob(jobId), "a read of the command");
+        } catch (e) {
+          if (e?.name !== "TimeoutError") throw e;
+          silent = e.message;
+          continue;
+        }
         if (v.state !== "running") return { exit: v.state === "exited" ? v.exitStatus : null, output: v.output ?? "", state: v.state, error: v.error ?? null };
         await sleep(pollMs);
       }
@@ -728,7 +761,7 @@
           if (r.exit !== 0) {
             set(step.key, { output: tail(log) });
             console.warn(`fleet ${step.key}: command ${i + 1} of ${step.run.length} in ${step.runtime} ${r.exit === null ? `ended ${r.state}` : `exited ${r.exit}`} after ${took}\n${log}`);
-            if (r.state === "timed_out") throw new Error(`command ${i + 1} of ${step.run.length} timed out (its limit ${spoken(limitMs)}) after ${took}`);
+            if (r.state === "timed_out") throw new Error(`command ${i + 1} of ${step.run.length} timed out (its limit ${spoken(limitMs)}) after ${took}${r.error ? `: ${r.error}` : ""}`);
             throw new Error(`command ${i + 1} ${r.exit === null ? `ended ${r.state}${r.error ? ` (${r.error})` : ""}` : `exited ${r.exit}`} after ${took}`);
           }
         }
