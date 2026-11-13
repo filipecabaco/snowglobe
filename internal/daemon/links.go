@@ -133,6 +133,14 @@ func (s *Server) AddLink(req Link) (*Link, error) {
 	}
 	l.Created = time.Now()
 	s.mu.Lock()
+	// Removed since it was looked up: its removal dropped its links already, so this one would
+	// be left joining nothing
+	for _, end := range [][2]string{{l.FromKind, l.From}, {l.ToKind, l.To}} {
+		if !s.has(end[0], end[1]) {
+			s.mu.Unlock()
+			return nil, errStatus(404, "no %s called %s", end[0], end[1])
+		}
+	}
 	if _, taken := s.st.Links[l.Name]; taken {
 		s.mu.Unlock()
 		return nil, errStatus(409, "a link called %s exists", l.Name)
@@ -210,11 +218,11 @@ func (s *Server) templateOf(machine string) (*Template, error) {
 func (s *Server) target(l *Link) (*Machine, func(), error) {
 	switch l.ToKind {
 	case KindService:
+		// Claimed as it is picked
 		m, err := s.pickReplica(l.To)
 		if err != nil {
 			return nil, nil, err
 		}
-		s.touch(m.Name, 1)
 		return m, func() { s.touch(m.Name, -1) }, nil
 	case KindTemplate:
 		// One of its machines (of the link's instance, when it has one): the least busy

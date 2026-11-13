@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -153,5 +154,96 @@ func TestParseSize(t *testing.T) {
 		if _, err := ParseSize(bad); err == nil {
 			t.Errorf("%q: no error", bad)
 		}
+	}
+}
+
+// A job on a fresh fork of a template is a machine as far as the budget goes: it waits for room,
+// and holds its room while it runs
+func TestATemplateJobIsAdmittedToTheMemoryBudget(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	var mu sync.Mutex
+	servers := map[int]bool{}
+	cost := func(pid int) int64 {
+		mu.Lock()
+		defer mu.Unlock()
+		if servers[pid] || !alive(pid) {
+			return 0
+		}
+		return 100 << 20
+	}
+	d := startDaemon(t, shortTemp(t), Options{Memory: 100 << 20, Wait: 500 * time.Millisecond, memOf: cost})
+	defer d.stop(t)
+	tpl, err := d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.c.RemoveTemplate("t")
+	mu.Lock()
+	servers[tpl.Pid] = true
+	mu.Unlock()
+	// A job running holds its 64 MB (the guess, with no machine measured): a second doesn't fit
+	running := make(chan error, 1)
+	go func() {
+		_, err := d.c.TemplateJob("t", control.JobRequest{Cmd: "sleep 2s"})
+		running <- err
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if _, err := d.c.TemplateJob("t", control.JobRequest{Cmd: "x"}); statusOf(err) != 429 {
+		t.Errorf("a job past the budget: %v", err)
+	}
+	if err := <-running; err != nil {
+		t.Fatal(err)
+	}
+	// Ended: its room is back
+	if _, err := d.c.TemplateJob("t", control.JobRequest{Cmd: "x"}); err != nil {
+		t.Errorf("once the first ended: %v", err)
+	}
+	// A machine takes 100 MB: a job no longer fits beside it
+	if _, err := d.c.Up(Up{Template: "t", Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.c.TemplateJob("t", control.JobRequest{Cmd: "x"}); statusOf(err) != 429 {
+		t.Errorf("a job beside a machine: %v", err)
+	}
+}
+
+// A template doesn't sleep while a job runs on it, however long it takes
+func TestATemplateDoesNotSleepUnderAJob(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	fastScaling(t)
+	d := startDaemon(t, shortTemp(t), Options{})
+	defer d.stop(t)
+	if _, err := d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "t", Idle: Duration(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	if out := output(t)(d.c.TemplateJob("t", control.JobRequest{Cmd: "sleep 2500ms"})); out != "fresh: 1\n" {
+		t.Errorf("a job longer than the idle time: %q", out)
+	}
+	// Then it sleeps
+	waitFor(t, func() bool { ts, _ := d.c.Templates(); return len(ts) == 1 && ts[0].Asleep })
+}
+
+// A job whose caller has gone is given up: the daemon stops waiting, and what it held goes
+func TestAJobIsGivenUpWhenItsCallerGoes(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	d := startDaemon(t, shortTemp(t), Options{})
+	defer d.stop(t)
+	if _, err := d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	begun := time.Now()
+	if _, err := d.s.TemplateJob(ctx, "t", control.JobRequest{Cmd: "sleep 5s"}); err == nil {
+		t.Error("no error")
+	}
+	if waited := time.Since(begun); waited > 2*time.Second {
+		t.Errorf("waited %s", waited)
+	}
+	d.s.life.mu.Lock()
+	inUse := d.s.life.inUse["t"]
+	d.s.life.mu.Unlock()
+	if inUse != 0 {
+		t.Errorf("still in use: %d", inUse)
 	}
 }

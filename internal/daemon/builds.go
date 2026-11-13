@@ -289,12 +289,17 @@ func (s *Server) runBuild(b *Build) {
 	// Cancelled, or interrupted by the daemon stopping (stopAll): it says so already
 	cancelled := b.Status == "cancelled" || b.Status == "interrupted"
 	s.builds.mu.Unlock()
+	added := false
 	if !cancelled && err == nil && !b.noTemplate {
 		if _, terr := s.AddTemplate(AddTemplate{Site: b.Site, Name: b.Name}); terr != nil {
 			err = fmt.Errorf("built, but its template: %w", terr)
+		} else {
+			added = true
 		}
 	}
 	s.builds.mu.Lock()
+	// Cancelled meanwhile (while its template restored): it stays cancelled, with no template
+	cancelled = b.Status == "cancelled" || b.Status == "interrupted"
 	end := time.Now()
 	b.Ended = &end
 	switch {
@@ -316,6 +321,9 @@ func (s *Server) runBuild(b *Build) {
 	s.builds.write(b)
 	c := *b
 	s.builds.mu.Unlock()
+	if cancelled && added {
+		s.RemoveTemplate(c.Name)
+	}
 	switch c.Status {
 	case "done":
 		s.note("build.done", "build "+c.ID, "%s built in %s", c.Name, end.Sub(*c.Started).Round(time.Second))

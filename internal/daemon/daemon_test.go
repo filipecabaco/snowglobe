@@ -26,6 +26,8 @@ import (
 // an echo server. A job sent to the server runs on a fresh machine: always the first. As
 // snowglobe-vm does, the server ends when the daemon's lifeline breaks, and its machines when
 // the server's does. With SNOWGLOBE_FAKE_DAEMON=DIR it is a daemon serving DIR, to be killed.
+// SNOWGLOBE_FAKE_RESTORE_DELAY and SNOWGLOBE_FAKE_SPAWN_DELAY slow a server's restore and spawns;
+// a job "sleep DURATION" takes that long.
 func TestMain(m *testing.M) {
 	switch {
 	case os.Getenv("SNOWGLOBE_FAKE_DAEMON") != "":
@@ -104,6 +106,7 @@ func fakeServer() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+	delay("SNOWGLOBE_FAKE_RESTORE_DELAY")
 	fmt.Printf("restored fake in 0.1s, serving jobs on %s\n", sock)
 	for {
 		c, err := l.Accept()
@@ -113,6 +116,7 @@ func fakeServer() {
 		req := readLine(c)
 		switch req["mode"] {
 		case "spawn":
+			delay("SNOWGLOBE_FAKE_SPAWN_DELAY")
 			name, _ := req["name"].(string)
 			msock := filepath.Join(filepath.Dir(sock), name+".sock")
 			if _, err := net.Dial("unix", msock); err == nil {
@@ -135,7 +139,13 @@ func fakeServer() {
 			}
 			send(c, map[string]any{"pid": cmd.Process.Pid, "socket": msock})
 		case "job":
-			send(c, control.JobResult{Status: new(int), Output: []byte("fresh: 1\n")})
+			// On a fork of its own: others go on meanwhile
+			go func() {
+				sleepFor(req)
+				send(c, control.JobResult{Status: new(int), Output: []byte("fresh: 1\n")})
+				c.Close()
+			}()
+			continue
 		}
 		c.Close()
 	}
@@ -165,6 +175,7 @@ func fakeMachine(sock string) {
 		json.Unmarshal(line, &req)
 		switch req["mode"] {
 		case "job":
+			sleepFor(req)
 			jobs++
 			send(c, control.JobResult{Status: new(int), Output: fmt.Appendf(nil, "%s: %d\n", req["cmd"], jobs)})
 			c.Close()
@@ -195,6 +206,23 @@ func fakeMachine(sock string) {
 			go func() { io.Copy(c, r); c.Close() }()
 		default:
 			c.Close()
+		}
+	}
+}
+
+// delay sleeps for the duration in environment variable v, if any.
+func delay(v string) {
+	if d, err := time.ParseDuration(os.Getenv(v)); err == nil {
+		time.Sleep(d)
+	}
+}
+
+// sleepFor sleeps for a job "sleep DURATION".
+func sleepFor(req map[string]any) {
+	cmd, _ := req["cmd"].(string)
+	if rest, ok := strings.CutPrefix(cmd, "sleep "); ok {
+		if d, err := time.ParseDuration(rest); err == nil {
+			time.Sleep(d)
 		}
 	}
 }
@@ -799,4 +827,53 @@ func TestPortsNeedASiteWithANetwork(t *testing.T) {
 		t.Errorf("a service without ports: %v", err)
 	}
 	d.c.RemoveService("jobs")
+}
+
+// Two ups of one name at once: one machine, the other refused
+func TestTwoUpsOfOneNameMakeOneMachine(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	t.Setenv("SNOWGLOBE_FAKE_SPAWN_DELAY", "300ms")
+	d := startDaemon(t, shortTemp(t), Options{})
+	defer d.stop(t)
+	if _, err := d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { _, err := d.c.Up(Up{Template: "t", Name: "same"}); errs <- err }()
+	}
+	a, b := <-errs, <-errs
+	if a != nil {
+		a, b = b, a
+	}
+	// (Refused by the daemon, not left to the fork server to notice)
+	if a != nil || statusOf(b) != 409 || !strings.Contains(b.Error(), "a machine called same exists") {
+		t.Errorf("both: %v, %v", a, b)
+	}
+	if ms, _ := d.c.Machines(nil); len(ms) != 1 {
+		t.Errorf("machines: %+v", ms)
+	}
+}
+
+// A job's output past what the daemon keeps is cut, and it says how much
+func TestAJobsOutputIsCut(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	old := maxJobOutput
+	maxJobOutput = 3 << 10
+	t.Cleanup(func() { maxJobOutput = old })
+	d := startDaemon(t, shortTemp(t), Options{})
+	defer d.stop(t)
+	d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "t"})
+	if _, err := d.c.Up(Up{Template: "t", Name: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	// The fake machine prints its command back
+	res, err := d.c.Job("m", control.JobRequest{Cmd: strings.Repeat("x", 10<<10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OutputCut < 7<<10 || !strings.HasPrefix(string(res.Output), strings.Repeat("x", 3000)) ||
+		!strings.Contains(string(res.Output), "more bytes of output were cut") || len(res.Output) > 4<<10 {
+		t.Errorf("cut %d, kept %d: %q", res.OutputCut, len(res.Output), res.Output[len(res.Output)-100:])
+	}
 }

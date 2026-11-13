@@ -2,6 +2,7 @@ package control
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // listen serves sock with handle, one connection at a time: what it was asked, then what to do.
@@ -178,5 +180,53 @@ func TestSaveAsksForAPathAndSaysWhatWasWritten(t *testing.T) {
 	})
 	if _, err := Spawn(sock, "m", "/j/s.zst"); err != nil || got["state"] != "/j/s.zst" {
 		t.Errorf("spawn with a state: %v %v", got, err)
+	}
+}
+
+// A job's output and out/ past what is kept are dropped as they are read, and counted
+func TestAJobKeepsTheFirstOfItsOutput(t *testing.T) {
+	big := strings.Repeat("x", 3<<20)
+	sock := listen(t, func(req map[string]any, c net.Conn, r *bufio.Reader) {
+		data, _ := json.Marshal(JobResult{Status: new(int), Output: []byte(big),
+			Out: map[string][]byte{"a\"b.txt": []byte(big), "c.txt": []byte("small")}, Ms: 7})
+		c.Write(append(data, '\n'))
+		c.Close()
+	})
+	res, err := JobLimited(context.Background(), sock, "m", JobRequest{Cmd: "x"}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	near := func(a, b int64) bool { return a-b < 4 && b-a < 4 }
+	if len(res.Output) > 1<<20 || !near(int64(len(res.Output))+res.OutputCut, 3<<20) || res.Ms != 7 || res.Status == nil {
+		t.Errorf("output: %d kept, %d cut: %+v", len(res.Output), res.OutputCut, res.Status)
+	}
+	kept := 0
+	for _, f := range res.Out {
+		kept += len(f)
+	}
+	if len(res.Out) != 2 || kept > 1<<20 || !near(int64(kept)+res.OutCut, 3<<20+5) || res.Out["a\"b.txt"] == nil {
+		t.Errorf("out: %d files, %d kept, %d cut", len(res.Out), kept, res.OutCut)
+	}
+	// Nothing to keep back: all of it
+	res, err = Job(sock, "m", JobRequest{Cmd: "x"})
+	if err != nil || len(res.Output) != 3<<20 || res.OutputCut != 0 || len(res.Out["c.txt"]) != 5 {
+		t.Errorf("whole: %v %d %d", err, len(res.Output), res.OutputCut)
+	}
+}
+
+// A job given up on (its caller gone) stops waiting
+func TestAJobIsGivenUpWithItsContext(t *testing.T) {
+	sock := listen(t, func(req map[string]any, c net.Conn, r *bufio.Reader) {
+		// Never answers
+		go func() { io.Copy(io.Discard, r); c.Close() }()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	begun := time.Now()
+	if _, err := JobLimited(ctx, sock, "m", JobRequest{Cmd: "x"}, 0); err == nil || !strings.Contains(err.Error(), "given up") {
+		t.Errorf("given up: %v", err)
+	}
+	if time.Since(begun) > 5*time.Second {
+		t.Error("waited on")
 	}
 }

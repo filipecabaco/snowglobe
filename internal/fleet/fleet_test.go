@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,6 +129,9 @@ func (f *fake) RemoveService(n string) error {
 }
 func (f *fake) Up(u daemon.Up) (*daemon.Machine, error) {
 	f.calls = append(f.calls, "up "+u.Name+" of "+u.Template)
+	if _, taken := f.machines[u.Name]; taken {
+		return nil, fmt.Errorf("a machine called %s exists", u.Name)
+	}
 	m := daemon.Machine{Name: u.Name, Template: u.Template, Labels: u.Labels}
 	f.machines[u.Name] = m
 	return &m, nil
@@ -401,6 +405,37 @@ func TestASnapshotWhoseSetupFailsSaysWhyAndLeavesNoMachine(t *testing.T) {
 	p, _ = g.Plan(api)
 	if err := p.Apply(api, b.build, quiet); err == nil || !strings.Contains(err.Error(), "not ready within 1s") {
 		t.Errorf("never ready: %v", err)
+	}
+}
+
+// A setup machine left by an apply that failed or was interrupted doesn't block the next
+func TestALeftoverSetupMachineOfTheFleetIsRemovedFirst(t *testing.T) {
+	f := load(t, example)
+	api := newFake()
+	api.machines["ready-setup"] = daemon.Machine{Name: "ready-setup", Template: "py", Labels: map[string]string{FleetLabel: "demo"}}
+	p, err := f.Plan(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b builds
+	if err := p.Apply(api, b.build, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if calls := strings.Join(api.calls, "\n"); !strings.Contains(calls, "rm machine ready-setup\nup ready-setup of py") {
+		t.Errorf("not removed first:\n%s", calls)
+	}
+	if _, ok := api.snapshots["ready"]; !ok {
+		t.Error("no snapshot")
+	}
+	// Another fleet's stays: the name is taken
+	api = newFake()
+	api.machines["ready-setup"] = daemon.Machine{Name: "ready-setup", Template: "py", Labels: map[string]string{FleetLabel: "other"}}
+	p, _ = f.Plan(api)
+	if err := p.Apply(api, b.build, quiet); err == nil || !strings.Contains(err.Error(), "exists") {
+		t.Errorf("another fleet's: %v", err)
+	}
+	if m := api.machines["ready-setup"]; m.Labels[FleetLabel] != "other" {
+		t.Errorf("another fleet's removed: %+v", m)
 	}
 }
 

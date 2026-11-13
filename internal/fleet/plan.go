@@ -587,6 +587,20 @@ func (p *Plan) create(api API, build Builder, o Object, logf func(string, ...any
 // saves it; the machine goes either way.
 func (p *Plan) snapshot(api API, o Object, s SnapshotSpec, logf func(string, ...any)) error {
 	setup := o.Name + "-setup"
+	// One left by an apply of this fleet that failed or was interrupted: it goes, as this one's
+	// will (another's, or one outside any fleet, stays, and the name stays taken)
+	ms, err := api.Machines(map[string]string{FleetLabel: p.file.Name})
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if m.Name == setup && m.Labels[FleetLabel] == p.file.Name && m.Labels[EntryLabel] == "" {
+			logf("  %s: left by an earlier apply, removed", setup)
+			if err := api.RemoveMachine(setup); err != nil && !daemon.NotFound(err) {
+				return err
+			}
+		}
+	}
 	if _, err := api.Up(daemon.Up{Template: s.Template, Name: setup, Labels: map[string]string{FleetLabel: p.file.Name}}); err != nil {
 		return err
 	}
@@ -623,7 +637,7 @@ func (p *Plan) snapshot(api API, o Object, s SnapshotSpec, logf func(string, ...
 			}
 		}
 	}
-	_, err := api.SnapshotWith(setup, o.Name, p.labels(o, nil))
+	_, err = api.SnapshotWith(setup, o.Name, p.labels(o, nil))
 	return err
 }
 

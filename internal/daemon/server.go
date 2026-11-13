@@ -88,6 +88,8 @@ type Server struct {
 	// Each machine's link sockets, by link, and whether it was given links (guarded by mu)
 	linkSocks map[string]map[string]*linkSock
 	linked    map[string]bool
+	// Machine names being started: taken until they are up, or not (guarded by mu)
+	starting map[string]bool
 	// The process groups of the template servers it started and that still run (each with its
 	// machines and jobs), and whether it is stopping: then it starts nothing more (guarded by mu)
 	groups  map[int]bool
@@ -121,7 +123,7 @@ func New(o Options) (*Server, error) {
 	}
 	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery,
 		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery, runs: newRuns(),
-		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}, groups: map[int]bool{}, stopped: make(chan struct{})}
+		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}, starting: map[string]bool{}, groups: map[int]bool{}, stopped: make(chan struct{})}
 	if o.memOf != nil {
 		s.memOf = o.memOf
 	}
@@ -320,9 +322,12 @@ func (s *Server) Serve(ctx context.Context) error {
 // reviveTemplates starts again the templates that were running when the last daemon stopped.
 func (s *Server) reviveTemplates() {
 	for _, name := range s.revive {
-		if _, err := s.awake(name); err != nil {
+		_, done, err := s.awake(name)
+		if err != nil {
 			s.note("template.error", "template "+name, "starting it again: %v", err)
+			continue
 		}
+		done()
 	}
 }
 
@@ -343,7 +348,7 @@ func (s *Server) stopAll() {
 	s.mu.Unlock()
 	for _, svc := range keep {
 		for _, m := range s.replicas(svc.Name) {
-			s.stopReplica(svc, m)
+			s.stopReplica(svc, m, true)
 		}
 	}
 
@@ -784,14 +789,20 @@ func (s *Server) Templates() []Template {
 	return out
 }
 
-// TemplateJob runs one job on a fresh fork of a template, which ends with it.
-func (s *Server) TemplateJob(name string, req control.JobRequest) (*control.JobResult, error) {
-	t, err := s.awake(name)
+// TemplateJob runs one job on a fresh fork of a template, which ends with it. The fork is a
+// machine as far as the memory budget goes, and keeps its template awake while it runs.
+func (s *Server) TemplateJob(ctx context.Context, name string, req control.JobRequest) (*control.JobResult, error) {
+	t, done, err := s.awake(name)
 	if err != nil {
 		return nil, err
 	}
-	defer s.used(name)
-	return s.runJob(t.Server, name, req)
+	defer done()
+	admitted, err := s.admitJob(name)
+	if err != nil {
+		return nil, err
+	}
+	defer admitted()
+	return s.runJob(ctx, t.Server, name, req)
 }
 
 func resolveSite(site string, public bool) (string, error) {
@@ -844,6 +855,9 @@ type Up struct {
 	Snapshot string `json:"snapshot,omitempty"`
 	// How long it lives, whatever it does (0: until it is removed)
 	TTL Duration `json:"ttl,omitempty"`
+	// Refused at once when it doesn't fit the memory budget, rather than waiting for room (the
+	// scaler's starts: it tries again on its next round)
+	noWait bool
 }
 
 // Up forks a machine from a template: it lasts until it is removed, with its ports forwarded.
@@ -856,12 +870,26 @@ func (s *Server) Up(req Up) (*Machine, error) {
 	return m, err
 }
 
-// runJob runs a job on the control socket sock, counted in the metrics.
-func (s *Server) runJob(sock, name string, req control.JobRequest) (*control.JobResult, error) {
+// maxJobOutput is how much of a job's output, and of its out/ files, the daemon keeps: the rest
+// is dropped as it is read, and the output says how much went
+var maxJobOutput int64 = 16 << 20
+
+// runJob runs a job on the control socket sock, counted in the metrics, until it ends or ctx is
+// done (its caller gone).
+func (s *Server) runJob(ctx context.Context, sock, name string, req control.JobRequest) (*control.JobResult, error) {
 	begun := time.Now()
-	r, err := control.Job(sock, name, req)
+	r, err := control.JobLimited(ctx, sock, name, req, maxJobOutput)
 	s.meter.job(time.Since(begun), err)
-	return r, err
+	if err != nil {
+		return nil, err
+	}
+	if r.OutputCut > 0 || r.OutCut > 0 {
+		s.note("job.cut", "machine "+name, "kept the first %s of its output and of out/: %d and %d bytes more were dropped", mb(maxJobOutput), r.OutputCut, r.OutCut)
+	}
+	if r.OutputCut > 0 {
+		r.Output = fmt.Appendf(r.Output, "\n[snowglobe: %d more bytes of output were cut; the daemon keeps the first %s]\n", r.OutputCut, mb(maxJobOutput))
+	}
+	return r, nil
 }
 
 func (s *Server) up(req Up) (*Machine, error) {
@@ -886,6 +914,11 @@ func (s *Server) up(req Up) (*Machine, error) {
 	s.mu.Lock()
 	_, ok := s.st.Templates[req.Template]
 	_, taken := s.st.Machines[name]
+	// Another up of the same name, still starting
+	taken = taken || s.starting[name]
+	if ok && !taken {
+		s.starting[name] = true
+	}
 	s.mu.Unlock()
 	if !ok {
 		return nil, errStatus(404, "no template called %s", req.Template)
@@ -893,12 +926,17 @@ func (s *Server) up(req Up) (*Machine, error) {
 	if taken {
 		return nil, errStatus(409, "a machine called %s exists", name)
 	}
+	defer func() {
+		s.mu.Lock()
+		delete(s.starting, name)
+		s.mu.Unlock()
+	}()
 	// Asleep: started again first
-	t, err := s.awake(req.Template)
+	t, done, err := s.awake(req.Template)
 	if err != nil {
 		return nil, err
 	}
-	defer s.used(t.Name)
+	defer done()
 	if len(ports) > 0 {
 		if err := needsNetwork(t); err != nil {
 			return nil, err
@@ -914,7 +952,11 @@ func (s *Server) up(req Up) (*Machine, error) {
 		defer os.Remove(state + userState)
 	}
 	// Room in the memory budget, held until it is up
-	release, err := s.admit(t.Name)
+	wait := s.o.Wait
+	if req.noWait {
+		wait = 0
+	}
+	release, err := s.admit(t.Name, wait)
 	if err != nil {
 		return nil, err
 	}
@@ -1018,17 +1060,19 @@ func (s *Server) Machine(name string) (*Machine, error) {
 }
 
 // Job runs a job on a machine's serial shell.
-func (s *Server) Job(name string, req control.JobRequest) (*control.JobResult, error) {
+func (s *Server) Job(ctx context.Context, name string, req control.JobRequest) (*control.JobResult, error) {
 	m, err := s.Machine(name)
 	if err != nil {
 		return nil, err
 	}
-	// A service's replica is busy while the job runs
+	// A service's replica is busy while the job runs; one being stopped takes none
 	if m.Labels[serviceLabel] != "" {
-		s.touch(name, 1)
+		if !s.claim(name) {
+			return nil, errStatus(409, "replica %s is stopping (send the job to its service)", name)
+		}
 		defer s.touch(name, -1)
 	}
-	return s.runJob(m.Socket, name, req)
+	return s.runJob(ctx, m.Socket, name, req)
 }
 
 // forward listens on a machine's host ports (filling in those the system picks) and connects each
@@ -1082,7 +1126,8 @@ func splice(c net.Conn, sock string, guest int) {
 	<-done
 }
 
-// reap forgets machines that stopped and templates whose server did (with their machines).
+// reap forgets machines that stopped and templates whose server did (with their machines). A
+// template a service runs on is kept, asleep: the service's next replica starts its server again.
 func (s *Server) reap(ctx context.Context) {
 	t := time.NewTicker(s.reapEvery)
 	defer t.Stop()
@@ -1137,10 +1182,24 @@ func (s *Server) reap(ctx context.Context) {
 					delete(s.forwards, mn)
 					delete(s.st.Machines, mn)
 					syscall.Kill(m.Pid, syscall.SIGKILL)
+					// Its link sockets and links go below, as a dead machine's do
+					deadMachines = append(deadMachines, mn)
 				}
 			}
 			killGroup(t.Pid, syscall.SIGKILL)
 			os.RemoveAll(t.SocketDir)
+			var used []string
+			for _, svc := range s.st.Services {
+				if svc.Template == n {
+					used = append(used, svc.Name)
+				}
+			}
+			if len(used) > 0 {
+				sort.Strings(used)
+				t.Asleep, t.Pid, t.Server, t.SocketDir, t.Ready = true, 0, "", "", ""
+				s.note("template.stopped", "template "+n, "its server stopped, and its machines with it; started again on the next use of service %s", strings.Join(used, ", "))
+				continue
+			}
 			delete(s.st.Templates, n)
 			s.note("template.stopped", "template "+n, "its server stopped, and its machines with it")
 		}
@@ -1358,7 +1417,7 @@ func (s *Server) Handler() http.Handler {
 			reply(w, nil, err)
 			return
 		}
-		v, err := s.TemplateJob(r.PathValue("name"), req)
+		v, err := s.TemplateJob(r.Context(), r.PathValue("name"), req)
 		reply(w, v, err)
 	})
 	mux.HandleFunc("GET /v1/machines", func(w http.ResponseWriter, r *http.Request) {
@@ -1391,7 +1450,7 @@ func (s *Server) Handler() http.Handler {
 			reply(w, nil, err)
 			return
 		}
-		v, err := s.Job(r.PathValue("name"), req)
+		v, err := s.Job(r.Context(), r.PathValue("name"), req)
 		reply(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/machines/{name}/snapshots", func(w http.ResponseWriter, r *http.Request) {
@@ -1431,7 +1490,7 @@ func (s *Server) Handler() http.Handler {
 			reply(w, nil, err)
 			return
 		}
-		v, err := s.ServiceJob(r.PathValue("name"), req)
+		v, err := s.ServiceJob(r.Context(), r.PathValue("name"), req)
 		reply(w, v, err)
 	})
 	mux.HandleFunc("GET /v1/snapshots", func(w http.ResponseWriter, r *http.Request) {
