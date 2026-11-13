@@ -28,8 +28,9 @@ tools, sha = sys.argv[1], sys.argv[2]
 
 cargo = f"{tools}/runtime/Cargo.toml"
 text = open(cargo).read()
-text, n = re.subn(r'(armless = \{ git = "https://github.com/filipecabaco/armless", )(?:tag|rev|branch) = "[^"]*"', rf'\1rev = "{sha}"', text)
-if n != 1:
+# armless and armless-user (user mode) are pinned together
+text, n = re.subn(r'(armless(?:-user)? = \{ git = "https://github.com/filipecabaco/armless", )(?:tag|rev|branch) = "[^"]*"', rf'\1rev = "{sha}"', text)
+if n < 1:
     sys.exit(f"{cargo}: no armless dependency to repin")
 open(cargo, "w").write(text)
 

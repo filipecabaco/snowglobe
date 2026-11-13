@@ -39,7 +39,8 @@ concurrency:
 
 jobs:
   # DEMOS (on the site) and EXAMPLES (CI only) in mise.toml are the lists of sites. A site named
-  # <example>-<n>cpu is examples/<example> built with --cpus <n> (an X card needs one CPU)
+  # <example>-<n>cpu is examples/<example> built with --cpus <n> (an X card needs one CPU), and
+  # <example>-nokernel one built with --kernel none (its program runs with no guest kernel)
   setup:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -56,8 +57,9 @@ jobs:
         run: |
           echo "sites=$(mise env --json | jq -c '[(.DEMOS | split(" ") | .[] | {name: ., deploy: true}),
                                                  (.EXAMPLES | split(" ") | .[] | {name: ., deploy: false})]
-                                                | map(. + {src: (.name | sub("-[0-9]+cpu$"; "")),
-                                                           cpus: (.name | capture("-(?<n>[0-9]+)cpu$").n // "")})')" >> "$GITHUB_OUTPUT"
+                                                | map(. + {src: (.name | sub("-[0-9]+cpu$|-nokernel$"; "")),
+                                                           cpus: (.name | capture("-(?<n>[0-9]+)cpu$").n // ""),
+                                                           kernel: (if (.name | endswith("-nokernel")) then "none" else "" end)})')" >> "$GITHUB_OUTPUT"
 
   test:
     runs-on: ubuntu-24.04
@@ -186,6 +188,7 @@ jobs:
       SITE: ${{ matrix.site.name }}
       SRC: ${{ matrix.site.src }}
       CPUS: ${{ matrix.site.cpus }}
+      KERNEL: ${{ matrix.site.kernel }}
     steps:
       - uses: actions/checkout@v7
 
@@ -231,7 +234,7 @@ jobs:
 
       - name: Build ${{ matrix.site.name }}
         if: steps.cache.outputs.cache-hit != 'true'
-        run: ./snowglobe build "examples/$SRC" --out "dist/$SITE" ${CPUS:+--cpus "$CPUS"}
+        run: ./snowglobe build "examples/$SRC" --out "dist/$SITE" ${CPUS:+--cpus "$CPUS"} ${KERNEL:+--kernel "$KERNEL"}
 
       # Type into the app in its own language and check what it prints. The Go demo is a
       # full-screen app with no prompt: it only has to keep running.

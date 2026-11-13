@@ -94,6 +94,8 @@ type Settings struct {
 	SkippedExercises int
 	// SkippedAgent: the image is one of the agent page's machines, which a build with no kernel isn't
 	SkippedAgent bool
+	// SkippedCPUs: the CPUs the image asks for (its label) that a build with no kernel runs on one
+	SkippedCPUs int
 	// JIT: runs compile hot guest code (the default) rather than keep the interpreter
 	JIT         bool
 	Command     string
@@ -229,6 +231,9 @@ func Run(o Options, version string) error {
 		}
 		if s.SkippedAgent {
 			fmt.Println("    agent:   not on the agent page (its label; the agent page's jobs need a shell, so a kernel)")
+		}
+		if s.SkippedCPUs > 0 {
+			fmt.Printf("    cpus:    one, not the image's %d (not with --kernel none yet)\n", s.SkippedCPUs)
 		}
 	}
 	for _, t := range s.Tunnels {
@@ -664,16 +669,19 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	switch s.Kernel {
 	case "linux":
 	case "none":
-		// What a machine with no kernel can't do yet
+		// What a machine with no kernel can't do yet. Its network is the machine's, as a guest's
+		// (armless user mode has sockets).
 		switch {
-		case s.Network != "none":
-			return nil, errors.New("kernel none: no network yet (the program runs with no sockets)")
-		case s.CPUs != 1:
+		case o.CPUs > 1:
 			return nil, errors.New("kernel none: one CPU (the program's threads take turns on it)")
 		case len(o.Exercise) > 0:
 			return nil, errors.New("kernel none: no exercises yet (the files they read aren't recorded for the warm pack)")
 		case o.Agent:
 			return nil, errors.New("kernel none: not on the agent page (its jobs need a shell, so a kernel)")
+		}
+		// An image that asks for more CPUs (its label, for a kernel) runs on one
+		if s.CPUs > 1 {
+			s.SkippedCPUs, s.CPUs = s.CPUs, 1
 		}
 		s.BuildCPUs = 1
 		// The image's own exercises and agent page (its labels) are left out rather than refused

@@ -3,10 +3,12 @@ go = "1.27.1"
 
 [env]
 # <example>-<n>cpu: examples/<example> built with --cpus <n>; supabase-1cpu is what its X card plays
+# <example>-nokernel: examples/<example> built with --kernel none (its program with no guest kernel)
 # python-agent is the agent page's python (a network for pip install); the index page doesn't list it
 DEMOS = "conduit supabase supabase-1cpu iex postgres elixir python python-agent typescript go rust java curl duckdb web"
 # Examples built and checked in CI but not on the site (too big, or need the host's network)
-EXAMPLES = "apk"
+# postgres and supabase with no kernel are checked here before they replace the sites
+EXAMPLES = "apk postgres-nokernel supabase-nokernel"
 
 [tasks.build]
 description = "Build every example into dist/<language>, then assemble the site"
@@ -17,6 +19,7 @@ rm -rf dist
 for demo in $DEMOS; do
   case "$demo" in
     *-[0-9]cpu) n=${demo##*-}; ./snowglobe build "examples/${demo%-*}" --out "dist/$demo" --cpus "${n%cpu}" ;;
+    *-nokernel) ./snowglobe build "examples/${demo%-nokernel}" --out "dist/$demo" --kernel none ;;
     *) ./snowglobe build "examples/$demo" --out "dist/$demo" ;;
   esac
 done
