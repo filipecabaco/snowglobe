@@ -115,7 +115,7 @@ CMD ["/usr/local/bin/supabase-demo"]
 # little. 384 MB was tried: the guest's OOM killer took out Realtime during boot and the first
 # exercise. The stack (Realtime's BEAM is the biggest part, and the CLI keeps a Bun process per
 # service) leaves room for the programs' pages and a couple of notes runs at once
-# With no kernel (supabase-nokernel) 640: no page cache shares the programs' file pages between
+# With no kernel (supabase-1cpu) 640: no page cache shares the programs' file pages between
 # their processes, and at 512 PostgREST and Realtime run out of memory while they start
 LABEL snowglobe.title="Supabase in the browser" \
       snowglobe.memory="448" snowglobe.nokernel-memory="640" snowglobe.cpus="2" \

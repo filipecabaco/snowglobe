@@ -98,7 +98,6 @@ func TestResolveKernel(t *testing.T) {
 	// What a machine with no kernel can't do yet
 	for name, o := range map[string]Options{
 		"several CPUs":   {Kernel: "none", CPUs: 2},
-		"exercises":      {Kernel: "none", Exercise: []string{"ls"}},
 		"the agent page": {Kernel: "none", Agent: true},
 		"another kernel": {Kernel: "bsd"},
 	} {
@@ -108,7 +107,7 @@ func TestResolveKernel(t *testing.T) {
 	}
 }
 
-func TestAProgramWithNoKernelHasTheImagesEnvironmentAndExercisesLeftOut(t *testing.T) {
+func TestAProgramWithNoKernelHasTheImagesEnvironmentAndExercises(t *testing.T) {
 	img := image(map[string]string{"snowglobe.kernel": "none", "snowglobe.exercise": `["print(1)", "2 + 2"]`}, "python3")
 	img.Config.Env = []string{"PATH=/opt/venv/bin:/usr/bin", "LANG=C.UTF-8"}
 	img.Config.WorkingDir = "/root"
@@ -120,11 +119,11 @@ func TestAProgramWithNoKernelHasTheImagesEnvironmentAndExercisesLeftOut(t *testi
 	if !slices.Equal(u.Env, img.Config.Env) || u.Cwd != "/root" || !slices.Equal(u.Argv, []string{"python3"}) {
 		t.Errorf("the image's program, environment and working directory: %+v", u)
 	}
-	if len(s.Exercise) != 0 || s.SkippedExercises != 2 {
-		t.Errorf("the image's exercises are left out, and counted: %v %d", s.Exercise, s.SkippedExercises)
+	if !slices.Equal(s.Exercise, []string{"print(1)", "2 + 2"}) {
+		t.Errorf("the image's exercises: %v", s.Exercise)
 	}
-	if _, err := Resolve(Options{Exercise: []string{"x"}}, img); err == nil {
-		t.Error("an exercise asked for with --exercise is refused")
+	if s, err := Resolve(Options{Exercise: []string{"x"}}, img); err != nil || !slices.Equal(s.Exercise, []string{"x"}) {
+		t.Errorf("--exercise: %v %v", s, err)
 	}
 }
 

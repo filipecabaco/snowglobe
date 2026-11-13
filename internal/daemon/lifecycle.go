@@ -42,11 +42,16 @@ type lifecycleState struct {
 	waking map[string]*sync.Mutex
 	// When each template last had a machine or a job
 	lastUsed map[string]time.Time
+	// What uses each template's server now (a machine starting, a job): it doesn't sleep under them
+	inUse map[string]int
+	// Memory held for jobs on fresh forks of templates, which run as no machine the daemon can
+	// measure: each its template's estimate, until it ends
+	reserved int64
 	mu       sync.Mutex
 }
 
 func newLifecycle() *lifecycleState {
-	return &lifecycleState{waking: map[string]*sync.Mutex{}, lastUsed: map[string]time.Time{}}
+	return &lifecycleState{waking: map[string]*sync.Mutex{}, lastUsed: map[string]time.Time{}, inUse: map[string]int{}}
 }
 
 func (s *Server) used(template string) {
@@ -87,35 +92,61 @@ func (s *Server) estimate(t string) int64 {
 	return costs[len(costs)/2]
 }
 
-// admit waits (up to Options.Wait) until a machine of t fits the memory budget, and holds
-// admissions until release is called (once the machine is up), so that two never both take the
-// last room. With no budget it admits at once.
-func (s *Server) admit(t string) (release func(), err error) {
+// admit waits (up to wait) until a machine of t fits the memory budget, and holds admissions
+// until release is called (once the machine is up), so that two never both take the last room.
+// With no budget it admits at once.
+func (s *Server) admit(t string, wait time.Duration) (release func(), err error) {
 	if s.o.Memory <= 0 {
 		return func() {}, nil
 	}
 	begun := time.Now()
 	s.life.admit.Lock()
 	for {
-		used, need := s.MemoryUsed(), s.estimate(t)
+		s.life.mu.Lock()
+		reserved := s.life.reserved
+		s.life.mu.Unlock()
+		used, need := s.MemoryUsed()+reserved, s.estimate(t)
 		if used+need <= s.o.Memory {
 			if waited := time.Since(begun); waited > 100*time.Millisecond {
 				s.note("admission.waited", "template "+t, "a machine admitted after waiting %s for memory", waited.Round(time.Millisecond))
 			}
 			return s.life.admit.Unlock, nil
 		}
-		if time.Since(begun) >= s.o.Wait {
+		if time.Since(begun) >= wait {
 			s.life.admit.Unlock()
 			s.note("admission.refused", "template "+t, "no room for a machine: %s used of %s, about %s needed", mb(used), mb(s.o.Memory), mb(need))
 			return nil, errStatus(429, "no room in the memory budget: %s used of %s, and a machine of %s takes about %s (waited %s)",
-				mb(used), mb(s.o.Memory), t, mb(need), s.o.Wait)
+				mb(used), mb(s.o.Memory), t, mb(need), wait)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-// awake is template name with its server running: started again first if it was asleep.
-func (s *Server) awake(name string) (*Template, error) {
+// admitJob admits a job on a fresh fork of t: its estimate is held in the budget until done is
+// called (the job ended), as the daemon can't measure a fork it never sees.
+func (s *Server) admitJob(t string) (done func(), err error) {
+	release, err := s.admit(t, s.o.Wait)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if s.o.Memory <= 0 {
+		return func() {}, nil
+	}
+	need := s.estimate(t)
+	s.life.mu.Lock()
+	s.life.reserved += need
+	s.life.mu.Unlock()
+	return func() {
+		s.life.mu.Lock()
+		s.life.reserved -= need
+		s.life.mu.Unlock()
+	}, nil
+}
+
+// awake is template name with its server running: started again first if it was asleep. It
+// stays awake until done is called (what needed it is up, or ended).
+func (s *Server) awake(name string) (t *Template, done func(), err error) {
 	s.life.mu.Lock()
 	lock := s.life.waking[name]
 	if lock == nil {
@@ -126,21 +157,35 @@ func (s *Server) awake(name string) (*Template, error) {
 	lock.Lock()
 	defer lock.Unlock()
 	s.mu.Lock()
-	t, ok := s.st.Templates[name]
+	cur, ok := s.st.Templates[name]
 	var c Template
 	if ok {
-		c = *t
+		c = *cur
 	}
 	s.mu.Unlock()
 	if !ok {
-		return nil, errStatus(404, "no template called %s", name)
+		return nil, nil, errStatus(404, "no template called %s", name)
+	}
+	// In use from here (under the lock sleep takes too): it can't sleep before done
+	s.life.mu.Lock()
+	s.life.inUse[name]++
+	s.life.mu.Unlock()
+	var once sync.Once
+	done = func() {
+		once.Do(func() {
+			s.life.mu.Lock()
+			s.life.inUse[name]--
+			s.life.lastUsed[name] = time.Now()
+			s.life.mu.Unlock()
+		})
 	}
 	if !c.Asleep {
-		return &c, nil
+		return &c, done, nil
 	}
 	begun := time.Now()
 	if err := s.startServer(&c); err != nil {
-		return nil, err
+		done()
+		return nil, nil, err
 	}
 	c.Asleep = false
 	s.mu.Lock()
@@ -152,7 +197,7 @@ func (s *Server) awake(name string) (*Template, error) {
 	s.used(name)
 	s.meter.wake(time.Since(begun))
 	s.note("template.awake", "template "+name, "awake in %d ms", time.Since(begun).Milliseconds())
-	return &c, nil
+	return &c, done, nil
 }
 
 // lifecycle stops machines past their time to live, and the servers of templates that have had no
@@ -175,13 +220,14 @@ func (s *Server) lifecycle() {
 		}
 		s.life.mu.Lock()
 		last, seen := s.life.lastUsed[t.Name]
+		inUse := s.life.inUse[t.Name] > 0
 		if !seen {
 			// Started again with the daemon, or never used: idle from now
 			s.life.lastUsed[t.Name] = now
 			last = now
 		}
 		s.life.mu.Unlock()
-		if now.Sub(last) >= time.Duration(t.Idle) {
+		if !inUse && now.Sub(last) >= time.Duration(t.Idle) {
 			s.sleep(t.Name)
 		}
 	}
@@ -198,6 +244,13 @@ func (s *Server) sleep(name string) {
 	s.life.mu.Unlock()
 	lock.Lock()
 	defer lock.Unlock()
+	s.life.mu.Lock()
+	inUse := s.life.inUse[name] > 0
+	s.life.mu.Unlock()
+	if inUse {
+		// A job, or a machine starting, came meanwhile
+		return
+	}
 	s.mu.Lock()
 	t, ok := s.st.Templates[name]
 	if !ok || t.Asleep {
@@ -215,9 +268,9 @@ func (s *Server) sleep(name string) {
 	t.Asleep, t.Pid, t.Ready = true, 0, ""
 	s.save()
 	s.mu.Unlock()
-	syscall.Kill(-pid, syscall.SIGTERM)
+	killGroup(pid, syscall.SIGTERM)
 	if !gone(pid, stopGrace) {
-		syscall.Kill(-pid, syscall.SIGKILL)
+		killGroup(pid, syscall.SIGKILL)
 	}
 	os.RemoveAll(dir)
 	s.note("template.asleep", "template "+name, "asleep, idle %s", time.Duration(t.Idle))

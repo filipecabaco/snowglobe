@@ -19,6 +19,7 @@ func TestWriteRead(t *testing.T) {
 	write := func(p, s string) { must(os.WriteFile(filepath.Join(site, p), []byte(s), 0o644)) }
 	write("run.json", `{"title":"t"}`)
 	write("system/state.bin.zst", "STATE")
+	write("system/user.bin", "PROCESS") // a site with no kernel's
 	write("system/filesystem.json", `{"fsroot":[["bin",1,2,["abc123"]]],"version":3}`)
 	write("system/filesystem/abc123", "BLOB")
 	write("system/filesystem/unused", "NOT NAMED") // a pooled neighbour's: left out
@@ -42,7 +43,7 @@ func TestWriteRead(t *testing.T) {
 		}
 		return string(data[f[0] : f[0]+f[1]])
 	}
-	if get("run.json") != `{"title":"t"}` || get("system/state.bin.zst") != "STATE" || get("blob/abc123") != "BLOB" {
+	if get("run.json") != `{"title":"t"}` || get("system/state.bin.zst") != "STATE" || get("blob/abc123") != "BLOB" || get("system/user.bin") != "PROCESS" {
 		t.Fatal("contents differ")
 	}
 	if _, ok := files["blob/unused"]; ok {

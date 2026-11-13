@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"sync"
@@ -39,8 +40,12 @@ type Run struct {
 	Ms       int64             `json:"ms,omitempty"`
 }
 
-// How many runs are kept, the oldest finished ones going first
-var keptRuns = 500
+// How many runs are kept, the oldest finished ones going first; and how much of their output
+// (each run's is cut at maxJobOutput), past which the oldest finished ones lose theirs
+var (
+	keptRuns      = 500
+	keptRunOutput = int64(256 << 20)
+)
 
 type runs struct {
 	mu  sync.Mutex
@@ -68,7 +73,8 @@ func (s *Server) SubmitRun(req SubmitRun) (*Run, error) {
 	s.runs.mu.Unlock()
 	s.note("run.started", "run "+r.ID, "on a fresh fork of %s: %s", r.Template, short(r.Cmd))
 	go func() {
-		res, err := s.TemplateJob(req.Template, control.JobRequest{Cmd: req.Cmd, Env: req.Env, Files: req.Files, Timeout: req.Timeout})
+		// (Nobody waits on it: it runs to its own time limit)
+		res, err := s.TemplateJob(context.Background(), req.Template, control.JobRequest{Cmd: req.Cmd, Env: req.Env, Files: req.Files, Timeout: req.Timeout})
 		end := time.Now()
 		s.runs.mu.Lock()
 		r.Ended, r.Ms = &end, end.Sub(r.Created).Milliseconds()
@@ -78,6 +84,7 @@ func (s *Server) SubmitRun(req SubmitRun) (*Run, error) {
 		default:
 			r.Status, r.Exit, r.Output, r.Out, r.TimedOut = "done", res.Status, res.Output, res.Out, res.TimedOut
 		}
+		s.pruneRuns()
 		done := *r
 		s.runs.mu.Unlock()
 		switch {
@@ -92,21 +99,42 @@ func (s *Server) SubmitRun(req SubmitRun) (*Run, error) {
 	return &c, nil
 }
 
-// pruneRuns drops the oldest finished runs past keptRuns (runs.mu held).
+// pruneRuns drops the oldest finished runs past keptRuns, and the output of the oldest past
+// keptRunOutput (runs.mu held).
 func (s *Server) pruneRuns() {
-	if len(s.runs.all) <= keptRuns {
-		return
-	}
 	var done []*Run
+	var held int64
 	for _, r := range s.runs.all {
 		if r.Ended != nil {
 			done = append(done, r)
+			held += runOutput(r)
 		}
 	}
 	sort.Slice(done, func(i, j int) bool { return done[i].Created.Before(done[j].Created) })
-	for _, r := range done[:max(0, min(len(done), len(s.runs.all)-keptRuns))] {
+	n := max(0, min(len(done), len(s.runs.all)-keptRuns))
+	for _, r := range done[:n] {
+		held -= runOutput(r)
 		delete(s.runs.all, r.ID)
 	}
+	for _, r := range done[n:] {
+		if held <= keptRunOutput {
+			break
+		}
+		if o := runOutput(r); o > 0 {
+			held -= o
+			r.Output, r.Out = nil, nil
+			r.Error = "its output was dropped: newer runs' took the room the daemon keeps for them"
+		}
+	}
+}
+
+// runOutput is how much of a run's output (and out/) is kept.
+func runOutput(r *Run) int64 {
+	n := int64(len(r.Output))
+	for _, f := range r.Out {
+		n += int64(len(f))
+	}
+	return n
 }
 
 // Runs is the kept runs, newest first, without their output.

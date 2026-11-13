@@ -80,6 +80,8 @@ Usage:
                                                      write_file and read_file tools; no Docker.
                      [--log-dir DIR]                 Logs to the cache's snowglobe/logs/mcp
                                                      (or <name> with --name) unless --log-dir
+                     [--cpus N]                      --cpus for a site with no kernel (default:
+                                                     the CPUs it was built on, up to this host's)
   snowglobe mcp --daemon                             serve the daemon to an agent over MCP: templates,
                                                      machines, commands and files, snapshots,
                                                      services, builds, fleets, status and events
@@ -107,6 +109,9 @@ Usage:
                                                      tunnels (a local proxy, say); --allow-private
                                                      lets the guest reach this machine's services
                                                      --jit on|off over the site's own choice
+                                                     --cpus N for a site with no kernel: its
+                                                     threads on N CPUs at once (default: as many
+                                                     as it was built on)
                                                      --max-runtime 30m ends the run after that long
                                                      (exit 124), --stop-file PATH once PATH exists
                                                      (exit 143): the job running in the guest is
@@ -142,6 +147,13 @@ Usage:
                                                      room, then is refused. Its servers and
                                                      machines end with it, a crash included;
                                                      started again, it restores its templates
+                   [--tls-cert F --tls-key F]        ADDR other hosts reach needs TLS (or
+                   [--insecure-listen]               --insecure-listen). Requests on ADDR name
+                   [--site-root DIR]...              no path of this host but sites they uploaded
+                   [--remote-allow-private]          (template add and apply upload a local one)
+                                                     and --site-root DIRs, fetch URLs on public
+                                                     addresses only, and give machines no private
+                                                     egress, unless --remote-allow-private
   snowglobe daemon stop                              stop the daemon, and everything it started
   snowglobe template add <site> [--name T]           restore a site once, for machines to be forked
                      [--max-machines N]              from; template ls lists them, template rm T
@@ -233,7 +245,7 @@ Build flags:
   --kernel none   no guest kernel: the image's command, an aarch64 Linux program, runs on its
                   own, its system calls answered by the machine, in the page and natively.
                   Smaller snapshots; one CPU in the page (the build runs it on --build-cpus at
-                  once), no exercises (default: linux)
+                  once, and natively it runs on as many) (default: linux)
   --cpus N        guest CPUs, 1 to 8 (default: 1). More than one runs each CPU in its own Web
                   Worker; the page then makes itself cross-origin isolated with a service worker
   --build-cpus N  CPUs to boot and warm up on before the snapshot (default: the larger of --cpus
@@ -604,6 +616,7 @@ func runRun(args []string) error {
 	fs.StringVar(&o.StopFile, "stop-file", "", "")
 	fs.StringVar(&o.LogDir, "log-dir", "", "")
 	fs.StringVar(&o.JIT, "jit", "", "")
+	fs.IntVar(&o.CPUs, "cpus", 0, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)
@@ -729,6 +742,7 @@ func runMCP(args []string) error {
 	keep := fs.Bool("keep", false, "")
 	logDir := fs.String("log-dir", "", "")
 	onDaemon := fs.Bool("daemon", false, "")
+	cpus := fs.Int("cpus", 0, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	positional, err := parse(fs, args)
 	if err != nil {
@@ -772,7 +786,7 @@ func runMCP(args []string) error {
 	started := false
 	if err := instance.Shell(*name, "true", false, 30); err != nil {
 		// Not running yet: start it, natively (stdout stays the protocol's)
-		if err := instance.Run(instance.Options{Site: site, Name: *name, Detach: true, Runtime: "native", LogDir: *logDir}, version); err != nil {
+		if err := instance.Run(instance.Options{Site: site, Name: *name, Detach: true, Runtime: "native", LogDir: *logDir, CPUs: *cpus}, version); err != nil {
 			return err
 		}
 		started = true

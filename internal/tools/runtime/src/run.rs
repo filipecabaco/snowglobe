@@ -67,7 +67,7 @@ fn at_prompt(printed: &[u8], shape: &str) -> bool {
 /// What a command printed, from everything the terminal showed after it was typed: the echoed
 /// command line and the prompt left waiting after it are the terminal's, not the command's, so
 /// they're cut. Also the prompt now waiting, when it isn't `prompt` any more.
-fn command_output(output: &str, command: &str, prompt: &str) -> (Vec<u8>, Option<String>) {
+pub(crate) fn command_output(output: &str, command: &str, prompt: &str) -> (Vec<u8>, Option<String>) {
     // Line editors echo the command (wrapped at the terminal's width when it is long) and
     // often redraw it with the prompt (IEx, Node): the leading lines that end with the
     // command are that echo. Ending with it as a word: `ls` printing "tools" is output. After
@@ -293,7 +293,10 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // fills up and starts over mid-run (ARMLESS_JIT_CODE_MB still says otherwise)
     // A site with no kernel restores its program instead (snowglobe build --kernel none)
     if crate::user::is_user(&site) {
-        return crate::user::run(args, &site, &spec, &title, image, &socket, started);
+        return crate::user::run(args, &site, &spec, &title, image, &socket, started, env_file);
+    }
+    if args.get("cpus").is_some() {
+        return Err("--cpus is for a site with no kernel: a guest's kernel has the CPUs it booted with".into());
     }
     if std::env::var_os("ARMLESS_JIT_CODE_MB").is_none() {
         std::env::set_var("ARMLESS_JIT_CODE_MB", "64");
@@ -548,7 +551,7 @@ fn env_file(p: &str) -> Result<Vec<(String, String)>, String> {
 
 /// `--forward [ADDRESS:]PORT:GUEST_PORT` (all addresses by default): where to listen, and the
 /// guest's port.
-fn forward(spec: &str) -> Result<(String, u16, u16), String> {
+pub(crate) fn forward(spec: &str) -> Result<(String, u16, u16), String> {
     let (addr, rest) = match spec.matches(':').count() {
         2 => spec.split_once(':').unwrap(),
         _ => ("0.0.0.0", spec),
@@ -703,7 +706,7 @@ fn serve(session: &Session, stream: UnixStream) {
 
 /// A links request's links: each a name (or none, for any) and port the guest connects to, and
 /// the tcp://HOST:PORT its connections go to instead.
-fn links(v: &serde_json::Value) -> Result<Vec<armless::native::Tunnel>, String> {
+pub(crate) fn links(v: &serde_json::Value) -> Result<Vec<armless::native::Tunnel>, String> {
     let Some(list) = v.as_array() else { return Err("links: a list of {host, port, url}".into()) };
     list.iter()
         .map(|l| {

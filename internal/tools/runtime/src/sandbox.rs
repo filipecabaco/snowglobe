@@ -19,6 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub struct Policy {
     /// Directories and files read
     pub read: Vec<PathBuf>,
@@ -53,11 +54,40 @@ pub fn apply_stage(p: &Policy, stage: Stage) -> Result<String, String> {
     if mode == "off" {
         return Ok("not sandboxed (SNOWGLOBE_SANDBOX=off)".into());
     }
+    let mut p = p.clone();
+    p.write.extend(scratch());
     for d in &p.write {
         let _ = std::fs::create_dir_all(d);
     }
-    let (applied, missing) = imp::apply(p, stage);
+    let (applied, missing) = imp::apply(&p, stage);
     report(&applied, &missing, mode == "strict")
+}
+
+/// A directory of the user's for the runtime's temporary files, writable in the sandbox, and the
+/// temporary directory from now on (TMPDIR): armless keeps the files of the machine's filesystem
+/// it decompressed in a file of its own there (unlinked as soon as it is made, so one directory
+/// serves every run), in the page cache rather than the process's memory, where the sandbox let
+/// it make none. None if it can't be made private.
+fn scratch() -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+        // SAFETY: getuid has no preconditions.
+        #[allow(unsafe_code)]
+        let uid = unsafe { libc::getuid() };
+        let dir = std::env::temp_dir().join(format!("snowglobe-scratch-{uid}"));
+        let _ = std::fs::DirBuilder::new().mode(0o700).create(&dir);
+        // Only a directory of this user's, private to it: another user's (made first, in a shared
+        // /tmp) would see the files
+        let m = std::fs::symlink_metadata(&dir).ok()?;
+        if !m.is_dir() || m.uid() != uid || m.permissions().mode() & 0o077 != 0 {
+            return None;
+        }
+        std::env::set_var("TMPDIR", &dir);
+        Some(dir)
+    }
+    #[cfg(not(unix))]
+    None
 }
 
 /// What is in force, for the run's banner; with `strict`, an error if any part is missing.

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"context"
@@ -8,15 +9,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/filipecabaco/snowglobe/internal/control"
+	"github.com/klauspost/compress/zstd"
 )
 
 // Client talks to a daemon's API.
@@ -26,6 +30,35 @@ type Client struct {
 	token string
 	// Where it is, for messages
 	Addr string
+	// Whether it is on another host (http(s)://): it can't read this host's paths
+	remote bool
+	// Requests made for another host's (ForRemote)
+	origin string
+}
+
+// headers puts the client's origin on each request it sends, whichever way it is sent.
+type headers struct {
+	c    *Client
+	next http.RoundTripper
+}
+
+func (h headers) RoundTrip(r *http.Request) (*http.Response, error) {
+	if h.c.origin != "" {
+		r = r.Clone(r.Context())
+		r.Header.Set(OriginHeader, h.c.origin)
+	}
+	return h.next.RoundTrip(r)
+}
+
+// ForRemote makes this client's requests ones made for a request from another host: the daemon
+// holds them to its policy (the fleet routes, applying a fleet a remote client asked for).
+func (c *Client) ForRemote() {
+	c.origin = "remote"
+}
+
+// Remote says whether the daemon is on another host.
+func (c *Client) Remote() bool {
+	return c.remote
 }
 
 // Find is the daemon to talk to: $SNOWGLOBE_DAEMON (http://HOST:PORT, with
@@ -61,18 +94,27 @@ func NewClient(addr, token string) (*Client, error) {
 	case strings.HasPrefix(addr, "unix://"):
 		sock := strings.TrimPrefix(addr, "unix://")
 		c.base = "http://daemon"
-		c.http = &http.Client{Transport: &http.Transport{
+		c.http = &http.Client{Transport: headers{c, &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, "unix", sock)
 			},
-		}}
+		}}}
 	case strings.HasPrefix(addr, "http://"), strings.HasPrefix(addr, "https://"):
 		u, err := url.Parse(addr)
 		if err != nil {
 			return nil, err
 		}
 		c.base = strings.TrimSuffix(u.String(), "/")
-		c.http = &http.Client{}
+		c.remote = true
+		// Bounded connecting, not answering: a build, an apply or a stream takes as long as it does
+		dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+		c.http = &http.Client{Transport: headers{c, &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           dialer.DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		}}}
 	default:
 		return nil, fmt.Errorf("daemon %q: unix:///PATH or http://HOST:PORT", addr)
 	}
@@ -141,9 +183,141 @@ func (c *Client) Templates() ([]Template, error) {
 	return ts, c.call("GET", "/v1/templates", nil, &ts)
 }
 
+// AddTemplate asks for a template. To a daemon on another host a site of this one (a directory or
+// a tarball) is uploaded first: the daemon reads its own disk, not this one's.
 func (c *Client) AddTemplate(req AddTemplate) (*Template, error) {
+	if c.remote && req.Site != "" && !strings.HasPrefix(req.Site, "http://") && !strings.HasPrefix(req.Site, "https://") {
+		if _, err := os.Stat(req.Site); err == nil {
+			site, err := c.Upload(req.Site)
+			if err != nil {
+				return nil, err
+			}
+			req.Site = site
+		}
+	}
 	var t Template
 	return &t, c.call("POST", "/v1/templates", req, &t)
+}
+
+// Upload sends a built site of this host (its directory, or a tarball: .tar, .tar.gz, .tgz,
+// .tar.zst) to the daemon, and returns where the daemon keeps it, for AddTemplate.Site.
+func (c *Client) Upload(site string) (string, error) {
+	fi, err := os.Stat(site)
+	if err != nil {
+		return "", err
+	}
+	var body io.Reader
+	format := "tar"
+	if fi.IsDir() {
+		if _, err := os.Stat(filepath.Join(site, "run.json")); err != nil {
+			return "", fmt.Errorf("%s isn't a built snowglobe site (no run.json)", site)
+		}
+		pr, pw := io.Pipe()
+		go func() { pw.CloseWithError(packDir(pw, site)) }()
+		defer pr.Close()
+		body, format = pr, "zst"
+	} else {
+		f, err := os.Open(site)
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+		body = f
+		switch {
+		case strings.HasSuffix(site, ".gz"), strings.HasSuffix(site, ".tgz"):
+			format = "gz"
+		case strings.HasSuffix(site, ".zst"):
+			format = "zst"
+		case strings.HasSuffix(site, ".tar"):
+		default:
+			return "", fmt.Errorf("%s: a site's directory, or a tarball (.tar, .tar.gz, .tgz, .tar.zst)", site)
+		}
+	}
+	req, err := http.NewRequest("POST", c.base+"/v1/sites?format="+format, body)
+	if err != nil {
+		return "", err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("daemon %s: uploading %s: %w", c.Addr, site, err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Site  string `json:"site"`
+		Error string `json:"error"`
+	}
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	json.Unmarshal(data, &out)
+	if resp.StatusCode >= 300 {
+		if out.Error == "" {
+			out.Error = strings.TrimSpace(string(data))
+		}
+		return "", &apiError{status: resp.StatusCode, msg: out.Error}
+	}
+	return out.Site, nil
+}
+
+// packDir writes dir as a zstd tar: its regular files and directories (what a site is), with
+// their modes.
+func packDir(w io.Writer, dir string) error {
+	zw, err := zstd.NewWriter(w)
+	if err != nil {
+		return err
+	}
+	tw := tar.NewWriter(zw)
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		// A link is followed (a pooled site's blobs are links to a shared directory)
+		if info.Mode()&fs.ModeSymlink != 0 {
+			if info, err = os.Stat(path); err != nil {
+				return err
+			}
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return nil
+		}
+		h, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		h.Name = filepath.ToSlash(rel)
+		if info.IsDir() {
+			h.Name += "/"
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(tw, f)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return zw.Close()
 }
 
 func (c *Client) RemoveTemplate(name string) error {
@@ -282,6 +456,11 @@ func (c *Client) Builds() ([]Build, error) {
 
 // StartBuild starts building a site (and a template of it).
 func (c *Client) StartBuild(req BuildRequest) (*Build, error) {
+	if c.remote && req.Source != "" {
+		if fi, err := os.Stat(req.Source); err == nil && fi.IsDir() {
+			return nil, fmt.Errorf("%s is a directory of this host, and the daemon at %s is on another: build it here (snowglobe build), then template add the site, which uploads it", req.Source, c.Addr)
+		}
+	}
 	var v Build
 	return &v, c.call("POST", "/v1/builds", req, &v)
 }

@@ -40,7 +40,8 @@ concurrency:
 jobs:
   # DEMOS (on the site) and EXAMPLES (CI only) in mise.toml are the lists of sites. A site named
   # <example>-<n>cpu is examples/<example> built with --cpus <n> (an X card needs one CPU), and
-  # <example>-nokernel one built with --kernel none (its program runs with no guest kernel)
+  # <example>-nokernel one built with --kernel none (its program runs with no guest kernel), as is
+  # every demo KERNEL doesn't name
   setup:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -55,11 +56,12 @@ jobs:
 
       - id: sites
         run: |
-          echo "sites=$(mise env --json | jq -c '[(.DEMOS | split(" ") | .[] | {name: ., deploy: true}),
-                                                 (.EXAMPLES | split(" ") | .[] | {name: ., deploy: false})]
+          echo "sites=$(mise env --json | jq -c '(.KERNEL | split(" ")) as $kernel
+                                                | [(.DEMOS | split(" ") | .[] | {name: ., deploy: true}),
+                                                   (.EXAMPLES | split(" ") | .[] | {name: ., deploy: false})]
                                                 | map(. + {src: (.name | sub("-[0-9]+cpu$|-nokernel$"; "")),
                                                            cpus: (.name | capture("-(?<n>[0-9]+)cpu$").n // ""),
-                                                           kernel: (if (.name | endswith("-nokernel")) then "none" else "" end)})')" >> "$GITHUB_OUTPUT"
+                                                           kernel: (if (.name | endswith("-nokernel")) or (.deploy and (.name | IN($kernel[]) | not)) then "none" else "" end)})')" >> "$GITHUB_OUTPUT"
 
   test:
     runs-on: ubuntu-24.04
@@ -188,7 +190,8 @@ jobs:
       SITE: ${{ matrix.site.name }}
       SRC: ${{ matrix.site.src }}
       CPUS: ${{ matrix.site.cpus }}
-      KERNEL: ${{ matrix.site.kernel }}
+      # Not KERNEL: mise-action exports mise.toml's KERNEL list, which would override it
+      SITE_KERNEL: ${{ matrix.site.kernel }}
     steps:
       - uses: actions/checkout@v7
 
@@ -234,7 +237,7 @@ jobs:
 
       - name: Build ${{ matrix.site.name }}
         if: steps.cache.outputs.cache-hit != 'true'
-        run: ./snowglobe build "examples/$SRC" --out "dist/$SITE" ${CPUS:+--cpus "$CPUS"} ${KERNEL:+--kernel "$KERNEL"}
+        run: ./snowglobe build "examples/$SRC" --out "dist/$SITE" ${CPUS:+--cpus "$CPUS"} ${SITE_KERNEL:+--kernel "$SITE_KERNEL"}
 
       # Type into the app in its own language and check what it prints. The Go demo is a
       # full-screen app with no prompt: it only has to keep running.
@@ -294,7 +297,9 @@ jobs:
           [ "$out" = aarch64 ] || { echo "::error title=piped::got $out"; exit 1; }
           ./snowglobe run dist/curl --name smoke --detach -p 18000:8000
           trap './snowglobe stop smoke || true' EXIT
-          [ "$(./snowglobe exec smoke nproc)" = 1 ]
+          # The site's one CPU, with a kernel. With none it runs natively on the CPUs it was built
+          # on, and armless tells programs they have at least 4
+          if [ -z "$SITE_KERNEL" ]; then [ "$(./snowglobe exec smoke nproc)" = 1 ]; else [ "$(./snowglobe exec smoke nproc)" -ge 1 ]; fi
           ./snowglobe exec smoke 'curl -sS -m 30 -o /dev/null -w "%{http_code}" https://api.github.com/zen; echo " exit=$?"' | tee https.txt
           grep -q '^200 exit=0$' https.txt || { echo "::error title=https::$(cat https.txt)"; exit 1; }
           ./snowglobe exec smoke 'curl -sS -m 30 -o /dev/null -w "%{http_code}" http://example.com/; echo " exit=$?"' | tee http.txt

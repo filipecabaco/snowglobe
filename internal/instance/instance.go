@@ -52,6 +52,8 @@ type Options struct {
 	LogDir string
 	// JIT is "on" or "off" for this run, over the site's own choice; empty: the site's
 	JIT string
+	// CPUs for a site with no kernel natively (0: as many as it was built on)
+	CPUs int
 	// Fork makes a detached native instance a template: every job (snowglobe sh) runs in a fresh
 	// copy of the restored machine, forked from it, and leaves nothing behind for the next
 	Fork bool
@@ -124,7 +126,9 @@ func Run(o Options, version string) error {
 	if o.TunnelToken != "" {
 		token = o.TunnelToken
 	}
-	if tunnels, err = tunnel.Fill(tunnels, token); err != nil {
+	// The site's own endpoint (it may have come from anywhere) stays on the internet unless the
+	// guest may reach private addresses anyway
+	if tunnels, err = tunnel.Fill(tunnels, token, o.TunnelToken == "" && !o.AllowPrivate); err != nil {
 		return err
 	}
 
@@ -185,6 +189,7 @@ func Run(o Options, version string) error {
 		return err
 	}
 	command = append(command, jit...)
+	command = append(command, cpuArgs(o.CPUs)...)
 	dockerDriver, vmDriver, err := driverArgs(o, true)
 	if err != nil {
 		return err
@@ -418,6 +423,14 @@ func daemonMachine(name string) (*nativeState, error) {
 func isTerminal(f *os.File) bool {
 	info, err := f.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// cpuArgs are snowglobe-vm's flags for a run's CPUs: a number, or (0) the site's own choice.
+func cpuArgs(cpus int) []string {
+	if cpus <= 0 {
+		return nil
+	}
+	return []string{"--cpus", strconv.Itoa(cpus)}
 }
 
 // jitArgs are snowglobe-vm's flags for a run's JIT: on, off, or (empty) the site's own choice.
