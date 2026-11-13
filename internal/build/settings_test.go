@@ -50,14 +50,14 @@ func TestResolveKernel(t *testing.T) {
 		t.Errorf("a site has a kernel unless asked otherwise: %+v", s)
 	}
 
-	// The image's own command, word for word, is the program; one CPU to build and run on
+	// The image's own command, word for word, is the program; one CPU in the page, several to build on
 	img := image(map[string]string{"snowglobe.kernel": "none"}, "hold", "a b")
 	img.Config.Entrypoint = []string{"/probe"}
 	s, err = Resolve(Options{}, img)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Kernel != "none" || !slices.Equal(userProgram(s).Argv, []string{"/probe", "hold", "a b"}) || s.BuildCPUs != 1 {
+	if s.Kernel != "none" || !slices.Equal(userProgram(s).Argv, []string{"/probe", "hold", "a b"}) || s.CPUs != 1 || s.BuildCPUs != DefaultBuildCPUs {
 		t.Errorf("the label: %+v", s)
 	}
 	if !Page(s, "test").User {
@@ -76,10 +76,23 @@ func TestResolveKernel(t *testing.T) {
 	if err != nil || s.Network != "fetch" {
 		t.Errorf("a network with no kernel: %v %+v", err, s)
 	}
-	// An image that asks for CPUs (its label, for a kernel) runs on one, and says so
+	// An image that asks for CPUs (its label, for a kernel) has one in the page, and says so; it
+	// builds on as many as a kernel's would
 	s, err = Resolve(Options{}, image(map[string]string{"snowglobe.kernel": "none", "snowglobe.cpus": "2"}, "sh"))
-	if err != nil || s.CPUs != 1 || s.BuildCPUs != 1 || s.SkippedCPUs != 2 {
+	if err != nil || s.CPUs != 1 || s.BuildCPUs != DefaultBuildCPUs || s.SkippedCPUs != 2 {
 		t.Errorf("an image's CPUs with no kernel: %v %+v", err, s)
+	}
+
+	// An image's memory with no kernel (its label nokernel-memory), unless --memory says
+	withMem := map[string]string{"snowglobe.memory": "448", "snowglobe.nokernel-memory": "640"}
+	if s, err = Resolve(Options{Kernel: "none"}, image(withMem, "sh")); err != nil || s.Memory != 640 {
+		t.Errorf("nokernel-memory: %v %+v", err, s)
+	}
+	if s, err = Resolve(Options{}, image(withMem, "sh")); err != nil || s.Memory != 448 {
+		t.Errorf("nokernel-memory is for no kernel only: %v %+v", err, s)
+	}
+	if s, err = Resolve(Options{Kernel: "none", Memory: 512}, image(withMem, "sh")); err != nil || s.Memory != 512 {
+		t.Errorf("--memory wins over nokernel-memory: %v %+v", err, s)
 	}
 
 	// What a machine with no kernel can't do yet

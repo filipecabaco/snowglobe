@@ -232,7 +232,8 @@ Build flags:
                   page and in snowglobe run: slower, and a smaller machine (default: on)
   --kernel none   no guest kernel: the image's command, an aarch64 Linux program, runs on its
                   own, its system calls answered by the machine, in the page and natively.
-                  Snapshots a tenth the size; no network, one CPU, no exercises (default: linux)
+                  Smaller snapshots; one CPU in the page (the build runs it on --build-cpus at
+                  once), no exercises (default: linux)
   --cpus N        guest CPUs, 1 to 8 (default: 1). More than one runs each CPU in its own Web
                   Worker; the page then makes itself cross-origin isolated with a service worker
   --build-cpus N  CPUs to boot and warm up on before the snapshot (default: the larger of --cpus
