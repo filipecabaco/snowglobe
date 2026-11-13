@@ -2,7 +2,7 @@
 //!
 //! - `console.log`: everything the app's terminal (hvc0) printed, as printed
 //! - `serial.log`: the guest's serial line (ttyS0): the kernel's messages (an OOM kill, a panic)
-//!   and the job shell
+//!   and the job shell; with no kernel, what the jobs printed
 //! - `events.jsonl`: one JSON object a line, each with `t` (Unix seconds) and `event`: `start`,
 //!   `restored`, `job_start`, `job_end` (status, timed_out, cancelled, killed, ms, output), `stop`
 //!   (reason, exit)

@@ -625,6 +625,10 @@ fn stretch(
             let mut io = shared.io.lock().unwrap();
             if !out.is_empty() {
                 io.output.extend_from_slice(&out);
+                // The app's terminal, in console.log as with a kernel
+                if let Some(l) = crate::log::get() {
+                    l.console(&out);
+                }
                 io.last_output = Some(Instant::now());
                 io.waiting = false;
                 io.watchers.retain_mut(|w| w(&out));
@@ -714,6 +718,11 @@ fn follow_job(p: &mut Process, board: &armless::Board, j: &mut Running) -> bool 
         let _ = j.answer.send(Err("the job is gone".into()));
         return true;
     };
+    // A job's output in serial.log, where a kernel's job shell writes (its jobs run on ttyS0)
+    if let Some(l) = crate::log::get() {
+        l.serial(&r.stdout);
+        l.serial(&r.stderr);
+    }
     j.output.extend(r.stdout);
     j.output.extend(r.stderr);
     let now = Instant::now();
