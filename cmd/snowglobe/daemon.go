@@ -42,6 +42,16 @@ func runDaemon(args []string) error {
 	memory := fs.String("memory", "", "")
 	wait := fs.Duration("wait", 30*time.Second, "")
 	detach := fs.Bool("detach", false, "")
+	var siteRoots []string
+	fs.Func("site-root", "", func(v string) error {
+		abs, err := filepath.Abs(v)
+		siteRoots = append(siteRoots, abs)
+		return err
+	})
+	remotePrivate := fs.Bool("remote-allow-private", false, "")
+	tlsCert := fs.String("tls-cert", "", "")
+	tlsKey := fs.String("tls-key", "", "")
+	insecure := fs.Bool("insecure-listen", false, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	if _, err := parse(fs, args); err != nil {
 		return err
@@ -89,10 +99,19 @@ func runDaemon(args []string) error {
 	logger := log.New(os.Stderr, "snowglobe daemon: ", log.LstdFlags)
 	// Fleets on the API: planned and applied through the daemon's own socket, as a client would
 	own := "unix://" + filepath.Join(dir, "daemon.sock")
+	policy := daemon.Policy{SiteRoots: siteRoots, Private: *remotePrivate}
 	routes := func(mux *http.ServeMux) {
-		fleet.Routes(mux, fleet.NewRegistry(dir), func() (fleet.API, error) { return daemon.NewClient(own, "") }, buildSite)
+		fleet.Routes(mux, fleet.NewRegistry(dir), func(r *http.Request) (fleet.API, error) {
+			c, err := daemon.NewClient(own, "")
+			if err == nil && daemon.IsRemote(r) {
+				// A fleet applied for another host: what it makes is held to its policy
+				c.ForRemote()
+			}
+			return c, err
+		}, buildSite, policy)
 	}
-	s, err := daemon.New(daemon.Options{Dir: dir, VM: vm, Listen: *listen, Token: token, Memory: budget, Wait: *wait, Logf: logger.Printf, Routes: routes})
+	s, err := daemon.New(daemon.Options{Dir: dir, VM: vm, Listen: *listen, Token: token, Memory: budget, Wait: *wait, Logf: logger.Printf, Routes: routes,
+		Remote: policy, TLSCert: *tlsCert, TLSKey: *tlsKey, Insecure: *insecure})
 	if err != nil {
 		return err
 	}

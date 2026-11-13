@@ -145,6 +145,13 @@ Usage:
                                                      room, then is refused. Its servers and
                                                      machines end with it, a crash included;
                                                      started again, it restores its templates
+                   [--tls-cert F --tls-key F]        ADDR other hosts reach needs TLS (or
+                   [--insecure-listen]               --insecure-listen). Requests on ADDR name
+                   [--site-root DIR]...              no path of this host but sites they uploaded
+                   [--remote-allow-private]          (template add and apply upload a local one)
+                                                     and --site-root DIRs, fetch URLs on public
+                                                     addresses only, and give machines no private
+                                                     egress, unless --remote-allow-private
   snowglobe daemon stop                              stop the daemon, and everything it started
   snowglobe template add <site> [--name T]           restore a site once, for machines to be forked
                      [--max-machines N]              from; template ls lists them, template rm T

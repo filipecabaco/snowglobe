@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/subtle"
+	cryptotls "crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +49,13 @@ type Options struct {
 	Routes func(*http.ServeMux)
 	// Whether Docker can build here (nil: ask it); for tests
 	dockerThere func() bool
+	// What requests from another host may do
+	Remote Policy
+	// TLSCert and TLSKey, when set, serve the TCP API over TLS
+	TLSCert, TLSKey string
+	// Insecure lets the TCP API be plain HTTP on an address other hosts reach: the token and
+	// everything else then cross the network in the clear
+	Insecure bool
 }
 
 // Server is a running daemon.
@@ -216,21 +224,47 @@ func (s *Server) Serve(ctx context.Context) error {
 		return fmt.Errorf("%s: %w", sock, err)
 	}
 	os.Chmod(sock, 0o600)
-	servers := []*http.Server{{Handler: s.Handler()}}
+	// No write timeout: events, attach and build logs stream for as long as they are watched
+	servers := []*http.Server{{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}}
 	listeners := []net.Listener{unix}
 	if s.o.Listen != "" {
 		if s.o.Token == "" {
 			unix.Close()
 			return errors.New("--listen needs a token (--token-file): the API runs commands on machines")
 		}
+		tls := s.o.TLSCert != "" || s.o.TLSKey != ""
+		if tls && (s.o.TLSCert == "" || s.o.TLSKey == "") {
+			unix.Close()
+			return errors.New("--tls-cert and --tls-key go together")
+		}
+		if !tls && !s.o.Insecure && !loopback(s.o.Listen) {
+			unix.Close()
+			return fmt.Errorf("--listen %s reaches other hosts: serve it over TLS (--tls-cert and --tls-key), or say --insecure-listen to send the token in the clear", s.o.Listen)
+		}
 		tcp, err := net.Listen("tcp", s.o.Listen)
 		if err != nil {
 			unix.Close()
 			return err
 		}
-		servers = append(servers, &http.Server{Handler: s.withToken(s.Handler())})
+		if tls {
+			cert, err := cryptotls.LoadX509KeyPair(s.o.TLSCert, s.o.TLSKey)
+			if err != nil {
+				unix.Close()
+				tcp.Close()
+				return fmt.Errorf("--tls-cert, --tls-key: %w", err)
+			}
+			tcp = cryptotls.NewListener(tcp, &cryptotls.Config{Certificates: []cryptotls.Certificate{cert}, MinVersion: cryptotls.VersionTLS12})
+		}
+		servers = append(servers, &http.Server{Handler: s.withToken(s.Handler()), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
+			// (A request's body: a job's files, an upload, read as it comes; a slow sender is cut
+			// off rather than held forever)
+			ReadTimeout: 30 * time.Minute})
 		listeners = append(listeners, tcp)
-		s.o.Logf("serving the API on %s (token required)", tcp.Addr())
+		scheme := "http"
+		if tls {
+			scheme = "https"
+		}
+		s.o.Logf("serving the API on %s://%s (token required; requests from it held to the remote policy)", scheme, tcp.Addr())
 	}
 	s.o.Logf("serving the API on %s", sock)
 	go s.reap(ctx)
@@ -415,7 +449,7 @@ func (s *Server) ForceStop() {
 func stopGroups(groups, pids []int, ours func(pid int) bool) {
 	for _, g := range groups {
 		if ours(g) {
-			syscall.Kill(-g, syscall.SIGTERM)
+			killGroup(g, syscall.SIGTERM)
 		}
 	}
 	for _, p := range pids {
@@ -446,7 +480,7 @@ func stopGroups(groups, pids []int, ours func(pid int) bool) {
 func killNow(groups, pids []int, ours func(pid int) bool) {
 	for _, g := range groups {
 		if ours(g) {
-			syscall.Kill(-g, syscall.SIGKILL)
+			killGroup(g, syscall.SIGKILL)
 		}
 	}
 	for _, p := range pids {
@@ -496,6 +530,8 @@ type AddTemplate struct {
 	// (public addresses), "private" (also the host's loopback and private ones); empty: as the
 	// site was built (internet when it has a network), or private with AllowPrivate
 	Egress string `json:"egress,omitempty"`
+	// From another host (IsRemote): held to the daemon's Policy
+	remote bool
 }
 
 // AddTemplate restores a site once, in a fork server of its own, for machines to be forked from.
@@ -517,7 +553,23 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 			req.Name = snap.Name
 		}
 	}
-	site, err := resolveSite(req.Site)
+	if req.remote && !s.o.Remote.Private && (req.AllowPrivate || req.Egress == "private") {
+		return nil, errStatus(403, "a request from another host can't let machines reach this host's loopback and private addresses (the daemon allows it with --remote-allow-private)")
+	}
+	var site string
+	var err error
+	switch {
+	case snap != nil && req.Site == snap.Site:
+		// The snapshot's own site, the daemon's to name
+		site = snap.Site
+	case req.remote && !remote.IsURL(req.Site):
+		if err := s.o.Remote.Path(req.Site, s.uploads()); err != nil {
+			return nil, err
+		}
+		site, err = resolveSite(req.Site, false)
+	default:
+		site, err = resolveSite(req.Site, req.remote && !s.o.Remote.Private)
+	}
 	if err != nil {
 		return nil, errStatus(400, "%v", err)
 	}
@@ -573,7 +625,7 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, taken := s.st.Templates[name]; taken {
-		syscall.Kill(-t.Pid, syscall.SIGKILL)
+		killGroup(t.Pid, syscall.SIGKILL)
 		os.RemoveAll(t.SocketDir)
 		return nil, errStatus(409, "a template called %s exists", name)
 	}
@@ -667,7 +719,7 @@ func (s *Server) startServer(t *Template) error {
 		default:
 		}
 		if time.Now().After(deadline) {
-			syscall.Kill(-t.Pid, syscall.SIGKILL)
+			killGroup(t.Pid, syscall.SIGKILL)
 			os.RemoveAll(sockDir)
 			return fmt.Errorf("template %s did not restore within %s: %s", t.Name, restoreTimeout, lastLines(t.Log, 5))
 		}
@@ -700,16 +752,19 @@ func (s *Server) RemoveTemplate(name string) error {
 		s.RemoveMachine(m)
 	}
 	// The server's process group: the server and anything of it still running
-	if !t.Asleep {
-		syscall.Kill(-t.Pid, syscall.SIGTERM)
+	// (No pid: a server that never started, or is starting again. kill(-0) would be this
+	// daemon's own process group)
+	if !t.Asleep && t.Pid > 0 {
+		killGroup(t.Pid, syscall.SIGTERM)
 		if !gone(t.Pid, stopGrace) {
-			syscall.Kill(-t.Pid, syscall.SIGKILL)
+			killGroup(t.Pid, syscall.SIGKILL)
 		}
 	}
 	os.RemoveAll(t.SocketDir)
 	os.RemoveAll(filepath.Join(s.o.Dir, "templates", name))
 	s.mu.Lock()
 	delete(s.st.Templates, name)
+	s.sweepUploads()
 	s.save()
 	s.mu.Unlock()
 	s.note("template.removed", "template "+name, "removed")
@@ -739,11 +794,13 @@ func (s *Server) TemplateJob(name string, req control.JobRequest) (*control.JobR
 	return s.runJob(t.Server, name, req)
 }
 
-func resolveSite(site string) (string, error) {
+func resolveSite(site string, public bool) (string, error) {
 	var err error
 	switch {
 	case site == "":
 		return "", errors.New("site: a built site's directory, tarball or URL")
+	case remote.IsURL(site) && public:
+		site, err = remote.FetchPublic(site)
 	case remote.IsURL(site):
 		site, err = remote.Fetch(site)
 	case remote.IsTarball(site):
@@ -1082,7 +1139,7 @@ func (s *Server) reap(ctx context.Context) {
 					syscall.Kill(m.Pid, syscall.SIGKILL)
 				}
 			}
-			syscall.Kill(-t.Pid, syscall.SIGKILL)
+			killGroup(t.Pid, syscall.SIGKILL)
 			os.RemoveAll(t.SocketDir)
 			delete(s.st.Templates, n)
 			s.note("template.stopped", "template "+n, "its server stopped, and its machines with it")
@@ -1203,6 +1260,7 @@ func (s *Server) RemoveSnapshot(name string) error {
 	os.Remove(sn.Path)
 	os.Remove(sn.Path + userState)
 	delete(s.st.Snapshots, name)
+	s.sweepUploads()
 	s.save()
 	s.ev.publish(Event{Time: time.Now(), Kind: "snapshot.removed", Subject: "snapshot " + name, Message: "removed"})
 	return nil
@@ -1277,6 +1335,7 @@ func (s *Server) Handler() http.Handler {
 		s.o.Routes(mux)
 	}
 	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
+	mux.HandleFunc("POST /v1/sites", s.serveUpload)
 	mux.HandleFunc("GET /v1/templates", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Templates(), nil)
 	})
@@ -1286,6 +1345,7 @@ func (s *Server) Handler() http.Handler {
 			reply(w, nil, err)
 			return
 		}
+		req.remote = IsRemote(r)
 		v, err := s.AddTemplate(req)
 		reply(w, v, err)
 	})
@@ -1411,11 +1471,32 @@ func (s *Server) withToken(h http.Handler) http.Handler {
 			reply(w, nil, errStatus(401, "a token is needed (Authorization: Bearer ...)"))
 			return
 		}
-		h.ServeHTTP(w, r)
+		h.ServeHTTP(w, markRemote(r))
 	})
 }
 
 // --- small helpers
+
+// killGroup signals process group pid, if pid names one: kill(-0) or kill(-(-1)) would reach
+// this daemon's own group, or every process it may signal.
+func killGroup(pid int, sig syscall.Signal) {
+	if pid > 1 {
+		syscall.Kill(-pid, sig)
+	}
+}
+
+// loopback says whether a listen address is reachable from this host only.
+func loopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 func gone(pid int, d time.Duration) bool {
 	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {

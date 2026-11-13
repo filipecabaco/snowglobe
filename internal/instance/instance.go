@@ -126,7 +126,9 @@ func Run(o Options, version string) error {
 	if o.TunnelToken != "" {
 		token = o.TunnelToken
 	}
-	if tunnels, err = tunnel.Fill(tunnels, token); err != nil {
+	// The site's own endpoint (it may have come from anywhere) stays on the internet unless the
+	// guest may reach private addresses anyway
+	if tunnels, err = tunnel.Fill(tunnels, token, o.TunnelToken == "" && !o.AllowPrivate); err != nil {
 		return err
 	}
 

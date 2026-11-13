@@ -306,7 +306,7 @@ func Run(o Options, version string) error {
 		snapshot := func() error {
 			// The snapshot opens its tunnels natively: one token for the whole boot, fetched
 			// for each, so a boot again after a stall doesn't start on a token minutes old
-			tunnels, err := tunnel.Fill(s.Tunnels, s.TunnelToken)
+			tunnels, err := tunnel.Fill(s.Tunnels, s.TunnelToken, false)
 			if err != nil {
 				return err
 			}

@@ -35,6 +35,8 @@ type BuildRequest struct {
 	Builder string `json:"builder,omitempty"`
 	// Don't make it a template once built
 	NoTemplate bool `json:"no_template,omitempty"`
+	// From another host (IsRemote): held to the daemon's Policy
+	remote bool
 }
 
 // Build is a build of a site, running or done.
@@ -171,6 +173,13 @@ func (s *Server) StartBuild(req BuildRequest) (*Build, error) {
 		return nil, errStatus(400, "a source (a directory with a Dockerfile, or an image) or a Dockerfile")
 	default:
 		b.Source = req.Source
+		// A path (an image reference never starts so): from another host, only under a site root
+		if req.remote && (filepath.IsAbs(req.Source) || strings.HasPrefix(req.Source, ".")) {
+			if err := s.o.Remote.Path(req.Source, s.uploads()); err != nil {
+				os.RemoveAll(b.dir)
+				return nil, err
+			}
+		}
 		if fi, err := os.Stat(req.Source); err == nil {
 			if !filepath.IsAbs(req.Source) {
 				os.RemoveAll(b.dir)
@@ -365,7 +374,7 @@ func (s *Server) RemoveBuild(id string) error {
 		now := time.Now()
 		b.Ended = &now
 		if p := s.builds.procs[id]; p != nil {
-			syscall.Kill(-p.Pid, syscall.SIGTERM)
+			killGroup(p.Pid, syscall.SIGTERM)
 		}
 		s.builds.write(b)
 		s.builds.mu.Unlock()
@@ -443,6 +452,7 @@ func (s *Server) buildRoutes(mux *http.ServeMux) {
 			reply(w, nil, err)
 			return
 		}
+		req.remote = IsRemote(r)
 		v, err := s.StartBuild(req)
 		reply(w, v, err)
 	})

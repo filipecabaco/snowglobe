@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/filipecabaco/snowglobe/internal/netguard"
 	"github.com/filipecabaco/snowglobe/internal/rootfs"
 	"github.com/klauspost/compress/zstd"
 )
@@ -54,6 +55,17 @@ func sourcePath(source string) string {
 // Fetch makes the site at source available locally and returns its directory: a tarball URL is
 // downloaded and unpacked, a site URL is mirrored file by file. Both are cached and revalidated.
 func Fetch(source string) (string, error) {
+	return fetch(source, http.DefaultClient)
+}
+
+// FetchPublic is Fetch for a source someone else named (a request to a daemon from another
+// host): it connects to public addresses only, so the URL can't reach this host's loopback or
+// private network, a redirect or a DNS answer included.
+func FetchPublic(source string) (string, error) {
+	return fetch(source, netguard.Client(0))
+}
+
+func fetch(source string, c *http.Client) (string, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
@@ -64,9 +76,9 @@ func Fetch(source string) (string, error) {
 		return "", err
 	}
 	if IsTarball(source) {
-		return fetchTarball(source, dir)
+		return fetchTarball(c, source, dir)
 	}
-	return dir, mirror(source, dir)
+	return dir, mirror(c, source, dir)
 }
 
 // Unpack extracts a local tarball into the cache and returns its directory.
@@ -217,7 +229,7 @@ func removeUnused(dir string) {
 
 // ---- a tarball ----
 
-func fetchTarball(source, dir string) (string, error) {
+func fetchTarball(c *http.Client, source, dir string) (string, error) {
 	// Revalidate with whichever validator the server gave: CDNs send an ETag, plain file servers
 	// often only Last-Modified
 	etagFile, modifiedFile := filepath.Join(dir, ".etag"), filepath.Join(dir, ".last-modified")
@@ -234,7 +246,7 @@ func fetchTarball(source, dir string) (string, error) {
 			req.Header.Set("If-Modified-Since", string(modified))
 		}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -260,6 +272,12 @@ func fetchTarball(source, dir string) (string, error) {
 		}
 	}
 	return v, nil
+}
+
+// Extract unpacks a packed site (tar, or .gz or .zst by name's suffix) read from r into dir, which
+// must exist: nothing written outside it, and an error if it isn't a site (no run.json).
+func Extract(r io.Reader, name, dir string) error {
+	return extract(r, name, dir)
 }
 
 func extract(r io.Reader, name, dir string) error {
@@ -326,7 +344,7 @@ var siteFiles = []struct {
 	{"system/tls.json", true},
 }
 
-func mirror(source, dir string) error {
+func mirror(c *http.Client, source, dir string) error {
 	if !strings.HasSuffix(source, "/") {
 		source += "/"
 	}
@@ -336,7 +354,7 @@ func mirror(source, dir string) error {
 	}
 
 	// run.json says which build this is: when it matches the cache, nothing else is fetched
-	fresh, err := get(site.ResolveReference(&url.URL{Path: "run.json"}).String(), maxRunJSON)
+	fresh, err := get(c, site.ResolveReference(&url.URL{Path: "run.json"}).String(), maxRunJSON)
 	if err != nil {
 		return fmt.Errorf("%s doesn't look like a snowglobe site: %w", source, err)
 	}
@@ -355,7 +373,7 @@ func mirror(source, dir string) error {
 	}
 	for _, f := range siteFiles {
 		target := filepath.Join(dir, filepath.FromSlash(f.path))
-		if err := fetchTo(site.ResolveReference(&url.URL{Path: f.path}).String(), target); err != nil {
+		if err := fetchTo(c, site.ResolveReference(&url.URL{Path: f.path}).String(), target); err != nil {
 			if f.optional && errors.Is(err, errNotThere) {
 				// Not in this build: an earlier build's copy must not stay
 				os.Remove(target)
@@ -392,7 +410,7 @@ func mirror(source, dir string) error {
 
 	// The warm pack carries the files a run reads first in one request
 	if len(missing) > 0 {
-		if pack, err := get(site.ResolveReference(&url.URL{Path: "system/warm.pack"}).String(), maxWarmPack); err == nil {
+		if pack, err := get(c, site.ResolveReference(&url.URL{Path: "system/warm.pack"}).String(), maxWarmPack); err == nil {
 			unpacked, err := unpackWarm(pack, blobDir)
 			if err == nil {
 				fmt.Fprintf(os.Stderr, "  %d files from warm.pack\n", unpacked)
@@ -406,13 +424,13 @@ func mirror(source, dir string) error {
 		}
 	}
 
-	if err := fetchAll(blobURL, blobDir, missing); err != nil {
+	if err := fetchAll(c, blobURL, blobDir, missing); err != nil {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, ".complete"), nil, 0o644)
 }
 
-func fetchAll(base *url.URL, dir string, names []string) error {
+func fetchAll(c *http.Client, base *url.URL, dir string, names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
@@ -428,7 +446,7 @@ func fetchAll(base *url.URL, dir string, names []string) error {
 		go func() {
 			defer wg.Done()
 			for name := range jobs {
-				err := fetchTo(base.ResolveReference(&url.URL{Path: name}).String(), filepath.Join(dir, name))
+				err := fetchTo(c, base.ResolveReference(&url.URL{Path: name}).String(), filepath.Join(dir, name))
 				if err != nil {
 					errOnce.Do(func() { failure = err })
 				}
@@ -506,8 +524,8 @@ var (
 var errNotThere = errors.New("not there")
 
 // open GETs u, its body read at most limit bytes.
-func open(u string, limit int64) (io.ReadCloser, error) {
-	resp, err := http.Get(u)
+func open(c *http.Client, u string, limit int64) (io.ReadCloser, error) {
+	resp, err := c.Get(u)
 	if err != nil {
 		return nil, err
 	}
@@ -522,8 +540,8 @@ func open(u string, limit int64) (io.ReadCloser, error) {
 }
 
 // get reads u into memory, at most limit bytes.
-func get(u string, limit int64) ([]byte, error) {
-	body, err := open(u, limit)
+func get(c *http.Client, u string, limit int64) ([]byte, error) {
+	body, err := open(c, u, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -532,8 +550,8 @@ func get(u string, limit int64) ([]byte, error) {
 }
 
 // fetchTo streams u into target, at most maxFile bytes.
-func fetchTo(u, target string) error {
-	body, err := open(u, maxFile)
+func fetchTo(c *http.Client, u, target string) error {
+	body, err := open(c, u, maxFile)
 	if err != nil {
 		return err
 	}

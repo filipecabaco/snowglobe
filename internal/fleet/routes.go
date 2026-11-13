@@ -59,7 +59,11 @@ func contains(list []string, s string) bool {
 //
 // api reaches the daemon (its own client); build builds Dockerfile directories. One fleet
 // changes at a time.
-func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Builder) {
+//
+// api is the daemon to apply through, for a request (one from another host gets a client that
+// says so, and is held to the daemon's policy); policy is that policy, for what the routes do
+// themselves: the fleet files they read, and the directories they build.
+func Routes(mux *http.ServeMux, reg *Registry, api func(*http.Request) (API, error), build Builder, policy daemon.Policy) {
 	var mu sync.Mutex
 	answer := func(w http.ResponseWriter, v any, err error) {
 		w.Header().Set("Content-Type", "application/json")
@@ -81,7 +85,19 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 		return nil
 	}
 	// The fleet's file, loaded and planned
-	planOf := func(name, inst string) (*File, API, *Plan, error) {
+	// The builds a request may make: from another host, of a directory under a site root only
+	builder := func(r *http.Request) Builder {
+		if !daemon.IsRemote(r) {
+			return build
+		}
+		return func(dir, out, network string) error {
+			if err := policy.Path(dir, ""); err != nil {
+				return err
+			}
+			return build(dir, out, network)
+		}
+	}
+	planOf := func(r *http.Request, name, inst string) (*File, API, *Plan, error) {
 		path, ok := reg.File(name)
 		if !ok {
 			return nil, nil, nil, daemon.ErrNotFound("fleet file for " + name + " (add it, or write one)")
@@ -90,7 +106,7 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		a, err := api()
+		a, err := api(r)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -105,7 +121,7 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 		return &PlanView{Fleet: f.Name, Instance: p.Instance, File: file, Steps: steps, Unchanged: p.Unchanged}
 	}
 	mux.HandleFunc("GET /v1/fleets", func(w http.ResponseWriter, r *http.Request) {
-		a, err := api()
+		a, err := api(r)
 		if err != nil {
 			answer(w, nil, err)
 			return
@@ -124,6 +140,13 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 			return
 		}
 		if req.File != "" {
+			// A file of this host's: from another, only under a site root (it is read back)
+			if daemon.IsRemote(r) {
+				if err := policy.Path(req.File, ""); err != nil {
+					answer(w, nil, err)
+					return
+				}
+			}
 			e, err := reg.Add(req.File)
 			answer(w, e, err)
 			return
@@ -150,7 +173,7 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 		}
 		v.Text = text
 		inst := r.URL.Query().Get("instance")
-		if f, a, p, err := planOf(name, inst); err != nil {
+		if f, a, p, err := planOf(r, name, inst); err != nil {
 			v.Error = err.Error()
 		} else {
 			v.Plan = view(path, f, p)
@@ -177,7 +200,7 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 		defer mu.Unlock()
 		res := &ApplyResult{Log: []string{}}
 		if r.URL.Query().Get("down") != "" {
-			a, err := api()
+			a, err := api(r)
 			if err == nil {
 				_, err = Down(a, name, func(format string, args ...any) { res.Log = append(res.Log, fmt.Sprintf(format, args...)) })
 			}
@@ -206,7 +229,7 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 		mu.Lock()
 		defer mu.Unlock()
 		name := r.PathValue("name")
-		f, a, p, err := planOf(name, req.Instance)
+		f, a, p, err := planOf(r, name, req.Instance)
 		if err != nil {
 			answer(w, nil, err)
 			return
@@ -216,9 +239,9 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 			res.Log = append(res.Log, strings.TrimSpace(fmt.Sprintf(format, args...)))
 		}
 		if req.Step != "" {
-			err = p.ApplyStep(a, build, req.Step, logf)
+			err = p.ApplyStep(a, builder(r), req.Step, logf)
 		} else {
-			err = p.Apply(a, build, logf)
+			err = p.Apply(a, builder(r), logf)
 		}
 		path, _ := reg.File(name)
 		if after, perr := f.PlanInstance(a, req.Instance); perr == nil {
@@ -239,7 +262,7 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 		mu.Lock()
 		defer mu.Unlock()
 		name := r.PathValue("name")
-		a, err := api()
+		a, err := api(r)
 		if err != nil {
 			answer(w, nil, err)
 			return
@@ -262,13 +285,13 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 			answer(w, nil, fmt.Errorf("fleet %s has an instance %s already", name, inst))
 			return
 		}
-		f, a, p, err := planOf(name, inst)
+		f, a, p, err := planOf(r, name, inst)
 		if err != nil {
 			answer(w, nil, err)
 			return
 		}
 		res := &ApplyResult{Log: []string{}}
-		err = p.Apply(a, build, func(format string, args ...any) {
+		err = p.Apply(a, builder(r), func(format string, args ...any) {
 			res.Log = append(res.Log, strings.TrimSpace(fmt.Sprintf(format, args...)))
 		})
 		path, _ := reg.File(name)
@@ -281,7 +304,7 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 	mux.HandleFunc("DELETE /v1/fleets/{name}/instances/{instance}", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
-		a, err := api()
+		a, err := api(r)
 		if err != nil {
 			answer(w, nil, err)
 			return
@@ -293,7 +316,7 @@ func Routes(mux *http.ServeMux, reg *Registry, api func() (API, error), build Bu
 	mux.HandleFunc("POST /v1/fleets/{name}/down", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
-		a, err := api()
+		a, err := api(r)
 		if err != nil {
 			answer(w, nil, err)
 			return

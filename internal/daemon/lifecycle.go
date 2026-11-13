@@ -215,9 +215,9 @@ func (s *Server) sleep(name string) {
 	t.Asleep, t.Pid, t.Ready = true, 0, ""
 	s.save()
 	s.mu.Unlock()
-	syscall.Kill(-pid, syscall.SIGTERM)
+	killGroup(pid, syscall.SIGTERM)
 	if !gone(pid, stopGrace) {
-		syscall.Kill(-pid, syscall.SIGKILL)
+		killGroup(pid, syscall.SIGKILL)
 	}
 	os.RemoveAll(dir)
 	s.note("template.asleep", "template "+name, "asleep, idle %s", time.Duration(t.Idle))

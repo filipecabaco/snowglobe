@@ -159,6 +159,12 @@ func (s *Server) AddService(req Service) (*ServiceStatus, error) {
 	svc.Saved = ""
 	svc.Created = time.Now()
 	svc.Ports = append([]Port(nil), req.Ports...)
+	for i := range svc.Ports {
+		// No address: this host's loopback, as up's ports (never every interface by omission)
+		if svc.Ports[i].IP == "" {
+			svc.Ports[i].IP = "127.0.0.1"
+		}
+	}
 	if err := s.listenService(&svc); err != nil {
 		return nil, errStatus(400, "%v", err)
 	}
