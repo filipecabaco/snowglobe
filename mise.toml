@@ -8,9 +8,14 @@ go = "1.27.1"
 # <example>-nokernel: examples/<example> built with --kernel none (its program with no guest kernel)
 # python-agent is the agent page's python (a network for pip install); the index page doesn't list it
 DEMOS = "conduit conduit-1cpu supabase supabase-1cpu iex postgres elixir python python-agent typescript go rust java curl duckdb web"
+# A demo runs its program with no guest kernel (--kernel none: a smaller snapshot, a faster start,
+# and natively on as many CPUs as it was built on) unless it is here. These keep one: the agent
+# page's (supabase and conduit on two CPUs, python-agent; the page has no machine without a kernel
+# yet), conduit-1cpu (its image's Supabase CLI predates what runs with no kernel) and web (its dev
+# server watches files with inotify, which armless's user mode doesn't have)
+KERNEL = "conduit conduit-1cpu supabase python-agent web"
 # Examples built and checked in CI but not on the site (too big, or need the host's network)
-# postgres and supabase with no kernel are checked here before they replace the sites
-EXAMPLES = "apk postgres-nokernel supabase-nokernel"
+EXAMPLES = "apk"
 
 [tasks.build]
 description = "Build every example into dist/<language>, then assemble the site"
@@ -19,11 +24,11 @@ set -e
 go build -o snowglobe ./cmd/snowglobe
 rm -rf dist
 for demo in $DEMOS; do
-  case "$demo" in
-    *-[0-9]cpu) n=${demo##*-}; ./snowglobe build "examples/${demo%-*}" --out "dist/$demo" --cpus "${n%cpu}" ;;
-    *-nokernel) ./snowglobe build "examples/${demo%-nokernel}" --out "dist/$demo" --kernel none ;;
-    *) ./snowglobe build "examples/$demo" --out "dist/$demo" ;;
-  esac
+  src=${demo%-nokernel}; src=${src%-[0-9]cpu}; flags=""
+  case "$demo" in *-[0-9]cpu) n=${demo##*-}; flags="--cpus ${n%cpu}" ;; esac
+  # With no guest kernel unless KERNEL keeps one
+  case " $KERNEL " in *" $demo "*) ;; *) flags="$flags --kernel none" ;; esac
+  ./snowglobe build "examples/$src" --out "dist/$demo" $flags
 done
 mise run assemble
 '''
