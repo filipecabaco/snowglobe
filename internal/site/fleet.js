@@ -766,14 +766,30 @@
           }
         }
         if (step.ready) {
-          const until = now() + step.timeoutMs;
-          for (let tries = 1;; tries++) {
-            set(step.key, { detail: `waiting until it is ready (try ${tries})`, output: tail(log) });
-            const r = await exec(step.runtime, step.ready, 10);
+          // The ready check confirms what the commands did: one that waits for something slow (a
+          // server starting) is best a command of its own, with its own time limit, which waits in
+          // the machine. Here it is checked again until the step's limit, a little less often
+          // each time, each check within what is left of it.
+          const began = now();
+          const until = began + step.timeoutMs;
+          let last = null;
+          for (let checks = 1, pause = 1000;; checks++, pause = Math.min(pause * 2, 5000)) {
+            const waited = Math.round((now() - began) / 1000);
+            set(step.key, {
+              detail: checks === 1 ? "checking it is ready" : `waiting until it is ready: ${waited}s of ${Math.round(step.timeoutMs / 1000)}s`,
+              output: tail(log + (last ? `$ ${step.ready}\n${last}` : "")),
+            });
+            const left = Math.max(1, Math.ceil((until - now()) / 1000));
+            const r = await exec(step.runtime, step.ready, Math.min(10, left));
             if (r.exit === 0) break;
             if (stopping) throw new Error("stopped");
-            if (now() >= until) throw new Error(`not ready after ${Math.round(step.timeoutMs / 1000)}s`);
-            await sleep(1000);
+            last = `${r.output}${r.output && !r.output.endsWith("\n") ? "\n" : ""}[${r.exit === null ? r.state : `exit ${r.exit}`}]\n`;
+            if (now() + pause >= until) {
+              set(step.key, { output: tail(log + `$ ${step.ready}\n${last}`) });
+              const said = r.output.trim().split("\n").at(-1);
+              throw new Error(`not ready after ${Math.round(step.timeoutMs / 1000)}s: its check ${r.exit === null ? `ended ${r.state}` : `exited ${r.exit}`}${said ? ` (${said})` : ""}`);
+            }
+            await sleep(pause);
           }
         }
         return { detail: step.run.length || step.ready ? "set up" : "nothing to run", output: tail(log) };
