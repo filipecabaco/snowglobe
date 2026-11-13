@@ -24,7 +24,7 @@ use serde_json::json;
 
 use crate::machine::{self, Activity, Spec};
 use crate::site::Site;
-use crate::{driver, image, term, Args};
+use crate::{driver, image, job, term, Args};
 
 const BUILD_TIMEOUT: Duration = Duration::from_secs(300);
 /// The environment when the image gives none
@@ -171,7 +171,30 @@ struct Io {
     /// Where its output goes as it comes too: the terminal of a `snowglobe run`, an attach
     watchers: Vec<Watcher>,
     ended: Option<String>,
+    /// Jobs asked for (`snowglobe sh`, cp, mcp's run_command), for the program's thread to start
+    jobs: Vec<Asked>,
 }
+
+/// A job asked for, and where its answer goes
+struct Asked {
+    req: job::Request,
+    answer: std::sync::mpsc::Sender<Result<job::Done, String>>,
+}
+
+/// A job running beside the program: a shell of its own (`Process::spawn`)
+struct Running {
+    pid: i64,
+    ws: String,
+    begun: Instant,
+    deadline: Instant,
+    output: Vec<u8>,
+    /// When it was told to stop (out of time, or the instance stopping): TERM, then KILL
+    stopping: Option<Instant>,
+    answer: std::sync::mpsc::Sender<Result<job::Done, String>>,
+}
+
+/// How long a job told to stop gets before it is killed
+const JOB_KILL_GRACE: Duration = Duration::from_secs(3);
 
 /// `run` in user mode, once `run` has confined the process and set up its driver: restore the
 /// machine (on the snapshot's RAM image, shared with every machine restored from it, as for any
@@ -306,52 +329,98 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
         });
     }
 
-    // The program, on this thread: input in, output out, until it ends
-    let ended = loop {
-        {
+    // The program: CPU 0 on this thread, the others on threads of their own; input in, output
+    // out, jobs started and answered, until it ends
+    let board = vm.board.clone();
+    let smp = Smp::new(&mut p);
+    let (first, others) = vm.cpus.split_at_mut(1);
+    let cpu = &mut first[0];
+    let ended = std::thread::scope(|scope| {
+        for (i, c) in others.iter_mut().enumerate() {
+            let smp = &smp;
+            scope.spawn(move || smp.serve(i + 1, c));
+        }
+        let mut running: Vec<Running> = Vec::new();
+        let ended = loop {
+            {
+                let mut io = shared.io.lock().unwrap();
+                let resize = io.resize.take();
+                let pending: Vec<u8> = io.input.drain(..).collect();
+                let asked = std::mem::take(&mut io.jobs);
+                drop(io);
+                let mut p = smp.lock();
+                if let Some((cols, rows)) = resize {
+                    p.resize(cols, rows);
+                }
+                if !pending.is_empty() {
+                    p.input(&pending);
+                }
+                for a in asked {
+                    match start_job(&mut p, &board, &a.req) {
+                        Ok(Some((pid, ws))) => running.push(Running {
+                            pid,
+                            ws,
+                            begun: Instant::now(),
+                            deadline: Instant::now() + a.req.timeout,
+                            output: Vec::new(),
+                            stopping: None,
+                            answer: a.answer,
+                        }),
+                        // Its shell's files on their way: asked again next time
+                        Ok(None) => shared.io.lock().unwrap().jobs.push(a),
+                        Err(e) => {
+                            let _ = a.answer.send(Err(e));
+                        },
+                    }
+                }
+                running.retain_mut(|j| !follow_job(&mut p, &board, j));
+                drop(p);
+            }
+            smp.poke();
+            let status = smp.run(0, cpu, Duration::from_millis(10));
+            let out = smp.lock().take_output();
             let mut io = shared.io.lock().unwrap();
-            if let Some((cols, rows)) = io.resize.take() {
-                p.resize(cols, rows);
+            if !out.is_empty() {
+                io.output.extend_from_slice(&out);
+                io.last_output = Some(Instant::now());
+                io.waiting = false;
+                io.watchers.retain_mut(|w| w(&out));
+                shared.changed.notify_all();
             }
-            let pending: Vec<u8> = io.input.drain(..).collect();
-            drop(io);
-            if !pending.is_empty() {
-                p.input(&pending);
+            match status {
+                Status::Exited(c) => break format!("exited ({c})"),
+                Status::Fault(f) => break f,
+                Status::Idle(wake) => {
+                    // Waiting for input: not busy reading files whose contents are still on their
+                    // way, nor asleep in the middle of a command (time.sleep)
+                    let (waiting, blobs) = {
+                        let p = smp.lock();
+                        (p.waiting_for_input(), p.waiting_on_blobs())
+                    };
+                    if !io.waiting && waiting {
+                        io.waiting = true;
+                        shared.changed.notify_all();
+                    }
+                    // Until a deadline, or input. A file's contents on their way (a page touched for
+                    // the first time, as the first command after a restore does many times) come
+                    // from the site's directory in about a millisecond: look again that soon, not
+                    // in 50; a job running is looked at every 10
+                    let most = Duration::from_millis(if blobs { 1 } else if running.is_empty() { 50 } else { 10 });
+                    let wait = wake.map_or(most, |w| w.saturating_duration_since(Instant::now())).min(most);
+                    if io.input.is_empty() && io.resize.is_none() && io.jobs.is_empty() {
+                        let _ = shared.changed.wait_timeout(io, wait);
+                    }
+                },
+                Status::Running => {},
             }
+        };
+        // The jobs still running end with it
+        for j in running {
+            let _ = j.answer.send(Err(format!("the program stopped: {ended}")));
         }
-        // (On the site's CPUs: with more than one, its threads run on them at once)
-        let status = p.run_on(&mut vm.cpus, Duration::from_millis(10));
-        let out = p.take_output();
-        let mut io = shared.io.lock().unwrap();
-        if !out.is_empty() {
-            io.output.extend_from_slice(&out);
-            io.last_output = Some(Instant::now());
-            io.waiting = false;
-            io.watchers.retain_mut(|w| w(&out));
-            shared.changed.notify_all();
-        }
-        match status {
-            Status::Exited(c) => break format!("exited ({c})"),
-            Status::Fault(f) => break f,
-            Status::Idle(wake) => {
-                // Waiting for input: not busy reading files whose contents are still on their way,
-                // nor asleep in the middle of a command (time.sleep)
-                if !io.waiting && p.waiting_for_input() {
-                    io.waiting = true;
-                    shared.changed.notify_all();
-                }
-                // Until a deadline, or input. A file's contents on their way (a page touched for the
-                // first time, as the first command after a restore does many times) come from the
-                // site's directory in about a millisecond: look again that soon, not in 50
-                let most = Duration::from_millis(if p.waiting_on_blobs() { 1 } else { 50 });
-                let wait = wake.map_or(most, |w| w.saturating_duration_since(Instant::now())).min(most);
-                if io.input.is_empty() && io.resize.is_none() {
-                    let _ = shared.changed.wait_timeout(io, wait);
-                }
-            },
-            Status::Running => {},
-        }
-    };
+        smp.stop();
+        ended
+    });
     term::restore();
     eprintln!("snowglobe: the program stopped: {ended}");
     shared.io.lock().unwrap().ended = Some(ended);
@@ -359,8 +428,89 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
     Ok(driver::end("guest-stopped", 0))
 }
 
-/// One console client: a job or exec types its command and a newline, and is answered with what
-/// the program printed until it waits for input again; an attach streams the terminal both ways.
+/// A job as a process of its own beside the program (`Process::spawn`), a shell running the job's
+/// script as a machine with a kernel runs it on its serial shell (`job::scripts`): its files in
+/// /sgjob/<id>, the image's environment, its workspace or the home directory. Its pid and
+/// workspace, or None while the shell's files are on their way.
+fn start_job(p: &mut Process, board: &armless::Board, req: &job::Request) -> Result<Option<(i64, String)>, String> {
+    let id = job::token();
+    let ws = format!("/sgjob/{id}");
+    let (_, cmd) = job::scripts(&id, &ws, &req.env, &req.command, req.home)?;
+    for (rel, data, mode) in &req.files {
+        // However it is spelled (`/out/x`, `./out/x`), nothing goes in the job's own directories
+        let first = rel.split('/').find(|c| !c.is_empty() && *c != ".");
+        if matches!(first, Some(".sg" | "out")) || rel.split('/').any(|c| c == "..") {
+            continue;
+        }
+        board.fs_write_file(&format!("{ws}/{rel}"), data, *mode)?;
+    }
+    board.fs_mkdir(&format!("{ws}/in"))?;
+    board.fs_mkdir(&format!("{ws}/out"))?;
+    board.fs_write_file(&format!("{ws}/.sg/cmd"), cmd.as_bytes(), 0o755)?;
+    let argv = ["/bin/sh".to_string(), format!("{ws}/.sg/cmd")];
+    let env = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(), "HOME=/root".to_string()];
+    match p.spawn(&argv, &env, &ws, None) {
+        Ok(pid) => {
+            p.spawn_close_input(pid);
+            Ok(Some((pid, ws)))
+        },
+        Err(ExecError::Need(_)) => Ok(None),
+        Err(e) => Err(format!("the job's shell: {e}")),
+    }
+}
+
+/// What a running job printed, its time kept, and its end: true once it has ended and been
+/// answered (its out/ files taken back, as a machine with a kernel's job's are).
+fn follow_job(p: &mut Process, board: &armless::Board, j: &mut Running) -> bool {
+    let Some(r) = p.spawn_poll(j.pid) else {
+        let _ = j.answer.send(Err("the job is gone".into()));
+        return true;
+    };
+    j.output.extend(r.stdout);
+    j.output.extend(r.stderr);
+    let now = Instant::now();
+    match (r.exit, j.stopping) {
+        (Some(status), stopping) => {
+            p.spawn_release(j.pid);
+            let mut done = job::Done {
+                output: std::mem::take(&mut j.output),
+                ms: j.begun.elapsed().as_millis() as u64,
+                ..Default::default()
+            };
+            if stopping.is_some() {
+                done.timed_out = true;
+                done.killed = true;
+            } else {
+                done.status = Some(status);
+                done.out = board
+                    .fs_read_tree(&format!("{}/out", j.ws))
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|(rel, _)| !rel.split('/').any(|c| c == ".."))
+                    .collect();
+            }
+            let _ = j.answer.send(Ok(done));
+            true
+        },
+        // Out of time: what it started is told to stop, then killed
+        (None, None) if now >= j.deadline => {
+            p.spawn_kill(j.pid, 15);
+            j.stopping = Some(now);
+            false
+        },
+        (None, Some(at)) if now >= at + JOB_KILL_GRACE => {
+            p.spawn_kill(j.pid, 9);
+            false
+        },
+        (None, _) => false,
+    }
+}
+
+/// One console client: an exec types its command and a newline, and is answered with what the
+/// program printed until it waits for input again; a job runs in a shell of its own beside the
+/// program (`start_job`); an attach streams the terminal both ways.
 fn serve(shared: &Arc<Shared>, stream: UnixStream) {
     let Ok(mut writer) = stream.try_clone() else { return };
     let mut reader = BufReader::new(stream);
@@ -391,8 +541,30 @@ fn serve(shared: &Arc<Shared>, stream: UnixStream) {
         }
         return;
     }
+    if mode == "job" {
+        // A job: a shell of its own beside the program (`start_job`), answered as a machine with
+        // a kernel answers one
+        let answer = match job::from_json(&request) {
+            Err(e) => json!({ "error": e }),
+            Ok(req) => {
+                let wait = req.timeout + JOB_KILL_GRACE + Duration::from_secs(30);
+                let (tx, rx) = std::sync::mpsc::channel();
+                {
+                    let mut io = shared.io.lock().unwrap();
+                    io.jobs.push(Asked { req, answer: tx });
+                    shared.changed.notify_all();
+                }
+                match rx.recv_timeout(wait) {
+                    Ok(Ok(done)) => job::to_json(&done),
+                    Ok(Err(e)) => json!({ "error": e }),
+                    Err(_) => json!({ "error": "the job did not end" }),
+                }
+            },
+        };
+        let _ = writer.write_all(format!("{answer}\n").as_bytes());
+        return;
+    }
     let command = match mode {
-        "job" => request["cmd"].as_str(),
         "exec" => request["command"].as_str(),
         _ => {
             let _ = writer.write_all(format!("{}\n", json!({ "error": format!("{mode}: not in user mode") })).as_bytes());
@@ -422,19 +594,5 @@ fn serve(shared: &Arc<Shared>, stream: UnixStream) {
         io = shared.changed.wait_timeout(io, Duration::from_millis(50)).unwrap().0;
     };
     drop(io);
-    let printed = output.clone().unwrap_or_default();
-    if mode == "exec" {
-        let _ = writer.write_all(&crate::text::rendered(&printed));
-        return;
-    }
-    let answer = json!({
-        "status": output.as_ref().map(|_| 0),
-        "output": crate::b64::encode(&crate::text::rendered(&printed)),
-        "out": {},
-        "timed_out": output.is_none(),
-        "cancelled": false,
-        "killed": false,
-        "ms": begun.elapsed().as_millis() as u64,
-    });
-    let _ = writer.write_all(format!("{answer}\n").as_bytes());
+    let _ = writer.write_all(&crate::text::rendered(&output.unwrap_or_default()));
 }

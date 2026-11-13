@@ -120,7 +120,7 @@ pub fn timeout_flag(arg: Option<&str>) -> Result<Duration, String> {
     arg.map(str::parse).transpose().ok().and_then(|s| timeout(s).ok()).ok_or_else(|| "--timeout: seconds".into())
 }
 
-fn quote(s: &str) -> String {
+pub(crate) fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
@@ -221,7 +221,7 @@ pub fn parse_marker(printed: &str, id: &str, nonce: &str) -> Option<(i32, bool)>
 }
 
 /// A fresh random token, 16 hex digits.
-fn token() -> String {
+pub(crate) fn token() -> String {
     format!("{:016x}", u64::from_le_bytes(armless::runner::os_entropy()[..8].try_into().unwrap()))
 }
 

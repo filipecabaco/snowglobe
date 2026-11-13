@@ -254,7 +254,9 @@ func Run(o Options, version string) error {
 	}
 	if err := step("Add boot layer", func() error {
 		if s.Kernel == "none" {
-			fmt.Println("    none: the command runs with no kernel")
+			// No kernel and no init: the image's environment alone, for jobs
+			fmt.Println("    none: the command runs with no kernel (the image's environment for jobs)")
+			source.Layers = append(source.Layers, oci.FilesLayer(boot.EnvFiles(s.Console)))
 			return nil
 		}
 		// Written, not built: the kernel archive, then BusyBox's init configured for the app

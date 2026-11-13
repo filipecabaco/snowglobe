@@ -28,6 +28,15 @@ import (
 var kernelDockerfile []byte
 
 // Files is the boot layer's files, for an image whose app runs as console describes.
+// EnvFiles is what a site with no kernel has of the boot layer: the image's environment in
+// /etc/snowglobe/env, which a job sources (a job runs beside the program, in a shell of its own).
+func EnvFiles(console Console) []oci.File {
+	return []oci.File{
+		{Name: "etc/snowglobe", Dir: true, Mode: 0o755},
+		{Name: "etc/snowglobe/env", Mode: 0o644, Data: []byte(Env(console))},
+	}
+}
+
 func Files(console Console, network string, caPEM []byte) []oci.File {
 	init := `#!/bin/sh
 # What a service manager's boot services would do, with BusyBox alone
