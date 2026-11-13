@@ -215,6 +215,40 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
                 s.changed.notify_all();
             }
         });
+    } else {
+        // Piped (`printf 'cmd\n' | snowglobe run site`, as CI checks a site): each line is typed
+        // as a job's is, once the answer to the one before is in; what the program prints goes
+        // to stdout; the run ends after the last answer
+        shared.io.lock().unwrap().watchers.push(Box::new(|b| {
+            let mut out = std::io::stdout();
+            out.write_all(b).and_then(|_| out.flush()).is_ok()
+        }));
+        let s = shared.clone();
+        std::thread::spawn(move || {
+            for line in std::io::stdin().lock().lines() {
+                let Ok(line) = line else { break };
+                let mut io = s.io.lock().unwrap();
+                let mark = io.output.len();
+                io.input.extend(line.as_bytes());
+                io.input.push_back(b'\n');
+                io.waiting = false;
+                s.changed.notify_all();
+                let begun = Instant::now();
+                loop {
+                    let quiet = io.last_output.is_some_and(|t| t.elapsed() >= QUIET);
+                    if io.output[mark..].contains(&b'\n') && io.waiting && quiet || io.ended.is_some() {
+                        break;
+                    }
+                    if begun.elapsed() > BUILD_TIMEOUT {
+                        eprintln!("snowglobe: no answer to {line:?} after {}s", BUILD_TIMEOUT.as_secs());
+                        break;
+                    }
+                    io = s.changed.wait_timeout(io, QUIET).unwrap().0;
+                }
+            }
+            let _ = std::io::stdout().flush();
+            std::process::exit(driver::end("end", 0) as i32);
+        });
     }
 
     // The program, on this thread: input in, output out, until it ends

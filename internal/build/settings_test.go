@@ -71,9 +71,19 @@ func TestResolveKernel(t *testing.T) {
 		t.Errorf("--cmd is split into words: %q", userProgram(s).Argv)
 	}
 
+	// A network is the machine's, as with a kernel (user mode has sockets)
+	s, err = Resolve(Options{Kernel: "none", Network: "fetch"}, image(nil, "sh"))
+	if err != nil || s.Network != "fetch" {
+		t.Errorf("a network with no kernel: %v %+v", err, s)
+	}
+	// An image that asks for CPUs (its label, for a kernel) runs on one, and says so
+	s, err = Resolve(Options{}, image(map[string]string{"snowglobe.kernel": "none", "snowglobe.cpus": "2"}, "sh"))
+	if err != nil || s.CPUs != 1 || s.BuildCPUs != 1 || s.SkippedCPUs != 2 {
+		t.Errorf("an image's CPUs with no kernel: %v %+v", err, s)
+	}
+
 	// What a machine with no kernel can't do yet
 	for name, o := range map[string]Options{
-		"a network":      {Kernel: "none", Network: "fetch"},
 		"several CPUs":   {Kernel: "none", CPUs: 2},
 		"exercises":      {Kernel: "none", Exercise: []string{"ls"}},
 		"the agent page": {Kernel: "none", Agent: true},
