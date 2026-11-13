@@ -107,6 +107,9 @@ Usage:
                                                      tunnels (a local proxy, say); --allow-private
                                                      lets the guest reach this machine's services
                                                      --jit on|off over the site's own choice
+                                                     --cpus N for a site with no kernel: its
+                                                     threads on N CPUs at once (default: as many
+                                                     as it was built on)
                                                      --max-runtime 30m ends the run after that long
                                                      (exit 124), --stop-file PATH once PATH exists
                                                      (exit 143): the job running in the guest is
@@ -604,6 +607,7 @@ func runRun(args []string) error {
 	fs.StringVar(&o.StopFile, "stop-file", "", "")
 	fs.StringVar(&o.LogDir, "log-dir", "", "")
 	fs.StringVar(&o.JIT, "jit", "", "")
+	fs.IntVar(&o.CPUs, "cpus", 0, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)

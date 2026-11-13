@@ -178,6 +178,16 @@ struct Io {
 /// site) and the process, serve the site's blobs, and connect the program's terminal to the
 /// console's clients.
 pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<image::Image>, socket: &str, started: Instant) -> Result<u8, String> {
+    // Natively the program's threads run on several CPUs at once (a page has one): --cpus, or as
+    // many as it was built on, as many as the host has at most. The snapshot is of one; the
+    // others start with nothing on them, for the program's threads
+    let built = crate::run::site_spec(site)?.0["build_cpus"].as_u64().unwrap_or(1) as usize;
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let cpus = match args.get("cpus") {
+        Some(n) => n.parse::<usize>().ok().filter(|n| (1..=8).contains(n)).ok_or("--cpus: 1 to 8")?,
+        None => built.min(cores).max(spec.cpus),
+    };
+    let spec = &Spec { cpus, ..spec.clone() };
     let (ram, without_pages) = image.map(|i| (i.ram, i.state)).unzip();
     let (mut vm, _clock) = machine::new_vm_on(spec, site, true, ram)?;
     match without_pages {
@@ -249,9 +259,21 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
         // Piped (`printf 'cmd\n' | snowglobe run site`, as CI checks a site): each line is typed
         // as a job's is, once the answer to the one before is in; what the program prints goes
         // to stdout; the run ends after the last answer
-        shared.io.lock().unwrap().watchers.push(Box::new(|b| {
+        // To a terminal, as it comes; to a file or a pipe, each line as it ended (a REPL redraws the
+        // line it reads at every key: `text::rendered`)
+        let terminal = std::io::stdout().is_terminal();
+        let pending = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let held = pending.clone();
+        shared.io.lock().unwrap().watchers.push(Box::new(move |b| {
             let mut out = std::io::stdout();
-            out.write_all(b).and_then(|_| out.flush()).is_ok()
+            if terminal {
+                return out.write_all(b).and_then(|_| out.flush()).is_ok();
+            }
+            let mut p = held.lock().unwrap();
+            p.extend_from_slice(b);
+            let Some(end) = p.iter().rposition(|&c| c == b'\n') else { return true };
+            let lines: Vec<u8> = p.drain(..=end).collect();
+            out.write_all(&crate::text::rendered(&lines)).and_then(|_| out.flush()).is_ok()
         }));
         let s = shared.clone();
         std::thread::spawn(move || {
@@ -276,6 +298,9 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
                     io = s.changed.wait_timeout(io, QUIET).unwrap().0;
                 }
             }
+            // What is left of the last line (a prompt)
+            let rest = std::mem::take(&mut *pending.lock().unwrap());
+            let _ = std::io::stdout().write_all(&crate::text::rendered(&rest));
             let _ = std::io::stdout().flush();
             std::process::exit(driver::end("end", 0) as i32);
         });
@@ -399,12 +424,12 @@ fn serve(shared: &Arc<Shared>, stream: UnixStream) {
     drop(io);
     let printed = output.clone().unwrap_or_default();
     if mode == "exec" {
-        let _ = writer.write_all(&crate::text::plain(&printed));
+        let _ = writer.write_all(&crate::text::rendered(&printed));
         return;
     }
     let answer = json!({
         "status": output.as_ref().map(|_| 0),
-        "output": crate::b64::encode(&crate::text::plain(&printed)),
+        "output": crate::b64::encode(&crate::text::rendered(&printed)),
         "out": {},
         "timed_out": output.is_none(),
         "cancelled": false,

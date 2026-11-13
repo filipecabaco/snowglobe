@@ -295,6 +295,9 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     if crate::user::is_user(&site) {
         return crate::user::run(args, &site, &spec, &title, image, &socket, started);
     }
+    if args.get("cpus").is_some() {
+        return Err("--cpus is for a site with no kernel: a guest's kernel has the CPUs it booted with".into());
+    }
     if std::env::var_os("ARMLESS_JIT_CODE_MB").is_none() {
         std::env::set_var("ARMLESS_JIT_CODE_MB", "64");
     }

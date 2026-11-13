@@ -91,6 +91,7 @@ func runNative(o Options, site, vm, network string, tunnels []tunnel.Tunnel) err
 		return err
 	}
 	args = append(args, jit...)
+	args = append(args, cpuArgs(o.CPUs)...)
 	if o.RecordReads != "" {
 		record, err := filepath.Abs(o.RecordReads)
 		if err != nil {
