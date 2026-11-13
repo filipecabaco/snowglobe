@@ -293,7 +293,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // fills up and starts over mid-run (ARMLESS_JIT_CODE_MB still says otherwise)
     // A site with no kernel restores its program instead (snowglobe build --kernel none)
     if crate::user::is_user(&site) {
-        return crate::user::run(args, &site, &spec, &title, image, &socket, started);
+        return crate::user::run(args, &site, &spec, &title, image, &socket, started, env_file);
     }
     if args.get("cpus").is_some() {
         return Err("--cpus is for a site with no kernel: a guest's kernel has the CPUs it booted with".into());

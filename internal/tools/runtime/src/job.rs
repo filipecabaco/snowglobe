@@ -74,6 +74,23 @@ pub struct Done {
 
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 static STOPPING: AtomicBool = AtomicBool::new(false);
+/// Jobs running beside a program with no kernel (user.rs), which stop as these do
+static BESIDE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether the instance is stopping (its jobs are to be killed, and no other starts)
+pub(crate) fn stopping() -> bool {
+    STOPPING.load(Ordering::SeqCst)
+}
+
+/// A job beside a program with no kernel starts (`ended` when it has answered): wait_idle waits
+/// for it too
+pub(crate) fn begun_beside() {
+    BESIDE.fetch_add(1, Ordering::SeqCst);
+}
+
+pub(crate) fn ended_beside() {
+    BESIDE.fetch_sub(1, Ordering::SeqCst);
+}
 
 /// How long the guest gets to kill a job, once told to
 const KILL_GRACE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(10) };
@@ -91,7 +108,8 @@ pub fn stop_all() {
 pub fn wait_idle(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        if ONE_AT_A_TIME.try_lock().is_ok() || matches!(ONE_AT_A_TIME.try_lock(), Err(std::sync::TryLockError::Poisoned(_))) {
+        let free = ONE_AT_A_TIME.try_lock().is_ok() || matches!(ONE_AT_A_TIME.try_lock(), Err(std::sync::TryLockError::Poisoned(_)));
+        if free && BESIDE.load(Ordering::SeqCst) == 0 {
             return true;
         }
         if Instant::now() >= deadline {

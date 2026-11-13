@@ -247,6 +247,10 @@ struct Asked {
 
 /// A job running beside the program: a shell of its own (`Process::spawn`)
 struct Running {
+    /// Its id, for the log (as a kernel's job's)
+    id: String,
+    /// Stopped because the instance is stopping, not out of time
+    cancelled: bool,
     pid: i64,
     ws: String,
     begun: Instant,
@@ -271,19 +275,34 @@ pub fn cpus_for(args: &Args, site: &Site, spec: &Spec) -> Result<usize, String> 
     }
 }
 
+/// A machine of a site with no kernel saved with `save_machine`: its state (zstd) and its
+/// process, read from `path` and `path`.user. Read before a sandbox closes, when it is outside
+/// what the sandbox reads (a daemon's snapshot).
+pub struct Saved {
+    machine: Vec<u8>,
+    process: Vec<u8>,
+}
+
+impl Saved {
+    pub fn read(path: &Path) -> Result<Saved, String> {
+        let user = user_path(path);
+        Ok(Saved {
+            machine: std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?,
+            process: std::fs::read(&user).map_err(|e| format!("{}: {e}", user.display()))?,
+        })
+    }
+}
+
 /// A site with no kernel restored: its machine on `spec.cpus` CPUs (from the site's snapshot, on
-/// its RAM image when there is one, or from a machine saved with `save_machine`: `saved` and
-/// `saved`.user) and its program's process. `jit`: compile hot code now (not in a process that
-/// forks: its children turn it on).
-pub fn restore(site: &Site, spec: &Spec, image: Option<image::Image>, saved: Option<&Path>, jit: bool) -> Result<(Vm<NativePlatform>, Process), String> {
+/// its RAM image when there is one, or from a machine `saved`) and its program's process. `jit`:
+/// compile hot code now (not in a process that forks: its children turn it on).
+pub fn restore(site: &Site, spec: &Spec, image: Option<image::Image>, saved: Option<Saved>, jit: bool) -> Result<(Vm<NativePlatform>, Process), String> {
     let (ram, without_pages) = image.filter(|_| saved.is_none()).map(|i| (i.ram, i.state)).unzip();
     let (mut vm, _clock) = machine::new_vm_on(spec, site, jit, ram)?;
     let process = match saved {
-        Some(path) => {
-            let state = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            vm.load_state(&zstd::stream::decode_all(&state[..]).map_err(|e| e.to_string())?)?;
-            let user = user_path(path);
-            std::fs::read(&user).map_err(|e| format!("{}: {e}", user.display()))?
+        Some(saved) => {
+            vm.load_state(&zstd::stream::decode_all(&saved.machine[..]).map_err(|e| e.to_string())?)?;
+            saved.process
         },
         None => {
             match without_pages {
@@ -335,7 +354,9 @@ fn save_machine(vm: &mut Vm<NativePlatform>, p: &mut Process, path: &Path) -> Re
 /// machine (on the snapshot's RAM image, shared with every machine restored from it, as for any
 /// site) and the process, serve the site's blobs, and connect the program's terminal to the
 /// console's clients.
-pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<image::Image>, socket: &str, started: Instant) -> Result<u8, String> {
+/// `env_file`: --env-file's variables, read before the sandbox took the file away, for a job.
+#[allow(clippy::too_many_arguments)]
+pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<image::Image>, socket: &str, started: Instant, env_file: Vec<(String, String)>) -> Result<u8, String> {
     let spec = &Spec { cpus: cpus_for(args, site, spec)?, ..spec.clone() };
     let (mut vm, mut p) = restore(site, spec, image, None, true)?;
     let activity = Activity::new(false);
@@ -353,6 +374,7 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
             }
         });
     }
+    crate::log::event("restored", json!({ "ms": started.elapsed().as_millis() as u64, "user_mode": true }));
     // SNOWGLOBE_USER_TRACE=1: every syscall of the program, on stderr (a run that isn't detached)
     p.trace = std::env::var_os("SNOWGLOBE_USER_TRACE").is_some();
     if std::env::var_os("SNOWGLOBE_TIMING").is_some() {
@@ -360,6 +382,53 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
     }
 
     let shared = Arc::new(Shared::default());
+
+    // A job (--workspace, a bundle as a job runner): the workspace in, the command run beside the
+    // program, out/ back and its status the run's, as with a kernel
+    if let Some(ws) = args.get("workspace") {
+        let command = args.get("cmd").ok_or("--workspace needs --cmd COMMAND")?.to_string();
+        let mut env = args
+            .all("env")
+            .iter()
+            .map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+            .collect::<Option<Vec<_>>>()
+            .ok_or("--env takes NAME=VALUE")?;
+        env.extend(env_file);
+        let timeout = job::timeout_flag(args.get("timeout"))?;
+        let dir = PathBuf::from(ws);
+        let req = job::Request { files: job::files(&dir)?, command, env, timeout, home: false };
+        let rx = ask_job(&shared, req);
+        std::thread::spawn(move || {
+            let code = match rx.recv() {
+                Ok(Ok(done)) => {
+                    for (rel, data) in &done.out {
+                        let dest = dir.join("out").join(rel);
+                        let _ = std::fs::create_dir_all(dest.parent().unwrap_or(&dir));
+                        if let Err(e) = std::fs::write(&dest, data) {
+                            eprintln!("snowglobe: {}: {e}", dest.display());
+                        }
+                    }
+                    let mut out = std::io::stdout();
+                    let _ = out.write_all(&done.output);
+                    let _ = out.flush();
+                    if done.status.is_none() && !done.cancelled {
+                        eprintln!("snowglobe: the job ran out of time ({}s)", timeout.as_secs_f64());
+                    }
+                    job::exit_code(done.status.map(i64::from))
+                },
+                Ok(Err(e)) => {
+                    eprintln!("snowglobe: {e}");
+                    1
+                },
+                Err(_) => 1,
+            };
+            std::process::exit(driver::end("end", code) as i32);
+        });
+        let ended = drive(&mut vm, &mut p, &shared);
+        eprintln!("snowglobe: the program stopped before its job ended: {ended}");
+        return Ok(driver::end("guest-stopped", 1));
+    }
+
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket).map_err(|e| format!("{socket}: {e}"))?;
     listen(shared.clone(), host.clone(), listener);
@@ -525,8 +594,14 @@ fn stretch(
                     p.input(&pending);
                 }
                 for a in asked {
+                    if job::stopping() {
+                        let _ = a.answer.send(Err("the instance is stopping".into()));
+                        continue;
+                    }
                     match start_job(&mut p, board, &a.req) {
-                        Ok(Some((pid, ws))) => running.push(Running {
+                        Ok(Some((pid, ws, id))) => running.push(Running {
+                            id,
+                            cancelled: false,
                             pid,
                             ws,
                             begun: Instant::now(),
@@ -593,7 +668,7 @@ fn stretch(
 /// script as a machine with a kernel runs it on its serial shell (`job::scripts`): its files in
 /// /sgjob/<id>, the image's environment, its workspace or the home directory. Its pid and
 /// workspace, or None while the shell's files are on their way.
-fn start_job(p: &mut Process, board: &armless::Board, req: &job::Request) -> Result<Option<(i64, String)>, String> {
+fn start_job(p: &mut Process, board: &armless::Board, req: &job::Request) -> Result<Option<(i64, String, String)>, String> {
     let id = job::token();
     let ws = format!("/sgjob/{id}");
     let (_, cmd) = job::scripts(&id, &ws, &req.env, &req.command, req.home)?;
@@ -613,7 +688,19 @@ fn start_job(p: &mut Process, board: &armless::Board, req: &job::Request) -> Res
     match p.spawn(&argv, &env, &ws, None) {
         Ok(pid) => {
             p.spawn_close_input(pid);
-            Ok(Some((pid, ws)))
+            crate::log::event(
+                "job_start",
+                json!({
+                    "job": id,
+                    "cmd": req.command,
+                    // Names only: values can be secrets
+                    "env": req.env.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+                    "files": req.files.len(),
+                    "timeout": req.timeout.as_secs_f64(),
+                }),
+            );
+            job::begun_beside();
+            Ok(Some((pid, ws, id)))
         },
         Err(ExecError::Need(_)) => Ok(None),
         Err(e) => Err(format!("the job's shell: {e}")),
@@ -630,8 +717,21 @@ fn follow_job(p: &mut Process, board: &armless::Board, j: &mut Running) -> bool 
     j.output.extend(r.stdout);
     j.output.extend(r.stderr);
     let now = Instant::now();
+    // The instance stopping (its max runtime, a stop file, snowglobe stop): the job is stopped
+    // as one out of time is, and says it was cancelled
+    if job::stopping() && j.stopping.is_none() && r.exit.is_none() {
+        p.spawn_kill(j.pid, 15);
+        j.stopping = Some(now);
+        j.cancelled = true;
+        return false;
+    }
     match (r.exit, j.stopping) {
         (Some(status), stopping) => {
+            // Stopped: what it started goes with it, even what ignores TERM (as a kernel's job
+            // launcher kills its session). One that ended by itself leaves what it started running
+            if stopping.is_some() {
+                p.spawn_kill(j.pid, 9);
+            }
             p.spawn_release(j.pid);
             let mut done = job::Done {
                 output: std::mem::take(&mut j.output),
@@ -639,7 +739,8 @@ fn follow_job(p: &mut Process, board: &armless::Board, j: &mut Running) -> bool 
                 ..Default::default()
             };
             if stopping.is_some() {
-                done.timed_out = true;
+                done.timed_out = !j.cancelled;
+                done.cancelled = j.cancelled;
                 done.killed = true;
             } else {
                 done.status = Some(status);
@@ -652,7 +753,23 @@ fn follow_job(p: &mut Process, board: &armless::Board, j: &mut Running) -> bool 
                     .filter(|(rel, _)| !rel.split('/').any(|c| c == ".."))
                     .collect();
             }
+            let shown = &done.output[..done.output.len().min(64 << 10)];
+            crate::log::event(
+                "job_end",
+                json!({
+                    "job": j.id,
+                    "status": done.status,
+                    "timed_out": done.timed_out,
+                    "cancelled": done.cancelled,
+                    "killed": done.killed,
+                    "ms": done.ms,
+                    "output": String::from_utf8_lossy(shown),
+                    "output_bytes": done.output.len(),
+                    "out_files": done.out.len(),
+                }),
+            );
             let _ = j.answer.send(Ok(done));
+            job::ended_beside();
             true
         },
         // Out of time: what it started is told to stop, then killed

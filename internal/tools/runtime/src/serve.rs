@@ -55,7 +55,12 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     };
     // A machine's saved state in place of the site's (a template made from a machine), read
     // before the sandbox
-    let saved = args.get("state").map(|p| std::fs::read(p).map_err(|e| format!("--state {p}: {e}"))).transpose()?;
+    let saved = args.get("state").filter(|_| !user).map(|p| std::fs::read(p).map_err(|e| format!("--state {p}: {e}"))).transpose()?;
+    // With no kernel, the machine's process beside it too (outside the sandbox's reads, as it is)
+    let user_saved = match args.get("state") {
+        Some(p) if user => Some(crate::user::Saved::read(Path::new(p)).map_err(|e| format!("--state: {e}"))?),
+        _ => None,
+    };
     // The site's own snapshot restores onto its RAM image, shared with every other machine of it
     // (a machine's saved state has RAM of its own, which the image's must not show through)
     let image = if saved.is_none() { image::open(&site, spec.memory_mb << 20) } else { None };
@@ -68,7 +73,7 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
 
     // A site with no kernel: its machine and its program's process restored, and forked the same way
     if user {
-        return serve_user(args, &site, socket, &root, max, max_machines, saved.is_some().then(|| PathBuf::from(args.get("state").unwrap_or(""))), &spec, &title, &policy, &sandboxed, net);
+        return serve_user(args, &site, socket, &root, max, max_machines, user_saved, &spec, &title, &policy, &sandboxed, net);
     }
 
     // The one restore. No thread may exist when this process forks: the JIT is off until a child
@@ -216,7 +221,7 @@ fn serve_user(
     root: &Path,
     max: usize,
     max_machines: usize,
-    saved: Option<PathBuf>,
+    saved: Option<crate::user::Saved>,
     spec: &machine::Spec,
     title: &str,
     policy: &sandbox::Policy,
@@ -226,7 +231,7 @@ fn serve_user(
     let started = std::time::Instant::now();
     let spec = &machine::Spec { cpus: crate::user::cpus_for(args, site, spec)?, ..spec.clone() };
     let image = if saved.is_none() { image::open(site, spec.memory_mb << 20) } else { None };
-    let (vm, process) = crate::user::restore(site, spec, image, saved.as_deref(), false)?;
+    let (vm, process) = crate::user::restore(site, spec, image, saved, false)?;
     let board = vm.board.clone();
     let mut restored = Some((vm, process));
     let _ = std::fs::remove_file(socket);
@@ -357,7 +362,8 @@ fn user_child(
     });
     if let Some(state) = spawn.and_then(|s| s.state.as_ref()) {
         // A machine saved before, over this copy of the template's
-        let (v, p) = crate::user::restore(site, spec, None, Some(state), false).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
+        let saved = crate::user::Saved::read(state).map_err(|e| refuse(&mut conn, e))?;
+        let (v, p) = crate::user::restore(site, spec, None, Some(saved), false).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
         (vm, process) = (v, p);
     }
     let board = if spawn.and_then(|s| s.state.as_ref()).is_some() { vm.board.clone() } else { board.clone() };
