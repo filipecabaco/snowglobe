@@ -81,6 +81,10 @@ type Options struct {
 	// that runs with no guest kernel, its system calls answered by the machine (armless user mode),
 	// in the page as natively. Much smaller snapshots; one CPU in the page, no agent page for now
 	Kernel string
+	// SourceName is what the site calls its source (the page's default title, run.json's source):
+	// the source itself unless given, as a daemon names a context it was sent rather than where
+	// it keeps it
+	SourceName string
 }
 
 // Settings are the resolved values a build runs with.
@@ -424,7 +428,7 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 	}
 
 	info := RunInfo{
-		Title: s.Title, Source: o.Source, Command: s.Command, Ready: s.Ready, Exercise: s.Exercise,
+		Title: s.Title, Source: first(o.SourceName, o.Source), Command: s.Command, Ready: s.Ready, Exercise: s.Exercise,
 		MemoryMB: s.Memory, Network: s.Network,
 		JIT:     s.JIT,
 		Kernel:  map[bool]string{true: "none"}[s.Kernel == "none"],
@@ -511,7 +515,7 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	label := func(name string) string { return labels[labelPrefix+name] }
 
 	s := &Settings{
-		Title:  first(o.Title, label("title"), o.Source),
+		Title:  first(o.Title, label("title"), o.SourceName, o.Source),
 		Ready:  first(o.Ready, label("ready")),
 		Memory: o.Memory,
 	}

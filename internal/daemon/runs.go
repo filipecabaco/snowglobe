@@ -170,7 +170,7 @@ func short(s string) string {
 	return s
 }
 
-func (s *Server) runRoutes(mux *http.ServeMux) {
+func (s *Server) runRoutes(mux Router) {
 	mux.HandleFunc("POST /v1/runs", func(w http.ResponseWriter, r *http.Request) {
 		var req SubmitRun
 		if err := decode(r, &req); err != nil {

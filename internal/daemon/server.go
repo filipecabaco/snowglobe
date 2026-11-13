@@ -46,7 +46,7 @@ type Options struct {
 	Snowglobe string
 	// Routes, when set, adds routes of its own to the API (the fleet's, which this package can't
 	// import)
-	Routes func(*http.ServeMux)
+	Routes func(Router)
 	// Whether Docker can build here (nil: ask it); for tests
 	dockerThere func() bool
 	// What requests from another host may do
@@ -56,6 +56,20 @@ type Options struct {
 	// Insecure lets the TCP API be plain HTTP on an address other hosts reach: the token and
 	// everything else then cross the network in the clear
 	Insecure bool
+	// What it does (Mode's presets; zero: full), and the snowglobe it is, for GET /v1/version and
+	// the cache keys of artifacts
+	Features Features
+	Version  string
+	// The most the artifacts kept may take on disk together (bytes; 0: no bound): past it, those
+	// used longest ago go
+	CacheSize int64
+	// The longest a build may run (0: as long as it takes), the largest build context it is sent
+	// and the largest artifact it keeps (0: defaults)
+	BuildTimeout time.Duration
+	MaxContext   int64
+	MaxArtifact  int64
+	// An image reference's digest (nil: its registry's, or Docker's); for tests
+	resolveImage func(ref string, remote bool) (string, error)
 }
 
 // Server is a running daemon.
@@ -118,6 +132,15 @@ func New(o Options) (*Server, error) {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
 	}
+	if o.Features.Mode == "" {
+		o.Features = modes["full"]
+	}
+	if o.MaxContext <= 0 {
+		o.MaxContext = defaultMaxContext
+	}
+	if o.MaxArtifact <= 0 {
+		o.MaxArtifact = defaultMaxArtifact
+	}
 	if err := os.MkdirAll(o.Dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -157,6 +180,10 @@ func New(o Options) (*Server, error) {
 		if t.SocketDir != "" {
 			os.RemoveAll(t.SocketDir)
 		}
+		// A daemon without templates (--mode provider) keeps them as they are, for one with
+		if !o.Features.Templates {
+			continue
+		}
 		if _, err := os.Stat(filepath.Join(t.Site, "run.json")); err != nil {
 			o.Logf("template %s: its site %s is gone", name, t.Site)
 			delete(s.st.Templates, name)
@@ -169,6 +196,9 @@ func New(o Options) (*Server, error) {
 	sort.Strings(s.revive)
 	// Services: their ports held again; their replicas start as they would
 	for name, svc := range s.st.Services {
+		if !o.Features.Services {
+			break
+		}
 		if _, ok := s.st.Templates[svc.Template]; !ok {
 			o.Logf("service %s: its template %s is gone", name, svc.Template)
 			delete(s.st.Services, name)
@@ -180,6 +210,9 @@ func New(o Options) (*Server, error) {
 	}
 	// Links: what they are from or to must still be there
 	for name, l := range s.st.Links {
+		if !o.Features.Links {
+			break
+		}
 		if !s.has(l.FromKind, l.From) || !s.has(l.ToKind, l.To) {
 			o.Logf("link %s: what it joined is gone", name)
 			delete(s.st.Links, name)
@@ -188,7 +221,9 @@ func New(o Options) (*Server, error) {
 	if err := saveState(s.statePath, s.st); err != nil {
 		return nil, err
 	}
-	s.relink()
+	if o.Features.Links {
+		s.relink()
+	}
 	return s, nil
 }
 
@@ -1360,13 +1395,59 @@ func (s *Server) restorable(name string, t *Template) (string, error) {
 
 // --- HTTP
 
-// Handler is the API.
+// Handler is the API. Each group of routes is on or off by the daemon's Features, here and only
+// here: one that is off keeps its routes, answered with a 404 that names the mode (replyOff).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	f := s.o.Features
+	if f.Mode == "" {
+		f = modes["full"]
+	}
+	groups := []struct {
+		on    bool
+		route func(Router)
+	}{
+		{true, s.coreRoutes},
+		{f.Events, func(r Router) { r.HandleFunc("GET /v1/events", s.serveEvents) }},
+		{f.Metrics, func(r Router) {
+			r.HandleFunc("GET /v1/metrics", s.serveMetrics)
+			r.HandleFunc("GET /metrics", s.servePrometheus)
+		}},
+		{f.Builds, s.buildRoutes},
+		{f.Builds, s.contextRoutes},
+		{f.Ports, s.portRoutes},
+		{f.Machines, s.runRoutes},
+		{f.Links, s.linkRoutes},
+		{f.Links, s.graphRoutes},
+		{f.Fleets, func(r Router) {
+			if s.o.Routes != nil {
+				s.o.Routes(r)
+			}
+		}},
+		{f.Templates, s.templateRoutes},
+		{f.Machines, s.machineRoutes},
+		{f.Jobs, s.jobRoutes},
+		{f.Snapshots, s.snapshotRoutes},
+		{f.Services, s.serviceRoutes},
+	}
+	for _, g := range groups {
+		if g.on {
+			g.route(mux)
+		} else {
+			g.route(off{mux, f})
+		}
+	}
+	return mux
+}
+
+// coreRoutes are in every mode: whether it answers, which it is, what it holds, and its stop.
+func (s *Server) coreRoutes(mux Router) {
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"ok": true}, nil)
 	})
-	mux.HandleFunc("GET /v1/events", s.serveEvents)
+	mux.HandleFunc("GET /v1/version", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, Version{Version: s.o.Version, Mode: s.o.Features.Mode, Features: s.o.Features}, nil)
+	})
 	// Stop the daemon, and everything it started; answered once that has stopped
 	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -1383,17 +1464,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/stats", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Stats(), nil)
 	})
-	mux.HandleFunc("GET /v1/metrics", s.serveMetrics)
-	mux.HandleFunc("GET /metrics", s.servePrometheus)
-	s.buildRoutes(mux)
-	s.portRoutes(mux)
-	s.runRoutes(mux)
-	s.linkRoutes(mux)
-	s.graphRoutes(mux)
-	if s.o.Routes != nil {
-		s.o.Routes(mux)
-	}
-	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
+}
+
+func (s *Server) templateRoutes(mux Router) {
 	mux.HandleFunc("POST /v1/sites", s.serveUpload)
 	mux.HandleFunc("GET /v1/templates", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Templates(), nil)
@@ -1411,15 +1484,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/templates/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveTemplate(r.PathValue("name")))
 	})
-	mux.HandleFunc("POST /v1/templates/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
-		var req control.JobRequest
-		if err := decode(r, &req); err != nil {
-			reply(w, nil, err)
-			return
-		}
-		v, err := s.TemplateJob(r.Context(), r.PathValue("name"), req)
-		reply(w, v, err)
-	})
+}
+
+func (s *Server) machineRoutes(mux Router) {
+	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
 	mux.HandleFunc("GET /v1/machines", func(w http.ResponseWriter, r *http.Request) {
 		labels := map[string]string{}
 		for _, l := range r.URL.Query()["label"] {
@@ -1444,6 +1512,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/machines/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveMachine(r.PathValue("name")))
 	})
+}
+
+func (s *Server) jobRoutes(mux Router) {
+	mux.HandleFunc("POST /v1/templates/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
+		var req control.JobRequest
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.TemplateJob(r.Context(), r.PathValue("name"), req)
+		reply(w, v, err)
+	})
 	mux.HandleFunc("POST /v1/machines/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
 		var req control.JobRequest
 		if err := decode(r, &req); err != nil {
@@ -1453,6 +1533,18 @@ func (s *Server) Handler() http.Handler {
 		v, err := s.Job(r.Context(), r.PathValue("name"), req)
 		reply(w, v, err)
 	})
+	mux.HandleFunc("POST /v1/services/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
+		var req control.JobRequest
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.ServiceJob(r.Context(), r.PathValue("name"), req)
+		reply(w, v, err)
+	})
+}
+
+func (s *Server) snapshotRoutes(mux Router) {
 	mux.HandleFunc("POST /v1/machines/{name}/snapshots", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name   string            `json:"name"`
@@ -1465,6 +1557,15 @@ func (s *Server) Handler() http.Handler {
 		v, err := s.SnapshotWith(r.PathValue("name"), req.Name, req.Labels)
 		reply(w, v, err)
 	})
+	mux.HandleFunc("GET /v1/snapshots", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, s.Snapshots(), nil)
+	})
+	mux.HandleFunc("DELETE /v1/snapshots/{name}", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveSnapshot(r.PathValue("name")))
+	})
+}
+
+func (s *Server) serviceRoutes(mux Router) {
 	mux.HandleFunc("GET /v1/services", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Services(), nil)
 	})
@@ -1484,22 +1585,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/services/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveService(r.PathValue("name")))
 	})
-	mux.HandleFunc("POST /v1/services/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
-		var req control.JobRequest
-		if err := decode(r, &req); err != nil {
-			reply(w, nil, err)
-			return
-		}
-		v, err := s.ServiceJob(r.Context(), r.PathValue("name"), req)
-		reply(w, v, err)
-	})
-	mux.HandleFunc("GET /v1/snapshots", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, s.Snapshots(), nil)
-	})
-	mux.HandleFunc("DELETE /v1/snapshots/{name}", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveSnapshot(r.PathValue("name")))
-	})
-	return mux
 }
 
 // maxBody bounds a request: a job's files ride in it

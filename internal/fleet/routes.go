@@ -63,7 +63,7 @@ func contains(list []string, s string) bool {
 // api is the daemon to apply through, for a request (one from another host gets a client that
 // says so, and is held to the daemon's policy); policy is that policy, for what the routes do
 // themselves: the fleet files they read, and the directories they build.
-func Routes(mux *http.ServeMux, reg *Registry, api func(*http.Request) (API, error), build Builder, policy daemon.Policy) {
+func Routes(mux daemon.Router, reg *Registry, api func(*http.Request) (API, error), build Builder, policy daemon.Policy) {
 	var mu sync.Mutex
 	answer := func(w http.ResponseWriter, v any, err error) {
 		w.Header().Set("Content-Type", "application/json")

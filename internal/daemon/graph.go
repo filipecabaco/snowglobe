@@ -134,7 +134,7 @@ func (s *Server) Graph() Graph {
 	return g
 }
 
-func (s *Server) graphRoutes(mux *http.ServeMux) {
+func (s *Server) graphRoutes(mux Router) {
 	mux.HandleFunc("GET /v1/graph", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Graph(), nil)
 	})

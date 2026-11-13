@@ -5,6 +5,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -154,19 +156,39 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return err
 	}
 	if resp.StatusCode >= 300 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		json.Unmarshal(data, &e)
-		if e.Error == "" {
-			e.Error = strings.TrimSpace(string(data))
-		}
-		return &apiError{status: resp.StatusCode, msg: e.Error}
+		return errorOf(resp.StatusCode, data)
 	}
 	if out != nil {
 		return json.Unmarshal(data, out)
 	}
 	return nil
+}
+
+// errorOf is the error an answer of status says in data.
+func errorOf(status int, data []byte) error {
+	var e struct {
+		Error string `json:"error"`
+		Mode  string `json:"mode"`
+	}
+	json.Unmarshal(data, &e)
+	if e.Error == "" {
+		e.Error = strings.TrimSpace(string(data))
+	}
+	return &apiError{status: status, msg: e.Error, mode: e.Mode}
+}
+
+// Version is which snowglobe the daemon is and what its mode lets it do. A daemon from before
+// modes doesn't say: it is a full one.
+func (c *Client) Version() (*Version, error) {
+	var v Version
+	err := c.call("GET", "/v1/version", nil, &v)
+	if err != nil && NotFound(err) {
+		if _, off := Disabled(err); !off {
+			f := modes["full"]
+			return &Version{Mode: f.Mode, Features: f}, nil
+		}
+	}
+	return &v, err
 }
 
 func (c *Client) call(method, path string, in, out any) error {
@@ -499,6 +521,174 @@ func (c *Client) BuildLog(id string, offset int64) (string, error) {
 		return "", &apiError{status: resp.StatusCode, msg: e.Error}
 	}
 	return string(data), err
+}
+
+// UploadContext sends a directory of this host with a Dockerfile to the daemon as a build
+// context (its files with their modes, its directories and links, as `docker build` reads it),
+// for BuildRequest.Context.
+func (c *Client) UploadContext(dir string) (*ContextUpload, error) {
+	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
+		return nil, fmt.Errorf("%s has no Dockerfile", dir)
+	}
+	pr, pw := io.Pipe()
+	go func() { pw.CloseWithError(packContext(pw, dir)) }()
+	defer pr.Close()
+	req, err := http.NewRequest("POST", c.base+"/v1/contexts?format=zst", pr)
+	if err != nil {
+		return nil, err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon %s: uploading %s: %w", c.Addr, dir, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 {
+		return nil, errorOf(resp.StatusCode, data)
+	}
+	var up ContextUpload
+	return &up, json.Unmarshal(data, &up)
+}
+
+// packContext writes dir as a zstd tar: its regular files, directories and symbolic links (as
+// links, not followed), with their modes.
+func packContext(w io.Writer, dir string) error {
+	zw, err := zstd.NewWriter(w)
+	if err != nil {
+		return err
+	}
+	tw := tar.NewWriter(zw)
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		link := ""
+		switch {
+		case info.Mode()&fs.ModeSymlink != 0:
+			if link, err = os.Readlink(path); err != nil {
+				return err
+			}
+		case !info.IsDir() && !info.Mode().IsRegular():
+			return nil // a socket, a pipe: nothing a build reads
+		}
+		h, err := tar.FileInfoHeader(info, link)
+		if err != nil {
+			return err
+		}
+		h.Name = filepath.ToSlash(rel)
+		if info.IsDir() {
+			h.Name += "/"
+		}
+		// Whose they are here means nothing there
+		h.Uid, h.Gid, h.Uname, h.Gname = 0, 0, "", ""
+		if err := tw.WriteHeader(h); err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(tw, f)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return zw.Close()
+}
+
+// FollowBuildLog copies a build's log to w from offset on, as it is written, until the build
+// ends (or ctx does), and returns where it got to.
+func (c *Client) FollowBuildLog(ctx context.Context, id string, offset int64, w io.Writer) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/v1/builds/%s/log?follow=1&offset=%d", c.base, url.PathEscape(id), offset), nil)
+	if err != nil {
+		return offset, err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return offset, fmt.Errorf("daemon %s: %w", c.Addr, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return offset, errorOf(resp.StatusCode, data)
+	}
+	n, err := io.Copy(w, resp.Body)
+	if ctx.Err() != nil {
+		err = nil
+	}
+	return offset + n, err
+}
+
+// DownloadArtifact writes a done build's artifact to out (format "gz" for the .tar.gz, else the
+// .tar.zst), checked against the sha256 the daemon says it has, and returns its size and sha256.
+// Half a file is no file: out is there only once all of it is.
+func (c *Client) DownloadArtifact(id, format, out string) (int64, string, error) {
+	path := "/v1/builds/" + url.PathEscape(id) + "/artifact"
+	if format != "" {
+		path += "?format=" + url.QueryEscape(format)
+	}
+	req, err := http.NewRequest("GET", c.base+path, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("daemon %s: %w", c.Addr, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return 0, "", errorOf(resp.StatusCode, data)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(out), "."+filepath.Base(out)+".")
+	if err != nil {
+		return 0, "", err
+	}
+	defer os.Remove(tmp.Name())
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, h), resp.Body)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("downloading the artifact: %w", err)
+	}
+	sum := hex.EncodeToString(h.Sum(nil))
+	if want := strings.Trim(resp.Header.Get("ETag"), `"`); want != "" && want != sum {
+		return 0, "", fmt.Errorf("the artifact downloaded hashes to %s, and the daemon says %s", sum, want)
+	}
+	if resp.ContentLength >= 0 && n != resp.ContentLength {
+		return 0, "", fmt.Errorf("the artifact downloaded is %d bytes of %d", n, resp.ContentLength)
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return 0, "", err
+	}
+	return n, sum, os.Rename(tmp.Name(), out)
 }
 
 // Metrics is the daemon's samples after since (all when zero) and its totals.

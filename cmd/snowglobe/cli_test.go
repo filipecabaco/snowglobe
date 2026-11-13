@@ -83,6 +83,9 @@ func TestCommandsCheckTheirArguments(t *testing.T) {
 		{[]string{"attach", "web"}, "no instance called web"},
 		{[]string{"stop"}, "stop takes an instance name"},
 		{[]string{"stop", "web"}, "no instance called web"},
+		{[]string{"provide"}, "provide takes an image, a directory with a Dockerfile, or a Dockerfile"},
+		{[]string{"provide", "alpine", "-o", "site.zip"}, "-o site.zip: name it .tar.zst or .tar.gz"},
+		{[]string{"provide", "alpine"}, "no snowglobe daemon is running"},
 	} {
 		code, _, errOut := cli(t, tc.args...)
 		if code != 1 || !strings.Contains(errOut, tc.want) {
