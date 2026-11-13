@@ -65,6 +65,10 @@ func fakeBuild() {
 	}
 	os.MkdirAll(filepath.Join(out, "system", "filesystem"), 0o755)
 	os.WriteFile(filepath.Join(out, "run.json"), fmt.Appendf(nil, `{"network":%q}`, flagOf("network")), 0o644)
+	os.WriteFile(filepath.Join(out, "index.html"), []byte(`<script src="armless/armless.js"></script>`), 0o644)
+	if flagOf("kernel") == "none" {
+		os.WriteFile(filepath.Join(out, "system", "user.bin"), []byte("user"), 0o644)
+	}
 	fmt.Println("==> done")
 	os.Exit(0)
 }

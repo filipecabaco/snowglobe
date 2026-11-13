@@ -126,6 +126,29 @@ func TestPullTakesTheArm64ImageWithAnAnonymousToken(t *testing.T) {
 	}
 }
 
+func TestDigestIsWhatATagNamesNow(t *testing.T) {
+	r := newRegistry(t)
+	r.image(t)
+	// No Docker-Content-Digest: the manifest's own hash
+	sum := sha256.Sum256(r.manifests["3"])
+	want := "sha256:" + hex.EncodeToString(sum[:])
+	if d, err := r.client().digest("3"); err != nil || d != want {
+		t.Errorf("digest %q %v, want %q", d, err, want)
+	}
+	// The tag moved: another digest
+	r.manifests["3"] = append(r.manifests["3"], ' ')
+	if d, _ := r.client().digest("3"); d == want {
+		t.Errorf("the same digest for another manifest: %s", d)
+	}
+	if _, err := r.client().digest("nope"); err == nil {
+		t.Error("a digest of no manifest")
+	}
+	// By digest: no registry asked
+	if d, err := Digest("alpine@sha256:abc", nil); err != nil || d != "sha256:abc" {
+		t.Errorf("%q %v", d, err)
+	}
+}
+
 func TestPullFails(t *testing.T) {
 	t.Run("no arm64 image", func(t *testing.T) {
 		r := newRegistry(t)

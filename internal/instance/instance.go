@@ -354,7 +354,10 @@ func List() error {
 	}
 	if d, ok := daemon.Find(); ok {
 		svcs, err := d.Services()
-		if err != nil {
+		// A daemon whose mode runs no machines (a provider) has none to list
+		if _, off := daemon.Disabled(err); off {
+			d = nil
+		} else if err != nil {
 			return err
 		}
 		for _, s := range svcs {
@@ -369,9 +372,11 @@ func List() error {
 				time.Since(s.Created).Round(time.Second), len(s.Replicas), s.Min, s.Max, time.Duration(s.Idle), s.State, ports)
 			n++
 		}
-		ms, err := d.Machines(nil)
-		if err != nil {
-			return err
+		var ms []daemon.Machine
+		if d != nil {
+			if ms, err = d.Machines(nil); err != nil {
+				return err
+			}
 		}
 		for _, m := range ms {
 			if n == 0 {

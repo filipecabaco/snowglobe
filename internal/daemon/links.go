@@ -434,7 +434,7 @@ func (s *Server) relink() {
 	s.relinkMachines(func(*Machine) bool { return true })
 }
 
-func (s *Server) linkRoutes(mux *http.ServeMux) {
+func (s *Server) linkRoutes(mux Router) {
 	mux.HandleFunc("GET /v1/links", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Links(), nil)
 	})

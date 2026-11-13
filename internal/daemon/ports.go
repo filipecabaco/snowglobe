@@ -100,7 +100,7 @@ func overlaps(a, b string) bool {
 	return a == b || any(a) || any(b)
 }
 
-func (s *Server) portRoutes(mux *http.ServeMux) {
+func (s *Server) portRoutes(mux Router) {
 	mux.HandleFunc("GET /v1/ports", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Ports(), nil)
 	})

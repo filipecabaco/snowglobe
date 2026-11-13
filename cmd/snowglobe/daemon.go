@@ -52,6 +52,11 @@ func runDaemon(args []string) error {
 	tlsCert := fs.String("tls-cert", "", "")
 	tlsKey := fs.String("tls-key", "", "")
 	insecure := fs.Bool("insecure-listen", false, "")
+	mode := fs.String("mode", "full", "")
+	cacheSize := fs.String("cache-size", "20G", "")
+	buildTimeout := fs.Duration("build-timeout", 0, "")
+	maxContext := fs.String("max-context", "1G", "")
+	maxArtifact := fs.String("max-artifact", "8G", "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	if _, err := parse(fs, args); err != nil {
 		return err
@@ -81,6 +86,22 @@ func runDaemon(args []string) error {
 			return fmt.Errorf("%s: a token of 16 characters or more", *tokenFile)
 		}
 	}
+	features, err := daemon.Mode(*mode)
+	if err != nil {
+		return fmt.Errorf("--mode: %w", err)
+	}
+	// A provider builds for others: no build of theirs holds a slot for ever
+	if *buildTimeout == 0 && features.ArtifactsOnly {
+		*buildTimeout = 30 * time.Minute
+	}
+	sizes := map[string]*int64{}
+	for flag, v := range map[string]string{"cache-size": *cacheSize, "max-context": *maxContext, "max-artifact": *maxArtifact} {
+		n, err := daemon.ParseSize(v)
+		if err != nil {
+			return fmt.Errorf("--%s: %w", flag, err)
+		}
+		sizes[flag] = &n
+	}
 	var budget int64
 	if *memory != "" {
 		var err error
@@ -88,9 +109,12 @@ func runDaemon(args []string) error {
 			return fmt.Errorf("--memory: %w", err)
 		}
 	}
-	vm, err := native.VM(version, tools.NativeSource(version))
-	if err != nil {
-		return err
+	// The snowglobe-vm its templates run on: a daemon without templates runs none
+	vm := ""
+	if features.Templates {
+		if vm, err = native.VM(version, tools.NativeSource(version)); err != nil {
+			return err
+		}
 	}
 	dir, err := daemon.Dir()
 	if err != nil {
@@ -100,7 +124,7 @@ func runDaemon(args []string) error {
 	// Fleets on the API: planned and applied through the daemon's own socket, as a client would
 	own := "unix://" + filepath.Join(dir, "daemon.sock")
 	policy := daemon.Policy{SiteRoots: siteRoots, Private: *remotePrivate}
-	routes := func(mux *http.ServeMux) {
+	routes := func(mux daemon.Router) {
 		fleet.Routes(mux, fleet.NewRegistry(dir), func(r *http.Request) (fleet.API, error) {
 			c, err := daemon.NewClient(own, "")
 			if err == nil && daemon.IsRemote(r) {
@@ -111,7 +135,8 @@ func runDaemon(args []string) error {
 		}, buildSite, policy)
 	}
 	s, err := daemon.New(daemon.Options{Dir: dir, VM: vm, Listen: *listen, Token: token, Memory: budget, Wait: *wait, Logf: logger.Printf, Routes: routes,
-		Remote: policy, TLSCert: *tlsCert, TLSKey: *tlsKey, Insecure: *insecure})
+		Remote: policy, TLSCert: *tlsCert, TLSKey: *tlsKey, Insecure: *insecure, Features: features, Version: version,
+		CacheSize: *sizes["cache-size"], BuildTimeout: *buildTimeout, MaxContext: *sizes["max-context"], MaxArtifact: *sizes["max-artifact"]})
 	if err != nil {
 		return err
 	}
