@@ -444,8 +444,8 @@ $ snowglobe apply</pre>
   <script src="xterm/xterm.js" defer></script>
   <script type="module">
     const demos = [
-      { dir: "conduit", tag: "Conduit + Supabase in one VM", name: "Conduit", stack: "A RealWorld blogging app with accounts, Markdown articles, comments, favorites, follows and feeds. React and supabase-js talk to Postgres, Auth and PostgREST in the same VM. Open the agent studio, select conduit, then Open the app on port 4173.", show: [0, 1], command: "bash, with Conduit and Supabase running" },
-      { dir: "supabase", tag: "Postgres, PostgREST and Auth, and a notes app", name: "Supabase", stack: "The Supabase CLI's native stack (Postgres, PostgREST and Auth as plain processes, no Docker) on 2 CPUs, and a small notes app on it, run by the Bun inside the CLI: Auth for users, the Data API to store and search notes, row level security keeping each user's notes their own.", show: [0, 1, 2, 3, 4, 5], command: "bash, with the stack running and notes on the PATH" },
+      { dir: "conduit", site: "conduit-1cpu", tag: "Conduit + Supabase in one VM", name: "Conduit", stack: "A RealWorld blogging app with accounts, Markdown articles, comments, favorites, follows and feeds. React and supabase-js talk to Postgres, Auth and PostgREST in the same VM, on 1 CPU. Open the agent studio, select conduit, then Open the app on port 4173.", show: [0, 1], command: "bash, with Conduit and Supabase running" },
+      { dir: "supabase", site: "supabase-1cpu", tag: "Postgres, PostgREST, Auth and Realtime, and a notes app", name: "Supabase", stack: "The Supabase CLI's native stack (Postgres, PostgREST, Auth and Realtime as plain processes, no Docker) on 1 CPU, and a small notes app on it, run by the Bun inside the CLI: Auth for users, the Data API to store and search notes, row level security keeping each user's notes their own.", show: [0, 1, 2, 3, 4, 5], command: "bash, with the stack running and notes on the PATH" },
       { dir: "iex", tag: "Erlang and Elixir from Alpine", name: "Elixir IEx", stack: "Just IEx, from Alpine's Elixir and Erlang packages: processes, tasks and docs, in a tab.", show: [0, 2, 3, 4] },
       { dir: "postgres", tag: "A Postgres 18 server, with psql", name: "PostgreSQL", stack: "A Postgres 18 server from Alpine's packages, with psql attached and an empty database to start from.", show: [0, 1, 2, 3] },
       { dir: "elixir", tag: "Ecto and Postgrex on Postgres 18", name: "Elixir + Postgres", stack: "A Mix release with Ecto and Postgrex, talking to a PostgreSQL 18 server running in the same tab.", show: [0, 1, 3, 4] },
@@ -459,6 +459,10 @@ $ snowglobe apply</pre>
       { dir: "curl", tag: "A shell online through your browser", name: "curl + jq", stack: "Plain Alpine packages in a shell, online through your browser: curl against live APIs, piped into jq.", show: [0, 1, 2, 3], command: "sh, with curl and jq from Alpine's packages" },
     ];
 
+    // The directory of the site a demo runs: `site` when it isn't the demo's own (the 1-CPU build of
+    // Supabase and Conduit, which starts here in the page; their 2-CPU sites need a window of their
+    // own, and are the agent page's). Its anchor and its card stay the demo's `dir`.
+    const siteOf = (demo) => demo.site || demo.dir;
     const $ = (sel, root = document) => root.querySelector(sel);
     const mb = (bytes) => (bytes / 1048576).toFixed(1);
     const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -477,7 +481,7 @@ $ snowglobe apply</pre>
       $(".title", node).textContent = demo.name;
       $(".stack", node).textContent = demo.stack;
       const win = $(".window", node);
-      win.href = demo.dir + "/";
+      win.href = siteOf(demo) + "/";
       win.setAttribute("aria-label", `Open ${demo.name} in a new window`);
       win.addEventListener("click", (event) => openWindow(event, demo));
       const play = $(".play", node);
@@ -543,7 +547,7 @@ $ snowglobe apply</pre>
 
     await Promise.all(entries.map(async (entry) => {
       const { demo, node } = entry;
-      const [run, warm] = await Promise.all([getJSON(demo.dir + "/run.json"), getJSON(demo.dir + "/warm-report.json")]);
+      const [run, warm] = await Promise.all([getJSON(siteOf(demo) + "/run.json"), getJSON(siteOf(demo) + "/warm-report.json")]);
       const specs = $("dl.specs", node);
       const spec = (label, value, unit) => specs.append(el("div", {}, el("dt", { textContent: label }), el("dd", {}, value, " ", el("small", { textContent: unit }))));
       let pre = 0, cold = 0;
@@ -590,9 +594,9 @@ $ snowglobe apply</pre>
     };
 
     async function transcriptFor(demo) {
-      const screen = await fetch(demo.dir + "/system/console.bin").then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+      const screen = await fetch(siteOf(demo) + "/system/console.bin").then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
       if (demo.show === "screen") return screen && { label: "screen at snapshot", data: new Uint8Array(screen) };
-      const transcript = await getJSON(demo.dir + "/transcript.json");
+      const transcript = await getJSON(siteOf(demo) + "/transcript.json");
       if (!transcript?.length) return null;
       const text = screen ? new TextDecoder().decode(screen) : "";
       const prompt = text.slice(text.lastIndexOf("\n") + 1);
@@ -694,7 +698,7 @@ $ snowglobe apply</pre>
             el("strong", { textContent: `${demo.name}, live` }),
             el("button", { className: "btn", type: "button", textContent: "Stop", onclick: () => toggleInline(entry) })),
           el("div", { className: "loading", role: "status" }, el("span", { className: "text", textContent: "Restoring snapshot…" }), el("span", { className: "bar" }, el("span"))),
-          el("iframe", { title: `${demo.name}, running live`, src: demo.dir + "/?embed", allow: "clipboard-write" }),
+          el("iframe", { title: `${demo.name}, running live`, src: siteOf(demo) + "/?embed", allow: "clipboard-write" }),
         );
         node.classList.add("playing");
         const play = $(".play", node);
@@ -715,10 +719,10 @@ $ snowglobe apply</pre>
     function openWindow(event, demo) {
       const w = Math.min(1100, screen.availWidth - 80), h = Math.min(720, screen.availHeight - 80);
       const offset = (opened++ % 6) * 28;
-      const win = window.open(demo.dir + "/", `snowglobe-${demo.dir}-${Date.now()}`, `popup,width=${w},height=${h},left=${80 + offset},top=${60 + offset}`);
+      const win = window.open(siteOf(demo) + "/", `snowglobe-${demo.dir}-${Date.now()}`, `popup,width=${w},height=${h},left=${80 + offset},top=${60 + offset}`);
       if (!win) {
         // Popups blocked: the link opens a new tab by itself; a button has to ask for one
-        if (event.currentTarget?.tagName !== "A") window.open(demo.dir + "/", "_blank");
+        if (event.currentTarget?.tagName !== "A") window.open(siteOf(demo) + "/", "_blank");
         return;
       }
       event.preventDefault();
