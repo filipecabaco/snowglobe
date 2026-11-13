@@ -854,6 +854,7 @@ func (s *Server) up(req Up) (*Machine, error) {
 			return nil, err
 		}
 		defer os.Remove(state)
+		defer os.Remove(state + userState)
 	}
 	// Room in the memory budget, held until it is up
 	release, err := s.admit(t.Name)
@@ -1156,7 +1157,15 @@ func (s *Server) SnapshotWith(machine, name string, labels map[string]string) (*
 		Bytes: saved.Bytes, Ms: saved.Ms, Labels: labels, Created: time.Now()}
 	if err := os.Rename(written, snap.Path); err != nil {
 		os.Remove(written)
+		os.Remove(written + userState)
 		return nil, err
+	}
+	// A machine with no kernel: its program's process, saved beside it
+	if _, err := os.Stat(written + userState); err == nil {
+		if err := os.Rename(written+userState, snap.Path+userState); err != nil {
+			os.Remove(snap.Path)
+			return nil, err
+		}
 	}
 	s.mu.Lock()
 	s.st.Snapshots[name] = snap
@@ -1192,11 +1201,16 @@ func (s *Server) RemoveSnapshot(name string) error {
 		}
 	}
 	os.Remove(sn.Path)
+	os.Remove(sn.Path + userState)
 	delete(s.st.Snapshots, name)
 	s.save()
 	s.ev.publish(Event{Time: time.Now(), Kind: "snapshot.removed", Subject: "snapshot " + name, Message: "removed"})
 	return nil
 }
+
+// userState is the suffix of what a snapshot of a machine with no kernel keeps beside its machine:
+// its program's process (snowglobe-vm writes both)
+const userState = ".user"
 
 // restorable puts snapshot name where template t's machines may read it (its jobs root: their
 // sandbox reads nothing else of the daemon's), as a link, and returns that path for the spawn.
@@ -1217,6 +1231,12 @@ func (s *Server) restorable(name string, t *Template) (string, error) {
 	link := filepath.Join(dir, randomName(name)+".zst")
 	if err := os.Link(sn.Path, link); err != nil {
 		return "", err
+	}
+	if _, err := os.Stat(sn.Path + userState); err == nil {
+		if err := os.Link(sn.Path+userState, link+userState); err != nil {
+			os.Remove(link)
+			return "", err
+		}
 	}
 	return link, nil
 }

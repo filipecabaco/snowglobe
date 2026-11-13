@@ -25,6 +25,10 @@ func startDetached(args []string) (*daemon.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// (The first start: nothing has made its directory yet)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
 	logPath := filepath.Join(dir, "daemon.log")
 	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {

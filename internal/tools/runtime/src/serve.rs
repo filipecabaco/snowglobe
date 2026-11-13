@@ -41,9 +41,7 @@ use crate::{image, job, profile, sandbox, sys, Args};
 pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     let (info, spec, title) = crate::run::site_spec(&site)?;
     machine::choose_jit(&info, args.get("jit"))?;
-    if crate::user::is_user(&site) {
-        return Err("a site with no kernel (--kernel none) runs with snowglobe run, not as a template to fork".into());
-    }
+    let user = crate::user::is_user(&site);
     let root = PathBuf::from(args.get("jobs-root").ok_or("--serve needs --jobs-root DIR (where job workspaces live)")?);
     std::fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
     let root = root.canonicalize().map_err(|e| e.to_string())?;
@@ -67,6 +65,11 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
         std::env::set_var("ARMLESS_JIT_CODE_MB", "64");
     }
     let net = machine::Net::from_args(args, Some(&info["tunnels"]))?;
+
+    // A site with no kernel: its machine and its program's process restored, and forked the same way
+    if user {
+        return serve_user(args, &site, socket, &root, max, max_machines, saved.is_some().then(|| PathBuf::from(args.get("state").unwrap_or(""))), &spec, &title, &policy, &sandboxed, net);
+    }
 
     // The one restore. No thread may exist when this process forks: the JIT is off until a child
     // turns it on, and the CPUs and host loop start in children
@@ -198,6 +201,226 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
             },
         }
     }
+}
+
+/// `main` for a site with no kernel: its machine and process restored once, with no thread (the
+/// JIT and the CPUs start in children), then a fork for each machine (`spawn`: it serves a control
+/// socket of its own, as `run --detached` does) and each job (a shell beside the program, answered
+/// as a machine with a kernel's job is). A template made from a saved machine starts from its state
+/// (`--state`, and its .user).
+#[allow(clippy::too_many_arguments)]
+fn serve_user(
+    args: &Args,
+    site: &Site,
+    socket: &str,
+    root: &Path,
+    max: usize,
+    max_machines: usize,
+    saved: Option<PathBuf>,
+    spec: &machine::Spec,
+    title: &str,
+    policy: &sandbox::Policy,
+    sandboxed: &str,
+    net: machine::Net,
+) -> Result<u8, String> {
+    let started = std::time::Instant::now();
+    let spec = &machine::Spec { cpus: crate::user::cpus_for(args, site, spec)?, ..spec.clone() };
+    let image = if saved.is_none() { image::open(site, spec.memory_mb << 20) } else { None };
+    let (vm, process) = crate::user::restore(site, spec, image, saved.as_deref(), false)?;
+    let board = vm.board.clone();
+    let mut restored = Some((vm, process));
+    let _ = std::fs::remove_file(socket);
+    let listener = UnixListener::bind(socket).map_err(|e| format!("{socket}: {e}"))?;
+    eprintln!(
+        "restored {title} in {:.1}s (user mode, {} CPUs), serving jobs on {socket} (workspaces under {}, {max} at once; {sandboxed})",
+        started.elapsed().as_secs_f64(),
+        spec.cpus,
+        root.display()
+    );
+    let mut running = 0usize;
+    let mut machines = std::collections::HashSet::new();
+    let reap = |pid: libc::pid_t, running: &mut usize, machines: &mut std::collections::HashSet<libc::pid_t>| {
+        if !machines.remove(&pid) {
+            *running = running.saturating_sub(1);
+        }
+    };
+    let started_by = crate::lifeline::inherited();
+    let (kids_line, kids_hold) = sys::pipe().map_err(|e| format!("pipe: {e}"))?;
+    loop {
+        match crate::lifeline::accept_or_gone(&listener, started_by.as_ref()) {
+            Ok(true) => {},
+            Ok(false) => {
+                let _ = std::fs::remove_file(socket);
+                crate::lifeline::stop("what started this server")
+            },
+            Err(e) => return Err(format!("{socket}: {e}")),
+        }
+        let Ok((mut conn, _)) = listener.accept() else { continue };
+        while let Some((pid, _)) = sys::wait(-1, false) {
+            reap(pid, &mut running, &mut machines);
+        }
+        let _ = conn.set_read_timeout(Some(REQUEST_WAIT));
+        let line = match conn.try_clone().map_err(|e| e.to_string()).and_then(|c| read_request(BufReader::new(c))) {
+            Ok(line) => line,
+            Err(e) => {
+                eprintln!("snowglobe: {e}");
+                continue;
+            },
+        };
+        let _ = conn.set_read_timeout(None);
+        if line.trim().is_empty() {
+            continue;
+        }
+        let spawn = match spawn_request(&line, socket, root) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = conn.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
+                continue;
+            },
+        };
+        if let Some(s) = spawn.as_ref().filter(|s| UnixStream::connect(&s.sock).is_ok()) {
+            let e = format!("a machine is running on {} already", s.sock.display());
+            let _ = conn.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
+            continue;
+        }
+        if spawn.is_some() && machines.len() >= max_machines {
+            let e = format!("{max_machines} machines are running, the most this template serves (--max-machines)");
+            let _ = conn.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
+            continue;
+        }
+        while spawn.is_none() && running >= max {
+            match sys::wait(-1, true) {
+                Some((pid, _)) => reap(pid, &mut running, &mut machines),
+                None => running = 0,
+            }
+        }
+        match sys::fork() {
+            Ok(sys::Forked::Child) => {
+                drop(listener);
+                drop(kids_hold);
+                drop(started_by);
+                let (vm, process) = restored.take().expect("the restored machine");
+                let code = match user_child(&board, vm, process, site, policy, root, spec, net, spawn.as_ref(), &line, conn, kids_line) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        eprintln!("snowglobe: {e}");
+                        1
+                    },
+                };
+                sys::exit_now(code);
+            },
+            Err(e) => eprintln!("snowglobe: fork: {e}"),
+            Ok(sys::Forked::Parent(pid)) => {
+                if spawn.is_some() {
+                    machines.insert(pid);
+                } else {
+                    running += 1;
+                }
+            },
+        }
+    }
+}
+
+/// A fork of a site with no kernel: a machine serving its control socket at `spawn`'s until it is
+/// stopped (from a saved state if it names one), or one job answered on `conn`.
+#[allow(clippy::too_many_arguments)]
+fn user_child(
+    board: &Arc<armless::Board>,
+    mut vm: armless::vm::Vm<armless::platform::NativePlatform>,
+    mut process: armless_user::Process,
+    site: &Site,
+    policy: &sandbox::Policy,
+    root: &Path,
+    spec: &machine::Spec,
+    net: machine::Net,
+    spawn: Option<&Spawn>,
+    line: &str,
+    mut conn: UnixStream,
+    server_line: OwnedFd,
+) -> Result<(), String> {
+    let refuse = |conn: &mut UnixStream, e: String| {
+        let _ = conn.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
+        e
+    };
+    // A job's request read before anything starts, so a bad one is answered
+    let ask = match spawn {
+        Some(_) => None,
+        None => Some(ask(line, root).map_err(|e| if is_control_job(line) { refuse(&mut conn, e) } else { e })?),
+    };
+    sandbox::apply_stage(policy, sandbox::Stage::Child).map_err(|e| refuse(&mut conn, e))?;
+    let gone = spawn.map(|s| s.sock.clone());
+    crate::lifeline::watch(server_line, move || {
+        if let Some(s) = &gone {
+            let _ = std::fs::remove_file(s);
+        }
+        crate::lifeline::stop("its template's server")
+    });
+    if let Some(state) = spawn.and_then(|s| s.state.as_ref()) {
+        // A machine saved before, over this copy of the template's
+        let (v, p) = crate::user::restore(site, spec, None, Some(state), false).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
+        (vm, process) = (v, p);
+    }
+    let board = if spawn.and_then(|s| s.state.as_ref()).is_some() { vm.board.clone() } else { board.clone() };
+    board.seed(&armless::runner::os_entropy());
+    if machine::jit_wanted() {
+        for cpu in vm.cpus.iter_mut().filter(|c| !c.jit.enabled) {
+            cpu.enable_native_jit();
+        }
+    }
+    let activity = Activity::new(false);
+    let host = Arc::new(machine::host(&board, site, &spec.network, net, &activity));
+    let shared = Arc::new(crate::user::Shared::default());
+    match (spawn, ask) {
+        (Some(s), _) => {
+            let _ = std::fs::remove_file(&s.sock);
+            let listener = UnixListener::bind(&s.sock).map_err(|e| refuse(&mut conn, format!("{}: {e}", s.sock.display())))?;
+            crate::user::listen(shared.clone(), host, listener);
+            let _ = conn.write_all(format!("{}\n", json!({ "pid": std::process::id(), "socket": s.sock })).as_bytes());
+            drop(conn);
+            let ended = crate::user::drive(&mut vm, &mut process, &shared);
+            let _ = std::fs::remove_file(&s.sock);
+            eprintln!("snowglobe: machine {} stopped ({ended})", s.sock.display());
+        },
+        (None, Some(ask)) => {
+            // One job: the answer is written, and this process ends, from a thread of its own while
+            // the program runs on this one
+            let (req, workspace) = match ask {
+                Ask::Workspace(w) => (
+                    job::Request { files: job::files(&w.dir)?, command: w.command.clone(), env: w.env.clone(), timeout: w.timeout, home: false },
+                    Some(w.dir),
+                ),
+                Ask::Job(req) => (req, None),
+            };
+            let rx = crate::user::ask_job(&shared, req);
+            std::thread::spawn(move || {
+                let mut w = conn;
+                let r = rx.recv().unwrap_or_else(|_| Err("the program stopped".into()));
+                match (r, workspace) {
+                    (Ok(done), Some(dir)) => {
+                        for (rel, data) in &done.out {
+                            let dest = dir.join("out").join(rel);
+                            let _ = std::fs::create_dir_all(dest.parent().unwrap_or(&dir));
+                            let _ = std::fs::write(&dest, data);
+                        }
+                        let header = json!({ "status": done.status, "out": done.out.len(), "timed_out": done.timed_out, "killed": done.killed, "ms": done.ms });
+                        let _ = w.write_all(format!("{header}\n").as_bytes());
+                        let _ = w.write_all(&done.output);
+                    },
+                    (Ok(done), None) => {
+                        let _ = w.write_all(format!("{}\n", job::to_json(&done)).as_bytes());
+                    },
+                    (Err(e), _) => {
+                        let _ = w.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
+                    },
+                }
+                let _ = w.flush();
+                sys::exit_now(0);
+            });
+            crate::user::drive(&mut vm, &mut process, &shared);
+        },
+        (None, None) => {},
+    }
+    Ok(())
 }
 
 /// How long a client gets to send its request line

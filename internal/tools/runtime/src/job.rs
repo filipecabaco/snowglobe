@@ -403,7 +403,7 @@ pub fn run_workspace(board: &armless::Board, activity: &Arc<Activity>, w: &Works
 }
 
 /// A directory's files, relative to it (directories walked; symlinks and the like skipped).
-fn files(root: &Path) -> Result<Vec<File>, String> {
+pub(crate) fn files(root: &Path) -> Result<Vec<File>, String> {
     use std::os::unix::fs::PermissionsExt;
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];

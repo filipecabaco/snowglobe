@@ -551,7 +551,7 @@ fn env_file(p: &str) -> Result<Vec<(String, String)>, String> {
 
 /// `--forward [ADDRESS:]PORT:GUEST_PORT` (all addresses by default): where to listen, and the
 /// guest's port.
-fn forward(spec: &str) -> Result<(String, u16, u16), String> {
+pub(crate) fn forward(spec: &str) -> Result<(String, u16, u16), String> {
     let (addr, rest) = match spec.matches(':').count() {
         2 => spec.split_once(':').unwrap(),
         _ => ("0.0.0.0", spec),
@@ -706,7 +706,7 @@ fn serve(session: &Session, stream: UnixStream) {
 
 /// A links request's links: each a name (or none, for any) and port the guest connects to, and
 /// the tcp://HOST:PORT its connections go to instead.
-fn links(v: &serde_json::Value) -> Result<Vec<armless::native::Tunnel>, String> {
+pub(crate) fn links(v: &serde_json::Value) -> Result<Vec<armless::native::Tunnel>, String> {
     let Some(list) = v.as_array() else { return Err("links: a list of {host, port, url}".into()) };
     list.iter()
         .map(|l| {
