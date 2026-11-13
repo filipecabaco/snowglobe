@@ -61,7 +61,7 @@ jobs:
                                                    (.EXAMPLES | split(" ") | .[] | {name: ., deploy: false})]
                                                 | map(. + {src: (.name | sub("-[0-9]+cpu$|-nokernel$"; "")),
                                                            cpus: (.name | capture("-(?<n>[0-9]+)cpu$").n // ""),
-                                                           kernel: (if (.name | endswith("-nokernel")) or (.deploy and (.name | IN($kernel[]) | not)) then "none" else "" end)})')" >> "$GITHUB_OUTPUT""
+                                                           kernel: (if (.name | endswith("-nokernel")) or (.deploy and (.name | IN($kernel[]) | not)) then "none" else "" end)})')" >> "$GITHUB_OUTPUT"
 
   test:
     runs-on: ubuntu-24.04
