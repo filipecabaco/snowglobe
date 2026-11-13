@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "sha": "4becc6d21ff3cd959365b74151bb6ccc78200b71",
-  "created_at": "2026-11-13T13:51:03.117Z",
+  "created_at": "2026-11-13T14:05:36.544Z",
   "sites": {
     "web": {
       "schema": 1,
@@ -915,6 +915,281 @@
               "n": 3
             }
           ]
+        }
+      },
+      "errors": []
+    },
+    "supabase-nokernel": {
+      "schema": 1,
+      "site": "supabase-nokernel",
+      "title": "Supabase in the browser",
+      "cpus": 1,
+      "network": "fetch",
+      "snowglobe": "v0.0.0-20261113133426-db74eea11d0a+dirty",
+      "built_at": "2026-11-13T13:59:27Z",
+      "measured_at": "2026-11-13T14:05:21.382Z",
+      "env": {
+        "sha": "db74eea11d0a04f421b8f87a32586d3501d719cd",
+        "ref": "refs/pull/114/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 1536,
+              "running_ms": 1590,
+              "first_output_ms": 1656,
+              "requests": 95,
+              "bytes": 91011741,
+              "not_modified": 0,
+              "sw_served": 79,
+              "heap_peak_bytes": 6130064
+            },
+            {
+              "ready_ms": 1608,
+              "running_ms": 1659,
+              "first_output_ms": 1739,
+              "requests": 95,
+              "bytes": 91011741,
+              "not_modified": 0,
+              "sw_served": 79,
+              "heap_peak_bytes": 5739464
+            },
+            {
+              "ready_ms": 1563,
+              "running_ms": 1614,
+              "first_output_ms": 1682,
+              "requests": 95,
+              "bytes": 91011741,
+              "not_modified": 0,
+              "sw_served": 78,
+              "heap_peak_bytes": 6138108
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1563,
+              "min": 1536,
+              "max": 1608,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1614,
+              "min": 1590,
+              "max": 1659,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1682,
+              "min": 1656,
+              "max": 1739,
+              "n": 3
+            },
+            "requests": {
+              "median": 95,
+              "min": 95,
+              "max": 95,
+              "n": 3
+            },
+            "bytes": {
+              "median": 91011741,
+              "min": 91011741,
+              "max": 91011741,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 79,
+              "min": 78,
+              "max": 79,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 6130064,
+              "min": 5739464,
+              "max": 6138108,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 1191,
+              "running_ms": 1242,
+              "first_output_ms": 1318,
+              "requests": 1,
+              "bytes": 0,
+              "not_modified": 1,
+              "sw_served": 91,
+              "heap_peak_bytes": 4909548
+            },
+            {
+              "ready_ms": 1204,
+              "running_ms": 1258,
+              "first_output_ms": 1325,
+              "requests": 1,
+              "bytes": 0,
+              "not_modified": 1,
+              "sw_served": 91,
+              "heap_peak_bytes": 4807684
+            },
+            {
+              "ready_ms": 1145,
+              "running_ms": 1178,
+              "first_output_ms": 1261,
+              "requests": 1,
+              "bytes": 0,
+              "not_modified": 1,
+              "sw_served": 91,
+              "heap_peak_bytes": 4972228
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1191,
+              "min": 1145,
+              "max": 1204,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1242,
+              "min": 1178,
+              "max": 1258,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1318,
+              "min": 1261,
+              "max": 1325,
+              "n": 3
+            },
+            "requests": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "bytes": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 91,
+              "min": 91,
+              "max": 91,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 4909548,
+              "min": 4807684,
+              "max": 4972228,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 65244,
+              "running_ms": 65294,
+              "first_output_ms": 65390,
+              "requests": 125,
+              "bytes": 104200614,
+              "not_modified": 0,
+              "sw_served": 109,
+              "heap_peak_bytes": 5619312
+            },
+            {
+              "ready_ms": 65306,
+              "running_ms": 65354,
+              "first_output_ms": 65453,
+              "requests": 125,
+              "bytes": 104200614,
+              "not_modified": 0,
+              "sw_served": 109,
+              "heap_peak_bytes": 5839832
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 65275,
+              "min": 65244,
+              "max": 65306,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 65324,
+              "min": 65294,
+              "max": 65354,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 65421.5,
+              "min": 65390,
+              "max": 65453,
+              "n": 2
+            },
+            "requests": {
+              "median": 125,
+              "min": 125,
+              "max": 125,
+              "n": 2
+            },
+            "bytes": {
+              "median": 104200614,
+              "min": 104200614,
+              "max": 104200614,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 109,
+              "min": 109,
+              "max": 109,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 5729572,
+              "min": 5619312,
+              "max": 5839832,
+              "n": 2
+            }
+          }
         }
       },
       "errors": []
