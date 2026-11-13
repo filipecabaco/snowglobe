@@ -67,7 +67,7 @@ fn at_prompt(printed: &[u8], shape: &str) -> bool {
 /// What a command printed, from everything the terminal showed after it was typed: the echoed
 /// command line and the prompt left waiting after it are the terminal's, not the command's, so
 /// they're cut. Also the prompt now waiting, when it isn't `prompt` any more.
-fn command_output(output: &str, command: &str, prompt: &str) -> (Vec<u8>, Option<String>) {
+pub(crate) fn command_output(output: &str, command: &str, prompt: &str) -> (Vec<u8>, Option<String>) {
     // Line editors echo the command (wrapped at the terminal's width when it is long) and
     // often redraw it with the prompt (IEx, Node): the leading lines that end with the
     // command are that echo. Ending with it as a word: `ls` printing "tools" is output. After

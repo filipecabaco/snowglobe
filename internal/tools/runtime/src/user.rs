@@ -400,26 +400,18 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
         });
     } else {
         // Piped (`printf 'cmd\n' | snowglobe run site`, as CI checks a site): each line is typed
-        // as a job's is, once the answer to the one before is in; what the program prints goes
-        // to stdout; the run ends after the last answer
-        // To a terminal, as it comes; to a file or a pipe, each line as it ended (a REPL redraws the
-        // line it reads at every key: `text::rendered`)
-        let terminal = std::io::stdout().is_terminal();
-        let pending = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let held = pending.clone();
-        shared.io.lock().unwrap().watchers.push(Box::new(move |b| {
-            let mut out = std::io::stdout();
-            if terminal {
-                return out.write_all(b).and_then(|_| out.flush()).is_ok();
-            }
-            let mut p = held.lock().unwrap();
-            p.extend_from_slice(b);
-            let Some(end) = p.iter().rposition(|&c| c == b'\n') else { return true };
-            let lines: Vec<u8> = p.drain(..=end).collect();
-            out.write_all(&crate::text::rendered(&lines)).and_then(|_| out.flush()).is_ok()
-        }));
+        // as a job's is, once the answer to the one before is in, and what it printed goes to
+        // stdout as with a kernel (run's command_output): the screen it drew, without the line's
+        // echo and the prompt after it. The run ends after the last answer
         let s = shared.clone();
         std::thread::spawn(move || {
+            // The program's prompt: the last line it drew before the first command, then the
+            // last line of each answer
+            let mut prompt = {
+                let io = s.io.lock().unwrap();
+                shown(&io.output).rsplit('\n').next().unwrap_or_default().trim().to_string()
+            };
+            let mut out = std::io::stdout();
             for line in std::io::stdin().lock().lines() {
                 let Ok(line) = line else { break };
                 let mut io = s.io.lock().unwrap();
@@ -440,11 +432,15 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
                     }
                     io = s.changed.wait_timeout(io, QUIET).unwrap().0;
                 }
+                let printed = shown(&io.output[mark..]);
+                drop(io);
+                let (answer, next) = crate::run::command_output(&printed, &line, &prompt);
+                if let Some(p) = next {
+                    prompt = p;
+                }
+                let _ = out.write_all(&answer);
+                let _ = out.flush();
             }
-            // What is left of the last line (a prompt)
-            let rest = std::mem::take(&mut *pending.lock().unwrap());
-            let _ = std::io::stdout().write_all(&crate::text::rendered(&rest));
-            let _ = std::io::stdout().flush();
             std::process::exit(driver::end("end", 0) as i32);
         });
     }
@@ -802,6 +798,9 @@ fn serve(shared: &Arc<Shared>, host: &Arc<armless::native::NativeHost>, stream: 
     let begun = Instant::now();
     let mut io = shared.io.lock().unwrap();
     let mark = io.output.len();
+    // The prompt it waits at: the last line it drew before this command (a long run's last
+    // screenful is enough)
+    let prompt = shown(&io.output[mark.saturating_sub(4096)..]).rsplit('\n').next().unwrap_or_default().trim().to_string();
     io.input.extend(command.as_bytes());
     io.input.push_back(b'\n');
     io.waiting = false;
@@ -819,5 +818,13 @@ fn serve(shared: &Arc<Shared>, host: &Arc<armless::native::NativeHost>, stream: 
         io = shared.changed.wait_timeout(io, Duration::from_millis(50)).unwrap().0;
     };
     drop(io);
-    let _ = writer.write_all(&crate::text::rendered(&output.unwrap_or_default()));
+    // What the command printed, as with a kernel: without the line's echo and the prompt after it
+    let (answer, _) = crate::run::command_output(&shown(&output.unwrap_or_default()), &command, &prompt);
+    let _ = writer.write_all(&answer);
+}
+
+/// Program output as the screen shows it, in plain text: lines as a terminal leaves them (a REPL
+/// redraws the line it reads at every key), no colours or terminal queries.
+fn shown(b: &[u8]) -> String {
+    String::from_utf8_lossy(&crate::text::plain(&crate::text::rendered(&crate::text::without_queries(b)))).into_owned()
 }
