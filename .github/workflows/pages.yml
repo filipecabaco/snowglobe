@@ -190,7 +190,8 @@ jobs:
       SITE: ${{ matrix.site.name }}
       SRC: ${{ matrix.site.src }}
       CPUS: ${{ matrix.site.cpus }}
-      KERNEL: ${{ matrix.site.kernel }}
+      # Not KERNEL: mise-action exports mise.toml's KERNEL list, which would override it
+      SITE_KERNEL: ${{ matrix.site.kernel }}
     steps:
       - uses: actions/checkout@v7
 
@@ -236,7 +237,7 @@ jobs:
 
       - name: Build ${{ matrix.site.name }}
         if: steps.cache.outputs.cache-hit != 'true'
-        run: ./snowglobe build "examples/$SRC" --out "dist/$SITE" ${CPUS:+--cpus "$CPUS"} ${KERNEL:+--kernel "$KERNEL"}
+        run: ./snowglobe build "examples/$SRC" --out "dist/$SITE" ${CPUS:+--cpus "$CPUS"} ${SITE_KERNEL:+--kernel "$SITE_KERNEL"}
 
       # Type into the app in its own language and check what it prints. The Go demo is a
       # full-screen app with no prompt: it only has to keep running.
