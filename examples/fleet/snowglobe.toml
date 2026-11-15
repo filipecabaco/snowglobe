@@ -70,11 +70,14 @@ fi
 ready = ". /home/supa/.stack-env; psql -tA \"$DB_URL\" -c 'select count(*) from public.ticks' | grep -q '^[1-9]'"
 timeout = "4m"
 
-# The viewer, set up once: it loads the last rows, subscribes, and serves what it has heard
+# The viewer, set up once: it loads the last rows, subscribes, and serves what it has heard. Three
+# commands with a time limit each: writing it, starting it, and waiting in the machine until it
+# listens (Node loading supabase-js takes a while on a phone), so a slow start is waited for there,
+# in one command, and one that never comes says what Node printed
 [snapshots.viewer]
 template = "node"
 run = [
-'''
+{ timeout = "30s", cmd = '''
 cat > /root/app/viewer.mjs <<'EOF'
 import http from 'node:http';
 import { createClient } from '@supabase/supabase-js';
@@ -98,13 +101,30 @@ http.createServer((req, res) => {
   res.end(`<meta http-equiv='refresh' content='1'><body style='font:16px/1.5 system-ui;margin:24px'><h3>Live data, over Supabase Realtime</h3><p style='font-size:32px;margin:0'>${ys.at(-1) ?? '...'}</p><svg width='400' height='60'><polyline fill='none' stroke='#d6300c' stroke-width='2' points='${pts}'/></svg><p><small>${status}: pushed by Supabase at supabase.internal:54321, a machine of its own</small></p>`);
 }).listen(8080, '0.0.0.0');
 EOF
-  ''',
-'''
-cd /root/app && node viewer.mjs >/tmp/viewer.log 2>&1 &
-  ''',
+echo "viewer.mjs written"
+  ''' },
+{ timeout = "30s", cmd = '''
+cd /root/app && (node viewer.mjs >/tmp/viewer.log 2>&1 &) && echo "node started"
+  ''' },
+{ timeout = "2m", cmd = '''
+# Until it answers on 8080, up to 110s by the clock (each try at most 2s, so a server that
+# accepts and never answers can't outlast the command's 2m), saying how long every 10s
+start=$(date +%s) n=0 said=0
+until wget -q -T 2 -O /dev/null http://127.0.0.1:8080/health 2>/dev/null; do
+  n=$(($(date +%s) - start))
+  if [ "$n" -ge 110 ]; then
+    echo "the viewer did not listen in 110s; what Node printed:"
+    tail -n 20 /tmp/viewer.log
+    exit 1
+  fi
+  if [ $((n / 10)) -gt "$said" ]; then said=$((n / 10)); echo "still starting after ${n}s"; fi
+  sleep 1
+done
+echo "listening after ${n}s"
+  ''' },
 ]
 ready = "wget -q -O /dev/null http://127.0.0.1:8080/health"
-timeout = "2m"
+timeout = "30s"
 
 [templates.db]
 snapshot = "db"
