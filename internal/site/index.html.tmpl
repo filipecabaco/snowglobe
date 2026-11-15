@@ -1,5 +1,5 @@
     // A restored workspace's state, and with no kernel its process; else the site's own
-    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null);<!DOCTYPE html>
+    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null, sessions.processSavedAt ?? null);<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -242,8 +242,10 @@
       filesystem: { json: versioned("system/filesystem.json"), baseurl: "system/filesystem/" },
       initial_state: versioned("system/state.bin.zst"),
       {{- if .User}}
-      // The program's process, as the build left it with that state
+      // The program's process, as the build left it with that state, and when the build saved it
+      // (ms since the epoch): its clocks go on by the time since, as after a suspend
       user_state: versioned("system/user.bin"),
+      user_saved_at: {{.SavedAtMs}},
       {{- end}}
       // The files the app is most likely to need, in one background download once it runs
       warm: versioned("system/warm.pack"),

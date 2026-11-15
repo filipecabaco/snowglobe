@@ -282,7 +282,9 @@ Build flags:
   --kernel none   no guest kernel: the image's command, an aarch64 Linux program, runs on its
                   own, its system calls answered by the machine, in the page and natively.
                   Smaller snapshots; one CPU in the page (the build runs it on --build-cpus at
-                  once, and natively it runs on as many) (default: linux)
+                  once, and natively it runs on as many). As in a container, the program is
+                  pid 1 and reaps orphans, and its hostname is the title's (lowercase, a-z 0-9
+                  -); its clocks go on by the time its state was saved for (default: linux)
   --cpus N        guest CPUs, 1 to 8 (default: 1). More than one runs each CPU in its own Web
                   Worker; the page then makes itself cross-origin isolated with a service worker
   --build-cpus N  CPUs to boot and warm up on before the snapshot (default: the larger of --cpus

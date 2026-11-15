@@ -231,7 +231,7 @@ fn serve_user(
     let started = std::time::Instant::now();
     let spec = &machine::Spec { cpus: crate::user::cpus_for(args, site, spec)?, ..spec.clone() };
     let image = if saved.is_none() { image::open(site, spec.memory_mb << 20) } else { None };
-    let (vm, process) = crate::user::restore(site, spec, image, saved, false)?;
+    let (vm, process, _) = crate::user::restore(site, spec, image, saved, false)?;
     let board = vm.board.clone();
     let mut restored = Some((vm, process));
     let _ = std::fs::remove_file(socket);
@@ -363,7 +363,7 @@ fn user_child(
     if let Some(state) = spawn.and_then(|s| s.state.as_ref()) {
         // A machine saved before, over this copy of the template's
         let saved = crate::user::Saved::read(state).map_err(|e| refuse(&mut conn, e))?;
-        let (v, p) = crate::user::restore(site, spec, None, Some(saved), false).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
+        let (v, p, _) = crate::user::restore(site, spec, None, Some(saved), false).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
         (vm, process) = (v, p);
     }
     let board = if spawn.and_then(|s| s.state.as_ref()).is_some() { vm.board.clone() } else { board.clone() };

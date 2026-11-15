@@ -9,19 +9,25 @@
 //! The program's terminal is the run's console: a terminal `snowglobe run` or an `attach` types
 //! into it and sees it. A job (`snowglobe sh`, exec) types its command and a newline, and is done
 //! when the program has printed and waits for input again: a REPL's answer, up to its next prompt.
-//! `snapshot --user PROGRAM --user ARG ... [--user-env NAME=VALUE ...] [--user-cwd DIR]` builds
-//! one; a site with system/user.bin runs this way.
+//! `snapshot --user PROGRAM --user ARG ... [--user-env NAME=VALUE ...] [--user-cwd DIR]
+//! [--user-hostname NAME]` builds one; a site with system/user.bin runs this way.
+//!
+//! As a container's: the program is pid 1 and reaps the orphans of its processes (a job's children
+//! it left behind, what a killed job started), so none is left a zombie; its hostname is the site's
+//! (`hostname`: set at the build, saved in the process). A restore's clocks go on by the time the
+//! state was saved for (`asleep`), as a machine's do after a suspend: the site's own state since
+//! the build (run.json's saved_at_ms), a machine saved since (`snapshot save`) since its save.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use armless::platform::NativePlatform;
 use armless::vm::Vm;
-use armless_user::{ExecError, Process, Smp, Status};
+use armless_user::{ExecError, ExecOptions, Process, Smp, Status, StdStreams};
 use serde_json::json;
 
 use crate::machine::{self, Activity, Spec};
@@ -34,6 +40,8 @@ const DEFAULT_ENV: [&str; 3] = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/
 /// A job is done when the program has printed and then waited for input this long
 const QUIET: Duration = Duration::from_millis(150);
 const DETACH_KEY: u8 = 0x1d; // ctrl-]
+/// The hostname of a site whose name has nothing a hostname can keep
+const DEFAULT_HOSTNAME: &str = "snowglobe";
 
 /// Whether a site runs in user mode.
 pub fn is_user(site: &Site) -> bool {
@@ -60,16 +68,21 @@ pub fn snapshot(args: &Args, system: &Path, spec: &Spec, ready: Option<&str>, ar
         env.push("TERM=xterm-256color".into());
     }
     let cwd = args.get("user-cwd").filter(|c| !c.is_empty()).unwrap_or("/").to_string();
+    // On a terminal (a visitor types into it), named after the site; saved in the process, so
+    // every restore of it has both
+    let opts = ExecOptions { std: StdStreams::Terminal, hostname: Some(hostname(args.get("user-hostname").unwrap_or(""))) };
     eprintln!("Starting {} in user mode (no kernel) on {} CPU(s) ...", argv.join(" "), spec.cpus);
     let started = Instant::now();
     // Its executable and loader may wait on blobs, which the host fetches meanwhile
     let mut p = loop {
-        match Process::exec(&mut vm.cpus[0], vm.board.clone(), argv, &env, &cwd) {
+        match Process::exec_with(&mut vm.cpus[0], vm.board.clone(), argv, &env, &cwd, &opts) {
             Ok(p) => break p,
             Err(ExecError::Need(_)) if started.elapsed() < BUILD_TIMEOUT => std::thread::sleep(Duration::from_millis(5)),
             Err(e) => return Err(format!("{}: {e}", argv[0])),
         }
     };
+    // pid 1 of a container: its orphans go as they end (saved in the process, for the page too)
+    p.reap_orphans = true;
     let (cols, rows) = (args.get("cols").and_then(|c| c.parse().ok()).unwrap_or(80), args.get("rows").and_then(|r| r.parse().ok()).unwrap_or(24));
     p.resize(cols, rows);
     let mut console = Vec::new();
@@ -281,6 +294,9 @@ pub fn cpus_for(args: &Args, site: &Site, spec: &Spec) -> Result<usize, String> 
 pub struct Saved {
     machine: Vec<u8>,
     process: Vec<u8>,
+    /// When it was saved: its process's file's time (`save_machine` writes it whole at the save;
+    /// the daemon moves and links it, which keep the time)
+    saved_at: Option<SystemTime>,
 }
 
 impl Saved {
@@ -289,16 +305,59 @@ impl Saved {
         Ok(Saved {
             machine: std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?,
             process: std::fs::read(&user).map_err(|e| format!("{}: {e}", user.display()))?,
+            saved_at: std::fs::metadata(&user).and_then(|m| m.modified()).ok(),
         })
     }
 }
 
+/// The hostname a site's program has: its name (`name`), lowercased, each run of what a hostname
+/// can't have (anything but a-z, 0-9 and -) a `-`, no `-` at either end, at most 63 bytes (a
+/// label's most; armless takes 64). "snowglobe" when nothing is left.
+pub fn hostname(name: &str) -> String {
+    let mut h = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            h.push(c);
+        } else if !h.is_empty() && !h.ends_with('-') {
+            h.push('-');
+        }
+    }
+    h.truncate(63);
+    let h = h.trim_matches('-');
+    if h.is_empty() { DEFAULT_HOSTNAME.to_string() } else { h.to_string() }
+}
+
+/// Milliseconds since the epoch (0 before it), as run.json's saved_at_ms says when a site's state
+/// was saved.
+pub fn epoch_ms(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// How long a state saved at `saved_at` has been saved for at `now`: what a restore's clocks go on
+/// by (armless's `Process::restore`). None when it isn't known (a site built before snowglobe
+/// recorded it), or a save in the future (another host's clock ahead of this one's): no time.
+pub fn asleep(saved_at: Option<SystemTime>, now: SystemTime) -> Duration {
+    saved_at.and_then(|t| now.duration_since(t).ok()).unwrap_or(Duration::ZERO)
+}
+
+/// When the site's own state was saved: run.json's saved_at_ms (a site built before it was
+/// recorded has none).
+fn site_saved_at(site: &Site) -> Option<SystemTime> {
+    let info: serde_json::Value = serde_json::from_slice(&site.file("run.json")?).ok()?;
+    info["saved_at_ms"].as_u64().map(|ms| UNIX_EPOCH + Duration::from_millis(ms))
+}
+
 /// A site with no kernel restored: its machine on `spec.cpus` CPUs (from the site's snapshot, on
-/// its RAM image when there is one, or from a machine `saved`) and its program's process. `jit`:
+/// its RAM image when there is one, or from a machine `saved`) and its program's process, its
+/// clocks gone on by the time the state was saved for (also returned), reaping its orphans. `jit`:
 /// compile hot code now (not in a process that forks: its children turn it on).
-pub fn restore(site: &Site, spec: &Spec, image: Option<image::Image>, saved: Option<Saved>, jit: bool) -> Result<(Vm<NativePlatform>, Process), String> {
+pub fn restore(site: &Site, spec: &Spec, image: Option<image::Image>, saved: Option<Saved>, jit: bool) -> Result<(Vm<NativePlatform>, Process, Duration), String> {
     let (ram, without_pages) = image.filter(|_| saved.is_none()).map(|i| (i.ram, i.state)).unzip();
     let (mut vm, _clock) = machine::new_vm_on(spec, site, jit, ram)?;
+    let saved_at = match &saved {
+        Some(s) => s.saved_at,
+        None => site_saved_at(site),
+    };
     let process = match saved {
         Some(saved) => {
             vm.load_state(&zstd::stream::decode_all(&saved.machine[..]).map_err(|e| e.to_string())?)?;
@@ -315,8 +374,11 @@ pub fn restore(site: &Site, spec: &Spec, image: Option<image::Image>, saved: Opt
             site.need("system/user.bin")?.to_vec()
         },
     };
-    let p = Process::restore(&mut vm.cpus[0], Some(vm.board.clone()), &process)?;
-    Ok((vm, p))
+    let asleep = asleep(saved_at, SystemTime::now());
+    let mut p = Process::restore(&mut vm.cpus[0], Some(vm.board.clone()), &process, asleep)?;
+    // A site built before its program reaped them (its state says no) reaps them too
+    p.reap_orphans = true;
+    Ok((vm, p, asleep))
 }
 
 /// Where a saved machine's process goes, beside the machine's state
@@ -358,7 +420,7 @@ fn save_machine(vm: &mut Vm<NativePlatform>, p: &mut Process, path: &Path) -> Re
 #[allow(clippy::too_many_arguments)]
 pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<image::Image>, socket: &str, started: Instant, env_file: Vec<(String, String)>) -> Result<u8, String> {
     let spec = &Spec { cpus: cpus_for(args, site, spec)?, ..spec.clone() };
-    let (mut vm, mut p) = restore(site, spec, image, None, true)?;
+    let (mut vm, mut p, asleep) = restore(site, spec, image, None, true)?;
     let activity = Activity::new(false);
     let info = crate::run::site_spec(site)?.0;
     let host = Arc::new(machine::host(&vm.board, site, &spec.network, machine::Net::from_args(args, Some(&info["tunnels"]))?, &activity));
@@ -374,7 +436,7 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
             }
         });
     }
-    crate::log::event("restored", json!({ "ms": started.elapsed().as_millis() as u64, "user_mode": true }));
+    crate::log::event("restored", json!({ "ms": started.elapsed().as_millis() as u64, "user_mode": true, "asleep_ms": asleep.as_millis() as u64 }));
     // SNOWGLOBE_USER_TRACE=1: every syscall of the program, on stderr (a run that isn't detached)
     p.trace = std::env::var_os("SNOWGLOBE_USER_TRACE").is_some();
     if std::env::var_os("SNOWGLOBE_TIMING").is_some() {
@@ -953,4 +1015,156 @@ fn serve(shared: &Arc<Shared>, host: &Arc<armless::native::NativeHost>, stream: 
 /// redraws the line it reads at every key), no colours or terminal queries.
 fn shown(b: &[u8]) -> String {
     String::from_utf8_lossy(&crate::text::plain(&crate::text::rendered(&crate::text::without_queries(b)))).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{self, EMPTY_FS};
+
+    #[test]
+    fn a_sites_name_makes_its_hostname() {
+        for (name, want) in [
+            ("python", "python"),
+            ("Python + Rich in the browser", "python-rich-in-the-browser"),
+            ("python:3.12-alpine", "python-3-12-alpine"),
+            ("ghcr.io/acme/app@sha256:ab", "ghcr-io-acme-app-sha256-ab"),
+            ("  --Mixed__CASE--  ", "mixed-case"),
+            ("Ünïcödé café", "n-c-d-caf"),
+            ("", "snowglobe"),
+            ("+++ ---", "snowglobe"),
+            ("日本語", "snowglobe"),
+        ] {
+            assert_eq!(hostname(name), want, "{name:?}");
+        }
+        // At most a label's 63 bytes, and no dash left at the end by the cut
+        let long = hostname(&format!("{}-{}", "a".repeat(62), "b".repeat(10)));
+        assert_eq!(long, "a".repeat(62));
+        assert_eq!(hostname(&"x".repeat(100)).len(), 63);
+    }
+
+    #[test]
+    fn a_state_has_been_asleep_since_it_was_saved_and_never_for_less_than_nothing() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert_eq!(asleep(Some(now - Duration::from_secs(3 * 86_400)), now), Duration::from_secs(3 * 86_400));
+        assert_eq!(asleep(Some(now), now), Duration::ZERO);
+        // Saved "in the future" (another host's clock ahead of this one's): no time
+        assert_eq!(asleep(Some(now + Duration::from_secs(60)), now), Duration::ZERO);
+        // Not known (a site built before it was recorded): no time
+        assert_eq!(asleep(None, now), Duration::ZERO);
+        assert_eq!(epoch_ms(UNIX_EPOCH + Duration::from_millis(1_789_000_000_123)), 1_789_000_000_123);
+        assert_eq!(epoch_ms(UNIX_EPOCH - Duration::from_secs(1)), 0);
+    }
+
+    #[test]
+    fn a_sites_state_was_saved_when_its_run_json_says() {
+        let (_, site) = testing::site("user-saved-at", &[("run.json", br#"{"title":"t","saved_at_ms":1789000000123}"#)]);
+        assert_eq!(site_saved_at(&site), Some(UNIX_EPOCH + Duration::from_millis(1_789_000_000_123)));
+        // Built before it was recorded
+        let (_, old) = testing::site("user-saved-at-old", &[("run.json", br#"{"title":"t"}"#)]);
+        assert_eq!(site_saved_at(&old), None);
+    }
+
+    /// A static aarch64 Linux program: it writes its hostname (uname's nodename, 65 bytes), sleeps
+    /// 1000 s (nanosleep) and exits 0.
+    fn sleeper() -> Vec<u8> {
+        let code: [u32; 19] = [
+            0xD10803FF, // sub sp, sp, #0x200
+            0x910003E0, // mov x0, sp
+            0xD2801408, // mov x8, #160 (uname)
+            0xD4000001, // svc #0
+            0xD2800020, // mov x0, #1
+            0x910107E1, // add x1, sp, #65 (nodename)
+            0xD2800822, // mov x2, #65
+            0xD2800808, // mov x8, #64 (write)
+            0xD4000001, // svc #0
+            0xD2807D03, // mov x3, #1000
+            0xF90083E3, // str x3, [sp, #0x100] (tv_sec)
+            0xF90087FF, // str xzr, [sp, #0x108] (tv_nsec)
+            0x910403E0, // add x0, sp, #0x100
+            0xD2800001, // mov x1, #0
+            0xD2800CA8, // mov x8, #101 (nanosleep)
+            0xD4000001, // svc #0
+            0xD2800000, // mov x0, #0
+            0xD2800BC8, // mov x8, #94 (exit_group)
+            0xD4000001, // svc #0
+        ];
+        let (base, headers) = (0x40_0000u64, 64 + 56);
+        let size = (headers + code.len() * 4) as u64;
+        let mut elf = Vec::new();
+        elf.extend_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        elf.extend_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        elf.extend_from_slice(&183u16.to_le_bytes()); // EM_AARCH64
+        elf.extend_from_slice(&1u32.to_le_bytes());
+        elf.extend_from_slice(&(base + headers as u64).to_le_bytes()); // entry
+        elf.extend_from_slice(&64u64.to_le_bytes()); // phoff
+        elf.extend_from_slice(&0u64.to_le_bytes()); // shoff
+        elf.extend_from_slice(&0u32.to_le_bytes()); // flags
+        for h in [64u16, 56, 1, 64, 0, 0] {
+            elf.extend_from_slice(&h.to_le_bytes()); // ehsize, phentsize, phnum, shentsize, shnum, shstrndx
+        }
+        elf.extend_from_slice(&1u32.to_le_bytes()); // PT_LOAD
+        elf.extend_from_slice(&5u32.to_le_bytes()); // R X
+        for v in [0, base, base, size, size, 0x1000] {
+            elf.extend_from_slice(&v.to_le_bytes()); // offset, vaddr, paddr, filesz, memsz, align
+        }
+        for i in code {
+            elf.extend_from_slice(&i.to_le_bytes());
+        }
+        elf
+    }
+
+    /// The program on CPU 0 until it ends or for `most`: how it is then, and what it printed.
+    fn run_for(vm: &mut Vm<NativePlatform>, p: &mut Process, most: Duration) -> (Status, Vec<u8>) {
+        let smp = Smp::new(p);
+        let begun = Instant::now();
+        let mut out = Vec::new();
+        loop {
+            let status = smp.run(0, &mut vm.cpus[0], Duration::from_millis(20));
+            out.extend(smp.lock().take_output());
+            if matches!(status, Status::Exited(_) | Status::Fault(_)) || begun.elapsed() >= most {
+                return (status, out);
+            }
+            if let Status::Idle(_) = status {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    /// The program as a site's is started (its hostname the site's) and saved as `snapshot save`
+    /// saves it; restored from that save, it reaps orphans, and its clocks go on by the time it was
+    /// saved for: its sleep, 1000 s off at the save, is over once it was saved an hour before.
+    #[test]
+    fn a_saved_program_is_restored_with_its_hostname_reaping_and_the_time_it_was_saved_for() {
+        let (root, site) = testing::site("user-restore", &[("system/filesystem.json", EMPTY_FS)]);
+        let spec = Spec { memory_mb: 32, cpus: 1, network: "none".into() };
+        let (mut vm, _clock) = machine::new_vm_jit(&spec, &site, false).unwrap();
+        vm.board.fs_write_file("/sleeper", &sleeper(), 0o755).unwrap();
+        let opts = ExecOptions { std: StdStreams::Terminal, hostname: Some(hostname("My Site!")) };
+        let mut p = Process::exec_with(&mut vm.cpus[0], vm.board.clone(), &["/sleeper".to_string()], &[], "/", &opts).unwrap();
+        let (status, out) = run_for(&mut vm, &mut p, Duration::from_millis(500));
+        assert!(matches!(status, Status::Idle(_)), "asleep: {status:?}");
+        assert_eq!(String::from_utf8_lossy(&out).trim_end_matches('\0'), "my-site");
+
+        let path = root.join("saved");
+        save_machine(&mut vm, &mut p, &path).unwrap();
+        let restore_at = |ago: Duration| {
+            let user = std::fs::File::options().write(true).open(user_path(&path)).unwrap();
+            user.set_modified(SystemTime::now() - ago).unwrap();
+            restore(&site, &spec, None, Some(Saved::read(&path).unwrap()), false).unwrap()
+        };
+
+        // Saved a moment ago: still asleep
+        let (mut vm, mut p, asleep) = restore_at(Duration::ZERO);
+        assert!(asleep < Duration::from_secs(5), "{asleep:?}");
+        assert!(p.reap_orphans, "a restored program reaps orphans, as pid 1 of a container does");
+        let (status, _) = run_for(&mut vm, &mut p, Duration::from_millis(500));
+        assert!(matches!(status, Status::Idle(Some(_))), "still asleep: {status:?}");
+
+        // Saved an hour ago: its sleep is over at once
+        let (mut vm, mut p, asleep) = restore_at(Duration::from_secs(3600));
+        assert!(asleep >= Duration::from_secs(3600) && asleep < Duration::from_secs(3660), "{asleep:?}");
+        let (status, _) = run_for(&mut vm, &mut p, Duration::from_secs(10));
+        assert!(matches!(status, Status::Exited(0)), "woke and ended: {status:?}");
+    }
 }

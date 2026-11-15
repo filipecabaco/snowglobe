@@ -352,10 +352,14 @@ func Run(o Options, version string) error {
 		if err := os.WriteFile(filepath.Join(out, "warm-report.json"), data, 0o644); err != nil {
 			return err
 		}
-		if err := writeRunInfo(out, o, s, fs, files, bytes, version); err != nil {
+		info, err := writeRunInfo(out, o, s, fs, files, bytes, version)
+		if err != nil {
 			return err
 		}
-		return site.Render(out, Page(s, version))
+		page := Page(s, version)
+		// The page's clocks of a site with no kernel go on from when its state was saved
+		page.SavedAtMs = info.SavedAtMs
+		return site.Render(out, page)
 	})
 }
 
@@ -399,8 +403,11 @@ type RunInfo struct {
 	Files         int             `json:"files"`
 	BlobBytes     int64           `json:"blob_bytes"`
 	BuiltAt       time.Time       `json:"built_at"`
-	Snowglobe     string          `json:"snowglobe"`
-	HasTranscript bool            `json:"has_transcript"`
+	// SavedAtMs is when the snapshot was saved, in ms since the epoch: a site with no kernel's
+	// program is restored with its clocks gone on by the time since (0: not recorded)
+	SavedAtMs     int64  `json:"saved_at_ms,omitempty"`
+	Snowglobe     string `json:"snowglobe"`
+	HasTranscript bool   `json:"has_transcript"`
 	// Agent: the site is one of the agent page's machines (built with --agent)
 	Agent *AgentInfo `json:"agent,omitempty"`
 }
@@ -414,13 +421,14 @@ type AgentInfo struct {
 	ExposedTo []string `json:"exposed_to,omitempty"`
 }
 
-// writeRunInfo writes run.json and moves the exercise transcript next to it
-func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFiles int, packBytes int64, version string) error {
+// writeRunInfo writes run.json, moves the exercise transcript next to it, and returns what it wrote
+func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFiles int, packBytes int64, version string) (RunInfo, error) {
 	system := filepath.Join(out, "system")
 	var meta struct {
 		BootSeconds   float64 `json:"bootSeconds"`
 		StateBytes    int64   `json:"stateBytes"`
 		SnapshotBytes int64   `json:"snapshotBytes"`
+		SavedAtMs     int64   `json:"savedAtMs"`
 	}
 	if data, err := os.ReadFile(filepath.Join(system, "run-meta.json")); err == nil {
 		json.Unmarshal(data, &meta)
@@ -434,7 +442,7 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 		Kernel:  map[bool]string{true: "none"}[s.Kernel == "none"],
 		Tunnels: s.Tunnels, TunnelToken: s.TunnelToken,
 		Arch: "arm64", CPUs: s.CPUs, BuildCPUs: s.BuildCPUs,
-		BootSeconds: meta.BootSeconds, SnapshotBytes: meta.SnapshotBytes, StateBytes: meta.StateBytes,
+		BootSeconds: meta.BootSeconds, SnapshotBytes: meta.SnapshotBytes, StateBytes: meta.StateBytes, SavedAtMs: meta.SavedAtMs,
 		WarmPackFiles: packFiles, WarmPackBytes: packBytes, Files: len(fs.Files),
 		BuiltAt: time.Now().UTC().Truncate(time.Second), Snowglobe: version,
 	}
@@ -452,9 +460,9 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 
 	data, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
-		return err
+		return info, err
 	}
-	return os.WriteFile(filepath.Join(out, "run.json"), data, 0o644)
+	return info, os.WriteFile(filepath.Join(out, "run.json"), data, 0o644)
 }
 
 func blobSize(fs *rootfs.Result) func(string) int64 {
@@ -818,10 +826,11 @@ func onOff(b bool) string {
 }
 
 // userProgram is what a build with no kernel runs (snowglobe-vm snapshot --user): the image's program,
-// environment and working directory. Nil for a site with a kernel.
+// environment and working directory, and the site's title, its hostname's name. Nil for a site with
+// a kernel.
 func userProgram(s *Settings) *tools.UserProgram {
 	if s.Kernel != "none" {
 		return nil
 	}
-	return &tools.UserProgram{Argv: s.Argv, Env: s.Console.Env, Cwd: s.Console.Workdir}
+	return &tools.UserProgram{Argv: s.Argv, Env: s.Console.Env, Cwd: s.Console.Workdir, Hostname: s.Title}
 }

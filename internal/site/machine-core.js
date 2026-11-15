@@ -16,6 +16,11 @@
 
   const errorOf = (e) => ({ name: e?.name ?? "Error", message: String(e?.message ?? e) });
 
+  /** How long a state saved at `savedAt` (ms since the epoch) has been saved for at `now`: what a
+   *  restored process's clocks go on by. 0 when it isn't known, or is in the future (the clock of
+   *  the machine that saved it ahead of this one's). */
+  const asleepMs = (savedAt, now) => Number.isFinite(savedAt) && savedAt > 0 ? Math.max(0, now - savedAt) : 0;
+
   /** The machine's files as absolute URLs against `base` (the site's directory): armless loads
    *  some of them away from this script (the blobs, in a worker), where a relative URL would
    *  resolve against the wrong place. */
@@ -636,15 +641,18 @@
     /** A new machine from a state (a URL, or a Blob of a captured state packed with `encoding`,
      *  as capture() and saves have it), ready to run(). A site with no kernel (the config's
      *  user_state: armless's user mode) runs a process the machine's state doesn't hold: `process`
-     *  is the one saved with that state (a Blob or bytes, as capture() has it); the site's own
-     *  snapshot goes with the site's own process. */
-    async boot(initialState, encoding = "raw", process = null) {
+     *  is the one saved with that state (a Blob or bytes, as capture() has it), `savedAt` when it
+     *  was saved (ms since the epoch); the site's own snapshot goes with the site's own process,
+     *  saved when the build saved it (the config's user_saved_at). The process's clocks go on by
+     *  the time since (armless's user_asleep_ms), as a machine's do through a suspend. */
+    async boot(initialState, encoding = "raw", process = null, savedAt = null) {
       if (this.vm) throw new Error("the machine is already booted");
       let url = initialState;
       let made = null;
       // A saved state: a Blob, or an object URL of one (the terminal page's restored workspace)
       const saved = (typeof Blob !== "undefined" && initialState instanceof Blob) || (typeof initialState === "string" && initialState.startsWith("blob:"));
       let userState = process ?? (saved ? null : this.config.user_state);
+      const userAsleepMs = asleepMs(process ? savedAt : saved ? null : this.config.user_saved_at, Date.now());
       if (this.config.user_state && !userState) throw new Error("this saved workspace has no process to run (it was saved without one)");
       if (typeof Blob !== "undefined" && userState instanceof Blob) userState = new Uint8Array(await userState.arrayBuffer());
       if (saved && typeof initialState !== "string") {
@@ -671,7 +679,7 @@
           if (allowed.size || names) network.WebSocket = linkSockets(this, allowed, this.WebSocket ?? root.WebSocket, root, names);
         }
         vm = new this.Armless({ fs_cache_mb: FS_CACHE_MB, predecode_mb: PREDECODE_MB, ...this.config, filesystem, network, warm: undefined, initial_state: url,
-          user_state: userState ?? undefined, autostart: false });
+          user_state: userState ?? undefined, ...(userState ? { user_asleep_ms: userAsleepMs } : {}), autostart: false });
         this.vm = vm;
         vm.on("progress", (e) => this.emit("progress", { file: e.file, loaded: e.loaded, total: e.total }));
         vm.on("console", (bytes) => { if (vm === this.vm) this.emit("console", bytes); });
@@ -1225,7 +1233,7 @@
     }
   }
 
-  const SnowglobeMachineCore = { Core, WarmPack, located, errorOf, guestFetch, linked, linkUrl, parseLinkUrl, linkSockets, linkPipe, wsLinked, LINK_URL, LINK_LINGER_MS };
+  const SnowglobeMachineCore = { Core, WarmPack, located, errorOf, asleepMs, guestFetch, linked, linkUrl, parseLinkUrl, linkSockets, linkPipe, wsLinked, LINK_URL, LINK_LINGER_MS };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeMachineCore;
   else root.SnowglobeMachineCore = SnowglobeMachineCore;
 })(typeof window !== "undefined" ? window : globalThis);
