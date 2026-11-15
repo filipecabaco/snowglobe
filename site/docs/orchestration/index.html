@@ -371,6 +371,51 @@ snowglobe up py --ttl 1h</pre>
           <pre>snowglobe top
 snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
 
+          <h2 class="h3" id="provider">A template provider: snowglobe provide</h2>
+          <p><code>snowglobe daemon --mode provider</code> only builds. Push an image to a registry (or keep a
+            Dockerfile directory), ask the daemon for its site, and get one file back: the site packed, to unpack on
+            your own static host or CDN. Nothing it builds runs on it but the build.</p>
+          <pre>snowglobe daemon --mode provider --listen :7443 --token-file token --tls-cert cert.pem --tls-key key.pem
+SNOWGLOBE_DAEMON=https://builds.example:7443 SNOWGLOBE_DAEMON_TOKEN=... \
+  snowglobe provide ghcr.io/you/app:1.2 -o app.tar.zst
+mkdir -p public/app &amp;&amp; tar --zstd -xf app.tar.zst -C public/app    <span class="dim"># then upload public/</span></pre>
+          <ul>
+            <li><strong>What it takes:</strong> an image reference, a Dockerfile, or a directory with a Dockerfile,
+              which <code>provide</code> sends as the build's context (files with their modes, directories and links
+              inside it; a link or path that leaves it is refused).</li>
+            <li><strong>What it builds:</strong> a site for the page, with no guest kernel unless
+              <code>--kernel linux</code>: smaller, and quicker to start.</li>
+            <li><strong>Built once:</strong> what was built of the same input (an image's digest, so a tag pushed again
+              builds again; a Dockerfile's or a context's content) with the same options and the same snowglobe comes
+              back at once. A request for one being built waits for it. Failed builds aren't kept. Artifacts are kept
+              up to <code>--cache-size</code> (20G), those asked for longest ago let go of first.</li>
+            <li><strong>Off:</strong> templates, machines, jobs, snapshots, services, links, ports, fleets, events and
+              MCP, on the socket and on <code>--listen</code> alike. Their routes answer 404 saying the daemon runs in
+              provider mode; <code>top</code>, <code>ps</code> and <code>ui</code> show its builds.</li>
+            <li><strong>Limits:</strong> a build runs at most <code>--build-timeout</code> (30m for a provider), is sent
+              at most <code>--max-context</code> (1G) and packs at most <code>--max-artifact</code> (8G); builds take
+              turns as they always do, and a full queue refuses more. A download must keep reading.</li>
+            <li><strong>From another host:</strong> the remote policy holds: no path of the daemon's host, and images
+              from registries on public addresses only, unless <code>--remote-allow-private</code>.</li>
+            <li><strong>A full daemon</strong> does the same for <code>snowglobe provide</code>: its builds are packed and
+              cached, and make no template.</li>
+          </ul>
+          <p>The artifact is a static site with relative paths: unpack it at any path. What the host must do:</p>
+          <ul>
+            <li>Serve the files as they are, with <code>.wasm</code> as <code>application/wasm</code> (it compiles as it
+              downloads; another type still works, more slowly), <code>.js</code> as <code>text/javascript</code>,
+              <code>.json</code> as <code>application/json</code>, <code>.html</code> as <code>text/html</code>, the
+              rest (<code>system/</code>) as anything; query strings (<code>?v=</code>) may be ignored.</li>
+            <li>Serve it over HTTPS (or on localhost): browsers give service workers to secure pages only.</li>
+            <li>For a site on several CPUs, nothing more: its service worker (<code>sw.js</code>, served from the
+              site's directory) makes the page cross-origin isolated. Sending
+              <code>Cross-Origin-Opener-Policy: same-origin</code> and
+              <code>Cross-Origin-Embedder-Policy: require-corp</code> yourself does the same, but a header that
+              forbids service workers or Web Workers breaks it.</li>
+            <li>A guest with <code>--network fetch</code> makes its requests from the page: the servers it reaches must
+              allow CORS, whatever host serves the site.</li>
+          </ul>
+
           <h2 class="h3" id="api">The daemon's API</h2>
           <p>The API is HTTP/JSON on a Unix socket in the user cache (<code>curl --unix-socket</code> works). The CLI,
             the UI and the MCP server all use it.</p>
@@ -381,7 +426,10 @@ snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
             <li><strong>Builds:</strong> <code>POST /v1/builds</code> takes a directory with a Dockerfile (by its full
               path), an image reference, or a Dockerfile's text. It runs <code>snowglobe build</code> (Docker when
               it's there; an image builds natively without it) and makes the result a template.
-              <code>/v1/builds/{id}/log</code> streams its output (<code>?follow=1</code>).</li>
+              <code>/v1/builds/{id}/log</code> streams its output (<code>?follow=1</code>). With
+              <code>"artifact": true</code> it packs the site instead, cached, for
+              <code>/v1/builds/{id}/artifact</code> (<code>?format=gz</code> for a .tar.gz); a context is uploaded with
+              <code>POST /v1/contexts</code>.</li>
             <li><strong>Terminals:</strong> a machine's terminal is a WebSocket at
               <code>/v1/machines/{name}/attach?rows=R&amp;cols=C</code>.</li>
             <li><strong>Metrics:</strong> <code>/v1/metrics</code> keeps a sample every 5 s for the last hour (memory,
@@ -401,6 +449,8 @@ snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
                 <tr><td><code>/v1/fleets</code></td><td>fleets and their instances</td></tr>
                 <tr><td><code>/v1/ports</code>, <code>/v1/ports/check?port=N&amp;ip=IP</code></td><td>host ports</td></tr>
                 <tr><td><code>/v1/events</code></td><td>events, as server-sent events (<code>?after=SEQ</code> to resume)</td></tr>
+                <tr><td><code>/v1/builds</code>, <code>/v1/contexts</code>, <code>/v1/builds/{id}/artifact</code></td><td>builds, their contexts and their artifacts</td></tr>
+                <tr><td><code>/v1/version</code></td><td>the daemon's version, mode and what it has on</td></tr>
                 <tr><td><code>/v1/stats</code></td><td>counts of templates, machines, services and snapshots, and memory used against the budget</td></tr>
               </tbody>
             </table>

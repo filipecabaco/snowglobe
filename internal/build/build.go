@@ -79,9 +79,12 @@ type Options struct {
 	JIT string
 	// Kernel is "linux" (the default) or "none": the image's command is an aarch64 Linux program
 	// that runs with no guest kernel, its system calls answered by the machine (armless user mode),
-	// in the page as natively. Much smaller snapshots; no network, one CPU, no exercises, no agent
-	// page for now
+	// in the page as natively. Much smaller snapshots; one CPU in the page, no agent page for now
 	Kernel string
+	// SourceName is what the site calls its source (the page's default title, run.json's source):
+	// the source itself unless given, as a daemon names a context it was sent rather than where
+	// it keeps it
+	SourceName string
 }
 
 // Settings are the resolved values a build runs with.
@@ -90,8 +93,6 @@ type Settings struct {
 	// Kernel: "linux" or "none"; Argv is the command's words, which "none" runs
 	Kernel string
 	Argv   []string
-	// SkippedExercises: the image's exercises a build with no kernel leaves out
-	SkippedExercises int
 	// SkippedAgent: the image is one of the agent page's machines, which a build with no kernel isn't
 	SkippedAgent bool
 	// SkippedCPUs: the CPUs the image asks for (its label) that a build with no kernel runs on one
@@ -226,9 +227,6 @@ func Run(o Options, version string) error {
 		s.Command, describeReady(s.Ready), s.Memory, s.Network, s.CPUs, s.BuildCPUs, onOff(s.JIT))
 	if s.Kernel == "none" {
 		fmt.Println("    kernel:  none (the command runs on its own, with no kernel)")
-		if s.SkippedExercises > 0 {
-			fmt.Printf("    exercises: the image's %d left out (not with --kernel none yet)\n", s.SkippedExercises)
-		}
 		if s.SkippedAgent {
 			fmt.Println("    agent:   not on the agent page (its label; the agent page's jobs need a shell, so a kernel)")
 		}
@@ -254,7 +252,9 @@ func Run(o Options, version string) error {
 	}
 	if err := step("Add boot layer", func() error {
 		if s.Kernel == "none" {
-			fmt.Println("    none: the command runs with no kernel")
+			// No kernel and no init: the image's environment alone, for jobs
+			fmt.Println("    none: the command runs with no kernel (the image's environment for jobs)")
+			source.Layers = append(source.Layers, oci.FilesLayer(boot.EnvFiles(s.Console)))
 			return nil
 		}
 		// Written, not built: the kernel archive, then BusyBox's init configured for the app
@@ -304,7 +304,7 @@ func Run(o Options, version string) error {
 		snapshot := func() error {
 			// The snapshot opens its tunnels natively: one token for the whole boot, fetched
 			// for each, so a boot again after a stall doesn't start on a token minutes old
-			tunnels, err := tunnel.Fill(s.Tunnels, s.TunnelToken)
+			tunnels, err := tunnel.Fill(s.Tunnels, s.TunnelToken, false)
 			if err != nil {
 				return err
 			}
@@ -428,7 +428,7 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 	}
 
 	info := RunInfo{
-		Title: s.Title, Source: o.Source, Command: s.Command, Ready: s.Ready, Exercise: s.Exercise,
+		Title: s.Title, Source: first(o.SourceName, o.Source), Command: s.Command, Ready: s.Ready, Exercise: s.Exercise,
 		MemoryMB: s.Memory, Network: s.Network,
 		JIT:     s.JIT,
 		Kernel:  map[bool]string{true: "none"}[s.Kernel == "none"],
@@ -515,7 +515,7 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	label := func(name string) string { return labels[labelPrefix+name] }
 
 	s := &Settings{
-		Title:  first(o.Title, label("title"), o.Source),
+		Title:  first(o.Title, label("title"), o.SourceName, o.Source),
 		Ready:  first(o.Ready, label("ready")),
 		Memory: o.Memory,
 	}
@@ -674,8 +674,6 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		switch {
 		case o.CPUs > 1:
 			return nil, errors.New("kernel none: one CPU in the page (it builds on several: --build-cpus)")
-		case len(o.Exercise) > 0:
-			return nil, errors.New("kernel none: no exercises yet (the files they read aren't recorded for the warm pack)")
 		case o.Agent:
 			return nil, errors.New("kernel none: not on the agent page (its jobs need a shell, so a kernel)")
 		}
@@ -694,9 +692,8 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		if s.CPUs > 1 {
 			s.SkippedCPUs, s.CPUs = s.CPUs, 1
 		}
-		// The image's own exercises and agent page (its labels) are left out rather than refused
-		s.SkippedExercises = len(s.Exercise)
-		s.Exercise = nil
+		// The image's agent page (its label) is left out rather than refused. Its exercises run, as
+		// a kernel's: typed into the program after the snapshot, the files they read packed
 		s.SkippedAgent = s.Agent
 		s.Agent, s.AgentExposedTo = false, nil
 	default:

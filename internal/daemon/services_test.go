@@ -253,3 +253,88 @@ func TestDurationsAreReadableJSON(t *testing.T) {
 		t.Errorf("written: %s", b)
 	}
 }
+
+// A replica being stopped takes nothing more: a connection or job goes to another (started if
+// need be), and a job sent to it by name is refused
+func TestAReplicaBeingStoppedIsNotPicked(t *testing.T) {
+	d, _ := serviceDaemon(t)
+	c := d.c
+	if _, err := c.AddService(Service{Name: "web", Template: "t", Max: 2, Idle: Duration(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if out := output(t)(c.ServiceJob("web", control.JobRequest{Cmd: "x"})); out != "x: 1\n" {
+		t.Fatalf("first: %q", out)
+	}
+	first := running(t, c, "web")[0].Machine
+	// Busy: not to be stopped unless forced
+	if !d.s.claim(first) {
+		t.Fatal("not claimed")
+	}
+	if d.s.markStopping(first, 0, false, true) {
+		t.Error("marked stopping while busy")
+	}
+	d.s.touch(first, -1)
+	if !d.s.markStopping(first, 0, false, true) {
+		t.Fatal("idle, not marked")
+	}
+	if out := output(t)(c.ServiceJob("web", control.JobRequest{Cmd: "y"})); out != "y: 1\n" {
+		t.Errorf("went to the stopping replica: %q", out)
+	}
+	if rs := running(t, c, "web"); len(rs) != 2 {
+		t.Errorf("replicas: %+v", rs)
+	}
+	if _, err := c.Job(first, control.JobRequest{Cmd: "z"}); statusOf(err) != 409 {
+		t.Errorf("a job on a stopping replica: %v", err)
+	}
+}
+
+// A replica still starting as its service is removed is stopped with it, not left behind
+func TestARemovedServiceLeavesNoReplicaStarting(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_SPAWN_DELAY", "500ms")
+	d, _ := serviceDaemon(t)
+	c := d.c
+	if _, err := c.AddService(Service{Name: "web", Template: "t", Idle: Duration(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() {
+		_, err := c.ServiceJob("web", control.JobRequest{Cmd: "x"})
+		started <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if err := c.RemoveService("web"); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if ms, _ := c.Machines(nil); len(ms) != 0 {
+		t.Errorf("left behind: %+v", ms)
+	}
+	if _, err := c.ServiceJob("web", control.JobRequest{Cmd: "x"}); !NotFound(err) {
+		t.Errorf("a job on it once removed: %v", err)
+	}
+}
+
+// A template whose server died under a service is started again by the service's next replica
+func TestAServiceOutlivesItsTemplatesServer(t *testing.T) {
+	old := reapEvery
+	reapEvery = 50 * time.Millisecond
+	t.Cleanup(func() { reapEvery = old })
+	d, tpl := serviceDaemon(t)
+	c := d.c
+	if _, err := c.AddService(Service{Name: "web", Template: "t", Min: 1, Idle: Duration(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	before := running(t, c, "web")[0].Machine
+	syscall.Kill(tpl.Pid, syscall.SIGKILL)
+	waitFor(t, func() bool {
+		rs := running(t, c, "web")
+		return len(rs) == 1 && rs[0].Machine != before
+	})
+	ts, _ := c.Templates()
+	if len(ts) != 1 || ts[0].Asleep || ts[0].Pid == tpl.Pid || !alive(ts[0].Pid) {
+		t.Errorf("its template: %+v", ts)
+	}
+	if out := output(t)(c.ServiceJob("web", control.JobRequest{Cmd: "x"})); out != "x: 1\n" {
+		t.Errorf("a job: %q", out)
+	}
+}

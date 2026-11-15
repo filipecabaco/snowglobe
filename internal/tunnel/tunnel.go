@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/filipecabaco/snowglobe/internal/netguard"
 )
 
 // Tunnel is one destination: Host empty for any name on Port. The JSON is what armless.js
@@ -91,15 +93,19 @@ func NeedsToken(tunnels []Tunnel) bool {
 
 // Fill replaces the placeholder with one token from tokenURL (a GET answering with the token
 // as plain text), for hosts that open tunnels without a page: the build's snapshot and
-// `snowglobe run`.
-func Fill(tunnels []Tunnel, tokenURL string) ([]Tunnel, error) {
+// `snowglobe run`. public: the endpoint is the site's own (one downloaded, say), not one the user
+// gave, so it may only be on a public address.
+func Fill(tunnels []Tunnel, tokenURL string, public bool) ([]Tunnel, error) {
 	if !NeedsToken(tunnels) {
 		return tunnels, nil
 	}
 	if tokenURL == "" {
 		return nil, fmt.Errorf("a tunnel URL has %s but there's no token endpoint: pass --tunnel-token", Placeholder)
 	}
-	client := http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second}
+	if public {
+		client = netguard.Client(15 * time.Second)
+	}
 	resp, err := client.Get(tokenURL)
 	if err != nil {
 		return nil, fmt.Errorf("tunnel token: %w", err)

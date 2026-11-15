@@ -107,16 +107,17 @@ echo "viewer.mjs written"
 cd /root/app && (node viewer.mjs >/tmp/viewer.log 2>&1 &) && echo "node started"
   ''' },
 { timeout = "2m", cmd = '''
-# Until it answers on 8080, up to 110s, saying how long it is taking every 10s
-n=0
-until wget -q -O /dev/null http://127.0.0.1:8080/health 2>/dev/null; do
-  n=$((n + 1))
-  if [ "$n" -gt 110 ]; then
+# Until it answers on 8080, up to 110s by the clock (each try at most 2s, so a server that
+# accepts and never answers can't outlast the command's 2m), saying how long every 10s
+start=$(date +%s) n=0 said=0
+until wget -q -T 2 -O /dev/null http://127.0.0.1:8080/health 2>/dev/null; do
+  n=$(($(date +%s) - start))
+  if [ "$n" -ge 110 ]; then
     echo "the viewer did not listen in 110s; what Node printed:"
     tail -n 20 /tmp/viewer.log
     exit 1
   fi
-  [ $((n % 10)) -eq 0 ] && echo "still starting after ${n}s"
+  if [ $((n / 10)) -gt "$said" ]; then said=$((n / 10)); echo "still starting after ${n}s"; fi
   sleep 1
 done
 echo "listening after ${n}s"

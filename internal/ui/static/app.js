@@ -83,7 +83,27 @@ const state = {
   samples: [], totals: null, events: [], lives: new Map(), selected: null, graph: null, links: [], plan: null,
   fleets: [], fleet: null, fleetView: null, view: "overview",
   seen: new Set(), cursorAt: null, reachable: true,
+  // What the daemon's mode has on (GET /v1/version); a daemon from before modes has everything
+  mode: "full", features: null,
 };
+
+const on = (feature) => !state.features || state.features[feature];
+// What each view needs on
+const VIEWS = { overview: "machines", network: "links", fleets: "fleets", machines: "machines", run: "jobs", builds: "builds" };
+
+async function learnMode() {
+  try {
+    const v = await api("/v1/version");
+    state.mode = v.mode;
+    state.features = v.features;
+  } catch {}
+  for (const a of document.querySelectorAll("#views a")) a.hidden = !on(VIEWS[a.getAttribute("href").slice(1)]);
+  if (state.features?.artifacts_only) {
+    $("builds-intro").textContent = "Build a site for the page from an image, a Dockerfile written here, or a directory with " +
+      "a Dockerfile, packed into one file to download: a static site for any host or CDN. What was built already of " +
+      "the same image (its digest) with the same options comes back at once.";
+  }
+}
 
 function banner(msg) {
   const b = $("banner");
@@ -92,10 +112,13 @@ function banner(msg) {
 }
 
 async function refresh() {
+  // What the mode has off is not asked for: it is none
+  const ask = (path, feature, none = []) => (on(feature) ? api(path) : Promise.resolve(none));
   try {
     const [stats, templates, machines, services, snapshots, builds, ports, runs, graph, links] = await Promise.all([
-      api("/v1/stats"), api("/v1/templates"), api("/v1/machines"), api("/v1/services"), api("/v1/snapshots"), api("/v1/builds"), api("/v1/ports"), api("/v1/runs"),
-      api("/v1/graph"), api("/v1/links"),
+      api("/v1/stats"), ask("/v1/templates", "templates"), ask("/v1/machines", "machines"), ask("/v1/services", "services"),
+      ask("/v1/snapshots", "snapshots"), ask("/v1/builds", "builds"), ask("/v1/ports", "ports"), ask("/v1/runs", "machines"),
+      ask("/v1/graph", "links", null), ask("/v1/links", "links"),
     ]);
     Object.assign(state, { stats, templates, machines, services, snapshots, builds, ports, runs, graph, links, reachable: true });
     for (const m of machines) {
@@ -111,6 +134,7 @@ async function refresh() {
 }
 
 async function refreshMetrics() {
+  if (!on("metrics")) return;
   try {
     const last = state.samples.at(-1);
     const m = await api("/v1/metrics" + (last ? `?since=${new Date(last.time).getTime()}` : ""));
@@ -126,6 +150,7 @@ async function refreshMetrics() {
 
 // The daemon's events, kept and then live (server-sent events, read off a fetch)
 async function followEvents() {
+  if (!on("events")) return;
   for (;;) {
     try {
       const after = state.events.at(-1)?.seq || 0;
@@ -550,9 +575,11 @@ function renderBuilds() {
     return el("div", { class: "build " + b.status },
       el("span", { class: "dot " + (running ? "waiting" : b.status === "done" ? "" : "idle") }),
       el("span", { class: "what" }, b.name, el("small", {}, b.kind === "dockerfile" ? "a Dockerfile" : b.source)),
-      el("span", { class: "state" }, `${buildState[b.status] || b.status}${took ? ` · ${Math.floor(took / 60)}:${String(took % 60).padStart(2, "0")}` : ""}`),
+      el("span", { class: "state" }, `${buildState[b.status] || b.status}${took ? ` · ${Math.floor(took / 60)}:${String(took % 60).padStart(2, "0")}` : ""}${b.kernel === "none" ? " · no kernel" : ""}`),
       el("span", {},
         el("button", { class: "link", type: "button", onclick: () => showLog(b) }, "Log"),
+        b.artifact ? el("a", { class: "link", href: `/api/v1/builds/${encodeURIComponent(b.id)}/artifact`, download: `${b.name}.tar.zst`,
+          title: `sha256 ${b.artifact.sha256}` }, `Download (${size(b.artifact.bytes).join(" ")})`) : null,
         running ? el("button", { class: "link", type: "button", onclick: () => act(() => api(`/v1/builds/${b.id}`, { method: "DELETE" }), "Cancelled " + b.name) }, "Cancel") : null),
       b.status === "done" && state.templates.some((t) => t.name === b.template)
         ? el("p", { class: "made" }, `Now the template ${b.template}. `,
@@ -598,7 +625,7 @@ function wireBuilds() {
     e.preventDefault();
     const f = form.elements;
     const body = { name: f.name.value || undefined, network: f.network.checked ? "fetch" : undefined,
-      memory_mb: +f.memory.value || undefined, cpus: +f.cpus.value || undefined };
+      memory_mb: +f.memory.value || undefined, cpus: +f.cpus.value || undefined, kernel: f.kernel.value || undefined };
     if (kind() === "dir") body.source = f.dir.value.trim();
     if (kind() === "image") body.source = f.image.value.trim();
     if (kind() === "dockerfile") body.dockerfile = f.dockerfile.value;
@@ -699,9 +726,9 @@ function closeTerminal() {
 
 function render() {
   const st = state.stats;
-  $("daemon").textContent = state.reachable
-    ? `daemon up ${state.totals ? since(state.totals.started) : "…"} · ${st ? st.machines : 0} machines`
-    : "the daemon isn't answering";
+  $("daemon").textContent = !state.reachable ? "the daemon isn't answering"
+    : !on("machines") ? `${state.mode} mode · ${st ? st.builds_running : 0} building · ${st ? st.artifacts : 0} artifacts`
+    : `daemon up ${state.totals ? since(state.totals.started) : "…"} · ${st ? st.machines : 0} machines`;
   renderSeries();
   renderLanes();
   renderEvents();
@@ -755,8 +782,11 @@ async function refreshFleets() {
 // One view at a time, by the address: #overview, #network, #fleets, #machines, #run, #builds
 const OLD = { ports: "machines", fleet: "machines" };
 function route() {
-  const want = location.hash.slice(1) || "overview";
-  const view = OLD[want] || (document.querySelector(`[data-view="${want}"]`) ? want : "overview");
+  // The first view the mode has on, when the one asked for is off
+  const first = Object.keys(VIEWS).find((v) => on(VIEWS[v])) || "builds";
+  const want = location.hash.slice(1) || first;
+  let view = OLD[want] || (document.querySelector(`[data-view="${want}"]`) ? want : first);
+  if (!on(VIEWS[view])) view = first;
   state.view = view;
   for (const s of document.querySelectorAll("[data-view]")) s.hidden = s.dataset.view !== view;
   for (const a of document.querySelectorAll("#views a")) a.setAttribute("aria-current", a.getAttribute("href") === `#${view}` ? "page" : "false");
@@ -766,6 +796,7 @@ function route() {
   publish();
 }
 addEventListener("hashchange", route);
+await learnMode();
 mount(html`<${Graph} />`, $("graph"));
 mount(html`<${Inspector} where="graph" />`, $("inspect-graph"));
 mount(html`<${Inspector} where="timeline" />`, $("selection"));

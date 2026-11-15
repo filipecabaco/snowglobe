@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/subtle"
+	cryptotls "crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,9 +46,30 @@ type Options struct {
 	Snowglobe string
 	// Routes, when set, adds routes of its own to the API (the fleet's, which this package can't
 	// import)
-	Routes func(*http.ServeMux)
+	Routes func(Router)
 	// Whether Docker can build here (nil: ask it); for tests
 	dockerThere func() bool
+	// What requests from another host may do
+	Remote Policy
+	// TLSCert and TLSKey, when set, serve the TCP API over TLS
+	TLSCert, TLSKey string
+	// Insecure lets the TCP API be plain HTTP on an address other hosts reach: the token and
+	// everything else then cross the network in the clear
+	Insecure bool
+	// What it does (Mode's presets; zero: full), and the snowglobe it is, for GET /v1/version and
+	// the cache keys of artifacts
+	Features Features
+	Version  string
+	// The most the artifacts kept may take on disk together (bytes; 0: no bound): past it, those
+	// used longest ago go
+	CacheSize int64
+	// The longest a build may run (0: as long as it takes), the largest build context it is sent
+	// and the largest artifact it keeps (0: defaults)
+	BuildTimeout time.Duration
+	MaxContext   int64
+	MaxArtifact  int64
+	// An image reference's digest (nil: its registry's, or Docker's); for tests
+	resolveImage func(ref string, remote bool) (string, error)
 }
 
 // Server is a running daemon.
@@ -80,6 +102,8 @@ type Server struct {
 	// Each machine's link sockets, by link, and whether it was given links (guarded by mu)
 	linkSocks map[string]map[string]*linkSock
 	linked    map[string]bool
+	// Machine names being started: taken until they are up, or not (guarded by mu)
+	starting map[string]bool
 	// The process groups of the template servers it started and that still run (each with its
 	// machines and jobs), and whether it is stopping: then it starts nothing more (guarded by mu)
 	groups  map[int]bool
@@ -108,12 +132,21 @@ func New(o Options) (*Server, error) {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
 	}
+	if o.Features.Mode == "" {
+		o.Features = modes["full"]
+	}
+	if o.MaxContext <= 0 {
+		o.MaxContext = defaultMaxContext
+	}
+	if o.MaxArtifact <= 0 {
+		o.MaxArtifact = defaultMaxArtifact
+	}
 	if err := os.MkdirAll(o.Dir, 0o700); err != nil {
 		return nil, err
 	}
 	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery,
 		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery, runs: newRuns(),
-		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}, groups: map[int]bool{}, stopped: make(chan struct{})}
+		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}, starting: map[string]bool{}, groups: map[int]bool{}, stopped: make(chan struct{})}
 	if o.memOf != nil {
 		s.memOf = o.memOf
 	}
@@ -147,6 +180,10 @@ func New(o Options) (*Server, error) {
 		if t.SocketDir != "" {
 			os.RemoveAll(t.SocketDir)
 		}
+		// A daemon without templates (--mode provider) keeps them as they are, for one with
+		if !o.Features.Templates {
+			continue
+		}
 		if _, err := os.Stat(filepath.Join(t.Site, "run.json")); err != nil {
 			o.Logf("template %s: its site %s is gone", name, t.Site)
 			delete(s.st.Templates, name)
@@ -159,6 +196,9 @@ func New(o Options) (*Server, error) {
 	sort.Strings(s.revive)
 	// Services: their ports held again; their replicas start as they would
 	for name, svc := range s.st.Services {
+		if !o.Features.Services {
+			break
+		}
 		if _, ok := s.st.Templates[svc.Template]; !ok {
 			o.Logf("service %s: its template %s is gone", name, svc.Template)
 			delete(s.st.Services, name)
@@ -170,6 +210,9 @@ func New(o Options) (*Server, error) {
 	}
 	// Links: what they are from or to must still be there
 	for name, l := range s.st.Links {
+		if !o.Features.Links {
+			break
+		}
 		if !s.has(l.FromKind, l.From) || !s.has(l.ToKind, l.To) {
 			o.Logf("link %s: what it joined is gone", name)
 			delete(s.st.Links, name)
@@ -178,7 +221,9 @@ func New(o Options) (*Server, error) {
 	if err := saveState(s.statePath, s.st); err != nil {
 		return nil, err
 	}
-	s.relink()
+	if o.Features.Links {
+		s.relink()
+	}
 	return s, nil
 }
 
@@ -216,21 +261,47 @@ func (s *Server) Serve(ctx context.Context) error {
 		return fmt.Errorf("%s: %w", sock, err)
 	}
 	os.Chmod(sock, 0o600)
-	servers := []*http.Server{{Handler: s.Handler()}}
+	// No write timeout: events, attach and build logs stream for as long as they are watched
+	servers := []*http.Server{{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}}
 	listeners := []net.Listener{unix}
 	if s.o.Listen != "" {
 		if s.o.Token == "" {
 			unix.Close()
 			return errors.New("--listen needs a token (--token-file): the API runs commands on machines")
 		}
+		tls := s.o.TLSCert != "" || s.o.TLSKey != ""
+		if tls && (s.o.TLSCert == "" || s.o.TLSKey == "") {
+			unix.Close()
+			return errors.New("--tls-cert and --tls-key go together")
+		}
+		if !tls && !s.o.Insecure && !loopback(s.o.Listen) {
+			unix.Close()
+			return fmt.Errorf("--listen %s reaches other hosts: serve it over TLS (--tls-cert and --tls-key), or say --insecure-listen to send the token in the clear", s.o.Listen)
+		}
 		tcp, err := net.Listen("tcp", s.o.Listen)
 		if err != nil {
 			unix.Close()
 			return err
 		}
-		servers = append(servers, &http.Server{Handler: s.withToken(s.Handler())})
+		if tls {
+			cert, err := cryptotls.LoadX509KeyPair(s.o.TLSCert, s.o.TLSKey)
+			if err != nil {
+				unix.Close()
+				tcp.Close()
+				return fmt.Errorf("--tls-cert, --tls-key: %w", err)
+			}
+			tcp = cryptotls.NewListener(tcp, &cryptotls.Config{Certificates: []cryptotls.Certificate{cert}, MinVersion: cryptotls.VersionTLS12})
+		}
+		servers = append(servers, &http.Server{Handler: s.withToken(s.Handler()), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
+			// (A request's body: a job's files, an upload, read as it comes; a slow sender is cut
+			// off rather than held forever)
+			ReadTimeout: 30 * time.Minute})
 		listeners = append(listeners, tcp)
-		s.o.Logf("serving the API on %s (token required)", tcp.Addr())
+		scheme := "http"
+		if tls {
+			scheme = "https"
+		}
+		s.o.Logf("serving the API on %s://%s (token required; requests from it held to the remote policy)", scheme, tcp.Addr())
 	}
 	s.o.Logf("serving the API on %s", sock)
 	go s.reap(ctx)
@@ -286,9 +357,12 @@ func (s *Server) Serve(ctx context.Context) error {
 // reviveTemplates starts again the templates that were running when the last daemon stopped.
 func (s *Server) reviveTemplates() {
 	for _, name := range s.revive {
-		if _, err := s.awake(name); err != nil {
+		_, done, err := s.awake(name)
+		if err != nil {
 			s.note("template.error", "template "+name, "starting it again: %v", err)
+			continue
 		}
+		done()
 	}
 }
 
@@ -309,7 +383,7 @@ func (s *Server) stopAll() {
 	s.mu.Unlock()
 	for _, svc := range keep {
 		for _, m := range s.replicas(svc.Name) {
-			s.stopReplica(svc, m)
+			s.stopReplica(svc, m, true)
 		}
 	}
 
@@ -415,7 +489,7 @@ func (s *Server) ForceStop() {
 func stopGroups(groups, pids []int, ours func(pid int) bool) {
 	for _, g := range groups {
 		if ours(g) {
-			syscall.Kill(-g, syscall.SIGTERM)
+			killGroup(g, syscall.SIGTERM)
 		}
 	}
 	for _, p := range pids {
@@ -446,7 +520,7 @@ func stopGroups(groups, pids []int, ours func(pid int) bool) {
 func killNow(groups, pids []int, ours func(pid int) bool) {
 	for _, g := range groups {
 		if ours(g) {
-			syscall.Kill(-g, syscall.SIGKILL)
+			killGroup(g, syscall.SIGKILL)
 		}
 	}
 	for _, p := range pids {
@@ -496,6 +570,8 @@ type AddTemplate struct {
 	// (public addresses), "private" (also the host's loopback and private ones); empty: as the
 	// site was built (internet when it has a network), or private with AllowPrivate
 	Egress string `json:"egress,omitempty"`
+	// From another host (IsRemote): held to the daemon's Policy
+	remote bool
 }
 
 // AddTemplate restores a site once, in a fork server of its own, for machines to be forked from.
@@ -517,7 +593,23 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 			req.Name = snap.Name
 		}
 	}
-	site, err := resolveSite(req.Site)
+	if req.remote && !s.o.Remote.Private && (req.AllowPrivate || req.Egress == "private") {
+		return nil, errStatus(403, "a request from another host can't let machines reach this host's loopback and private addresses (the daemon allows it with --remote-allow-private)")
+	}
+	var site string
+	var err error
+	switch {
+	case snap != nil && req.Site == snap.Site:
+		// The snapshot's own site, the daemon's to name
+		site = snap.Site
+	case req.remote && !remote.IsURL(req.Site):
+		if err := s.o.Remote.Path(req.Site, s.uploads()); err != nil {
+			return nil, err
+		}
+		site, err = resolveSite(req.Site, false)
+	default:
+		site, err = resolveSite(req.Site, req.remote && !s.o.Remote.Private)
+	}
 	if err != nil {
 		return nil, errStatus(400, "%v", err)
 	}
@@ -573,7 +665,7 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, taken := s.st.Templates[name]; taken {
-		syscall.Kill(-t.Pid, syscall.SIGKILL)
+		killGroup(t.Pid, syscall.SIGKILL)
 		os.RemoveAll(t.SocketDir)
 		return nil, errStatus(409, "a template called %s exists", name)
 	}
@@ -667,7 +759,7 @@ func (s *Server) startServer(t *Template) error {
 		default:
 		}
 		if time.Now().After(deadline) {
-			syscall.Kill(-t.Pid, syscall.SIGKILL)
+			killGroup(t.Pid, syscall.SIGKILL)
 			os.RemoveAll(sockDir)
 			return fmt.Errorf("template %s did not restore within %s: %s", t.Name, restoreTimeout, lastLines(t.Log, 5))
 		}
@@ -700,16 +792,19 @@ func (s *Server) RemoveTemplate(name string) error {
 		s.RemoveMachine(m)
 	}
 	// The server's process group: the server and anything of it still running
-	if !t.Asleep {
-		syscall.Kill(-t.Pid, syscall.SIGTERM)
+	// (No pid: a server that never started, or is starting again. kill(-0) would be this
+	// daemon's own process group)
+	if !t.Asleep && t.Pid > 0 {
+		killGroup(t.Pid, syscall.SIGTERM)
 		if !gone(t.Pid, stopGrace) {
-			syscall.Kill(-t.Pid, syscall.SIGKILL)
+			killGroup(t.Pid, syscall.SIGKILL)
 		}
 	}
 	os.RemoveAll(t.SocketDir)
 	os.RemoveAll(filepath.Join(s.o.Dir, "templates", name))
 	s.mu.Lock()
 	delete(s.st.Templates, name)
+	s.sweepUploads()
 	s.save()
 	s.mu.Unlock()
 	s.note("template.removed", "template "+name, "removed")
@@ -729,21 +824,29 @@ func (s *Server) Templates() []Template {
 	return out
 }
 
-// TemplateJob runs one job on a fresh fork of a template, which ends with it.
-func (s *Server) TemplateJob(name string, req control.JobRequest) (*control.JobResult, error) {
-	t, err := s.awake(name)
+// TemplateJob runs one job on a fresh fork of a template, which ends with it. The fork is a
+// machine as far as the memory budget goes, and keeps its template awake while it runs.
+func (s *Server) TemplateJob(ctx context.Context, name string, req control.JobRequest) (*control.JobResult, error) {
+	t, done, err := s.awake(name)
 	if err != nil {
 		return nil, err
 	}
-	defer s.used(name)
-	return s.runJob(t.Server, name, req)
+	defer done()
+	admitted, err := s.admitJob(name)
+	if err != nil {
+		return nil, err
+	}
+	defer admitted()
+	return s.runJob(ctx, t.Server, name, req)
 }
 
-func resolveSite(site string) (string, error) {
+func resolveSite(site string, public bool) (string, error) {
 	var err error
 	switch {
 	case site == "":
 		return "", errors.New("site: a built site's directory, tarball or URL")
+	case remote.IsURL(site) && public:
+		site, err = remote.FetchPublic(site)
 	case remote.IsURL(site):
 		site, err = remote.Fetch(site)
 	case remote.IsTarball(site):
@@ -787,6 +890,9 @@ type Up struct {
 	Snapshot string `json:"snapshot,omitempty"`
 	// How long it lives, whatever it does (0: until it is removed)
 	TTL Duration `json:"ttl,omitempty"`
+	// Refused at once when it doesn't fit the memory budget, rather than waiting for room (the
+	// scaler's starts: it tries again on its next round)
+	noWait bool
 }
 
 // Up forks a machine from a template: it lasts until it is removed, with its ports forwarded.
@@ -799,12 +905,26 @@ func (s *Server) Up(req Up) (*Machine, error) {
 	return m, err
 }
 
-// runJob runs a job on the control socket sock, counted in the metrics.
-func (s *Server) runJob(sock, name string, req control.JobRequest) (*control.JobResult, error) {
+// maxJobOutput is how much of a job's output, and of its out/ files, the daemon keeps: the rest
+// is dropped as it is read, and the output says how much went
+var maxJobOutput int64 = 16 << 20
+
+// runJob runs a job on the control socket sock, counted in the metrics, until it ends or ctx is
+// done (its caller gone).
+func (s *Server) runJob(ctx context.Context, sock, name string, req control.JobRequest) (*control.JobResult, error) {
 	begun := time.Now()
-	r, err := control.Job(sock, name, req)
+	r, err := control.JobLimited(ctx, sock, name, req, maxJobOutput)
 	s.meter.job(time.Since(begun), err)
-	return r, err
+	if err != nil {
+		return nil, err
+	}
+	if r.OutputCut > 0 || r.OutCut > 0 {
+		s.note("job.cut", "machine "+name, "kept the first %s of its output and of out/: %d and %d bytes more were dropped", mb(maxJobOutput), r.OutputCut, r.OutCut)
+	}
+	if r.OutputCut > 0 {
+		r.Output = fmt.Appendf(r.Output, "\n[snowglobe: %d more bytes of output were cut; the daemon keeps the first %s]\n", r.OutputCut, mb(maxJobOutput))
+	}
+	return r, nil
 }
 
 func (s *Server) up(req Up) (*Machine, error) {
@@ -829,6 +949,11 @@ func (s *Server) up(req Up) (*Machine, error) {
 	s.mu.Lock()
 	_, ok := s.st.Templates[req.Template]
 	_, taken := s.st.Machines[name]
+	// Another up of the same name, still starting
+	taken = taken || s.starting[name]
+	if ok && !taken {
+		s.starting[name] = true
+	}
 	s.mu.Unlock()
 	if !ok {
 		return nil, errStatus(404, "no template called %s", req.Template)
@@ -836,12 +961,17 @@ func (s *Server) up(req Up) (*Machine, error) {
 	if taken {
 		return nil, errStatus(409, "a machine called %s exists", name)
 	}
+	defer func() {
+		s.mu.Lock()
+		delete(s.starting, name)
+		s.mu.Unlock()
+	}()
 	// Asleep: started again first
-	t, err := s.awake(req.Template)
+	t, done, err := s.awake(req.Template)
 	if err != nil {
 		return nil, err
 	}
-	defer s.used(t.Name)
+	defer done()
 	if len(ports) > 0 {
 		if err := needsNetwork(t); err != nil {
 			return nil, err
@@ -854,9 +984,14 @@ func (s *Server) up(req Up) (*Machine, error) {
 			return nil, err
 		}
 		defer os.Remove(state)
+		defer os.Remove(state + userState)
 	}
 	// Room in the memory budget, held until it is up
-	release, err := s.admit(t.Name)
+	wait := s.o.Wait
+	if req.noWait {
+		wait = 0
+	}
+	release, err := s.admit(t.Name, wait)
 	if err != nil {
 		return nil, err
 	}
@@ -960,17 +1095,19 @@ func (s *Server) Machine(name string) (*Machine, error) {
 }
 
 // Job runs a job on a machine's serial shell.
-func (s *Server) Job(name string, req control.JobRequest) (*control.JobResult, error) {
+func (s *Server) Job(ctx context.Context, name string, req control.JobRequest) (*control.JobResult, error) {
 	m, err := s.Machine(name)
 	if err != nil {
 		return nil, err
 	}
-	// A service's replica is busy while the job runs
+	// A service's replica is busy while the job runs; one being stopped takes none
 	if m.Labels[serviceLabel] != "" {
-		s.touch(name, 1)
+		if !s.claim(name) {
+			return nil, errStatus(409, "replica %s is stopping (send the job to its service)", name)
+		}
 		defer s.touch(name, -1)
 	}
-	return s.runJob(m.Socket, name, req)
+	return s.runJob(ctx, m.Socket, name, req)
 }
 
 // forward listens on a machine's host ports (filling in those the system picks) and connects each
@@ -1024,7 +1161,8 @@ func splice(c net.Conn, sock string, guest int) {
 	<-done
 }
 
-// reap forgets machines that stopped and templates whose server did (with their machines).
+// reap forgets machines that stopped and templates whose server did (with their machines). A
+// template a service runs on is kept, asleep: the service's next replica starts its server again.
 func (s *Server) reap(ctx context.Context) {
 	t := time.NewTicker(s.reapEvery)
 	defer t.Stop()
@@ -1079,10 +1217,24 @@ func (s *Server) reap(ctx context.Context) {
 					delete(s.forwards, mn)
 					delete(s.st.Machines, mn)
 					syscall.Kill(m.Pid, syscall.SIGKILL)
+					// Its link sockets and links go below, as a dead machine's do
+					deadMachines = append(deadMachines, mn)
 				}
 			}
-			syscall.Kill(-t.Pid, syscall.SIGKILL)
+			killGroup(t.Pid, syscall.SIGKILL)
 			os.RemoveAll(t.SocketDir)
+			var used []string
+			for _, svc := range s.st.Services {
+				if svc.Template == n {
+					used = append(used, svc.Name)
+				}
+			}
+			if len(used) > 0 {
+				sort.Strings(used)
+				t.Asleep, t.Pid, t.Server, t.SocketDir, t.Ready = true, 0, "", "", ""
+				s.note("template.stopped", "template "+n, "its server stopped, and its machines with it; started again on the next use of service %s", strings.Join(used, ", "))
+				continue
+			}
 			delete(s.st.Templates, n)
 			s.note("template.stopped", "template "+n, "its server stopped, and its machines with it")
 		}
@@ -1156,7 +1308,15 @@ func (s *Server) SnapshotWith(machine, name string, labels map[string]string) (*
 		Bytes: saved.Bytes, Ms: saved.Ms, Labels: labels, Created: time.Now()}
 	if err := os.Rename(written, snap.Path); err != nil {
 		os.Remove(written)
+		os.Remove(written + userState)
 		return nil, err
+	}
+	// A machine with no kernel: its program's process, saved beside it
+	if _, err := os.Stat(written + userState); err == nil {
+		if err := os.Rename(written+userState, snap.Path+userState); err != nil {
+			os.Remove(snap.Path)
+			return nil, err
+		}
 	}
 	s.mu.Lock()
 	s.st.Snapshots[name] = snap
@@ -1192,11 +1352,17 @@ func (s *Server) RemoveSnapshot(name string) error {
 		}
 	}
 	os.Remove(sn.Path)
+	os.Remove(sn.Path + userState)
 	delete(s.st.Snapshots, name)
+	s.sweepUploads()
 	s.save()
 	s.ev.publish(Event{Time: time.Now(), Kind: "snapshot.removed", Subject: "snapshot " + name, Message: "removed"})
 	return nil
 }
+
+// userState is the suffix of what a snapshot of a machine with no kernel keeps beside its machine:
+// its program's process (snowglobe-vm writes both)
+const userState = ".user"
 
 // restorable puts snapshot name where template t's machines may read it (its jobs root: their
 // sandbox reads nothing else of the daemon's), as a link, and returns that path for the spawn.
@@ -1218,18 +1384,70 @@ func (s *Server) restorable(name string, t *Template) (string, error) {
 	if err := os.Link(sn.Path, link); err != nil {
 		return "", err
 	}
+	if _, err := os.Stat(sn.Path + userState); err == nil {
+		if err := os.Link(sn.Path+userState, link+userState); err != nil {
+			os.Remove(link)
+			return "", err
+		}
+	}
 	return link, nil
 }
 
 // --- HTTP
 
-// Handler is the API.
+// Handler is the API. Each group of routes is on or off by the daemon's Features, here and only
+// here: one that is off keeps its routes, answered with a 404 that names the mode (replyOff).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	f := s.o.Features
+	if f.Mode == "" {
+		f = modes["full"]
+	}
+	groups := []struct {
+		on    bool
+		route func(Router)
+	}{
+		{true, s.coreRoutes},
+		{f.Events, func(r Router) { r.HandleFunc("GET /v1/events", s.serveEvents) }},
+		{f.Metrics, func(r Router) {
+			r.HandleFunc("GET /v1/metrics", s.serveMetrics)
+			r.HandleFunc("GET /metrics", s.servePrometheus)
+		}},
+		{f.Builds, s.buildRoutes},
+		{f.Builds, s.contextRoutes},
+		{f.Ports, s.portRoutes},
+		{f.Machines, s.runRoutes},
+		{f.Links, s.linkRoutes},
+		{f.Links, s.graphRoutes},
+		{f.Fleets, func(r Router) {
+			if s.o.Routes != nil {
+				s.o.Routes(r)
+			}
+		}},
+		{f.Templates, s.templateRoutes},
+		{f.Machines, s.machineRoutes},
+		{f.Jobs, s.jobRoutes},
+		{f.Snapshots, s.snapshotRoutes},
+		{f.Services, s.serviceRoutes},
+	}
+	for _, g := range groups {
+		if g.on {
+			g.route(mux)
+		} else {
+			g.route(off{mux, f})
+		}
+	}
+	return mux
+}
+
+// coreRoutes are in every mode: whether it answers, which it is, what it holds, and its stop.
+func (s *Server) coreRoutes(mux Router) {
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"ok": true}, nil)
 	})
-	mux.HandleFunc("GET /v1/events", s.serveEvents)
+	mux.HandleFunc("GET /v1/version", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, Version{Version: s.o.Version, Mode: s.o.Features.Mode, Features: s.o.Features}, nil)
+	})
 	// Stop the daemon, and everything it started; answered once that has stopped
 	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -1246,17 +1464,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/stats", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Stats(), nil)
 	})
-	mux.HandleFunc("GET /v1/metrics", s.serveMetrics)
-	mux.HandleFunc("GET /metrics", s.servePrometheus)
-	s.buildRoutes(mux)
-	s.portRoutes(mux)
-	s.runRoutes(mux)
-	s.linkRoutes(mux)
-	s.graphRoutes(mux)
-	if s.o.Routes != nil {
-		s.o.Routes(mux)
-	}
-	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
+}
+
+func (s *Server) templateRoutes(mux Router) {
+	mux.HandleFunc("POST /v1/sites", s.serveUpload)
 	mux.HandleFunc("GET /v1/templates", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Templates(), nil)
 	})
@@ -1266,21 +1477,17 @@ func (s *Server) Handler() http.Handler {
 			reply(w, nil, err)
 			return
 		}
+		req.remote = IsRemote(r)
 		v, err := s.AddTemplate(req)
 		reply(w, v, err)
 	})
 	mux.HandleFunc("DELETE /v1/templates/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveTemplate(r.PathValue("name")))
 	})
-	mux.HandleFunc("POST /v1/templates/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
-		var req control.JobRequest
-		if err := decode(r, &req); err != nil {
-			reply(w, nil, err)
-			return
-		}
-		v, err := s.TemplateJob(r.PathValue("name"), req)
-		reply(w, v, err)
-	})
+}
+
+func (s *Server) machineRoutes(mux Router) {
+	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
 	mux.HandleFunc("GET /v1/machines", func(w http.ResponseWriter, r *http.Request) {
 		labels := map[string]string{}
 		for _, l := range r.URL.Query()["label"] {
@@ -1305,15 +1512,39 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/machines/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveMachine(r.PathValue("name")))
 	})
+}
+
+func (s *Server) jobRoutes(mux Router) {
+	mux.HandleFunc("POST /v1/templates/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
+		var req control.JobRequest
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.TemplateJob(r.Context(), r.PathValue("name"), req)
+		reply(w, v, err)
+	})
 	mux.HandleFunc("POST /v1/machines/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
 		var req control.JobRequest
 		if err := decode(r, &req); err != nil {
 			reply(w, nil, err)
 			return
 		}
-		v, err := s.Job(r.PathValue("name"), req)
+		v, err := s.Job(r.Context(), r.PathValue("name"), req)
 		reply(w, v, err)
 	})
+	mux.HandleFunc("POST /v1/services/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
+		var req control.JobRequest
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.ServiceJob(r.Context(), r.PathValue("name"), req)
+		reply(w, v, err)
+	})
+}
+
+func (s *Server) snapshotRoutes(mux Router) {
 	mux.HandleFunc("POST /v1/machines/{name}/snapshots", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name   string            `json:"name"`
@@ -1326,6 +1557,15 @@ func (s *Server) Handler() http.Handler {
 		v, err := s.SnapshotWith(r.PathValue("name"), req.Name, req.Labels)
 		reply(w, v, err)
 	})
+	mux.HandleFunc("GET /v1/snapshots", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, s.Snapshots(), nil)
+	})
+	mux.HandleFunc("DELETE /v1/snapshots/{name}", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveSnapshot(r.PathValue("name")))
+	})
+}
+
+func (s *Server) serviceRoutes(mux Router) {
 	mux.HandleFunc("GET /v1/services", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.Services(), nil)
 	})
@@ -1345,22 +1585,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/services/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveService(r.PathValue("name")))
 	})
-	mux.HandleFunc("POST /v1/services/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
-		var req control.JobRequest
-		if err := decode(r, &req); err != nil {
-			reply(w, nil, err)
-			return
-		}
-		v, err := s.ServiceJob(r.PathValue("name"), req)
-		reply(w, v, err)
-	})
-	mux.HandleFunc("GET /v1/snapshots", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, s.Snapshots(), nil)
-	})
-	mux.HandleFunc("DELETE /v1/snapshots/{name}", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveSnapshot(r.PathValue("name")))
-	})
-	return mux
 }
 
 // maxBody bounds a request: a job's files ride in it
@@ -1391,11 +1615,32 @@ func (s *Server) withToken(h http.Handler) http.Handler {
 			reply(w, nil, errStatus(401, "a token is needed (Authorization: Bearer ...)"))
 			return
 		}
-		h.ServeHTTP(w, r)
+		h.ServeHTTP(w, markRemote(r))
 	})
 }
 
 // --- small helpers
+
+// killGroup signals process group pid, if pid names one: kill(-0) or kill(-(-1)) would reach
+// this daemon's own group, or every process it may signal.
+func killGroup(pid int, sig syscall.Signal) {
+	if pid > 1 {
+		syscall.Kill(-pid, sig)
+	}
+}
+
+// loopback says whether a listen address is reachable from this host only.
+func loopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 func gone(pid int, d time.Duration) bool {
 	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -31,17 +32,21 @@ func TestFill(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, " a b&c \n") }))
 	defer srv.Close()
 	in := []Tunnel{{Port: 5432, URL: "wss://gw/db?token={token}"}, {Port: 9000, URL: "wss://gw/s3"}}
-	out, err := Fill(in, srv.URL)
+	out, err := Fill(in, srv.URL, false)
 	if err != nil || out[0].URL != "wss://gw/db?token=a+b%26c" || out[1].URL != "wss://gw/s3" {
 		t.Fatalf("got %+v, %v", out, err)
 	}
 	if in[0].URL != "wss://gw/db?token={token}" {
 		t.Error("Fill changed its input")
 	}
-	if _, err := Fill(in, ""); err == nil {
+	if _, err := Fill(in, "", false); err == nil {
 		t.Error("a {token} URL without an endpoint is an error")
 	}
-	if out, err := Fill(in[1:], ""); err != nil || len(out) != 1 {
+	if out, err := Fill(in[1:], "", false); err != nil || len(out) != 1 {
 		t.Error("no placeholder, no endpoint needed")
+	}
+	// The site's own endpoint, on this host: refused
+	if _, err := Fill(in, srv.URL, true); err == nil || !strings.Contains(err.Error(), "isn't a public address") {
+		t.Errorf("a site's token endpoint on loopback: %v", err)
 	}
 }

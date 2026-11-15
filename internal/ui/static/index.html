@@ -185,7 +185,7 @@
       <section class="view" id="builds" data-view="builds" aria-labelledby="builds-title" hidden>
         <div class="view-head">
           <h2 id="builds-title">Builds</h2>
-          <p class="intro">Build a site from a directory with a Dockerfile, an image, or a Dockerfile written here. It
+          <p class="intro" id="builds-intro">Build a site from a directory with a Dockerfile, an image, or a Dockerfile written here. It
             becomes a template when it's done. Docker builds when it's running; an image builds without it.</p>
         </div>
         <form class="build-form" id="build-form">
@@ -204,6 +204,7 @@ CMD ["python3"]</textarea></label>
             <label>Name <input name="name" placeholder="app" autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,62}"></label>
             <label>Memory <span class="unit"><input name="memory" type="number" min="64" step="64" placeholder="512"> MB</span></label>
             <label>CPUs <input name="cpus" type="number" min="1" max="8" placeholder="1"></label>
+            <label>Kernel <select name="kernel"><option value="">Default</option><option value="linux">Linux</option><option value="none">None</option></select></label>
             <label class="check"><input type="checkbox" name="network"> A network (needed for ports and links)</label>
             <button class="btn go" type="submit">Build</button>
           </div>

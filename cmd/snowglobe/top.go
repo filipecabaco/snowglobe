@@ -104,6 +104,9 @@ func top(w io.Writer, c *daemon.Client, events []daemon.Event) error {
 	if err != nil {
 		return err
 	}
+	if v, err := c.Version(); err == nil && !v.Features.Templates {
+		return topBuilds(w, c, st, v)
+	}
 	ts, err := c.Templates()
 	if err != nil {
 		return err
@@ -171,6 +174,34 @@ func top(w io.Writer, c *daemon.Client, events []daemon.Event) error {
 		}
 	}
 	return nil
+}
+
+// topBuilds is top for a daemon without templates (a provider): its builds and the artifacts
+// it keeps.
+func topBuilds(w io.Writer, c *daemon.Client, st *daemon.Stats, v *daemon.Version) error {
+	bs, err := c.Builds()
+	if err != nil {
+		return err
+	}
+	cache := "no bound"
+	if st.CacheSize > 0 {
+		cache = fmt.Sprintf("of %s (%d%%)", mbs(st.CacheSize), st.CacheBytes*100/st.CacheSize)
+	}
+	fmt.Fprintf(w, "snowglobe daemon %s   %s mode: %s\n", c.Addr, v.Mode, v.Features.Says)
+	fmt.Fprintf(w, "%d builds (%d running), %d artifacts kept, %s %s\n\n", st.Builds, st.BuildsRunning, st.Artifacts, mbs(st.CacheBytes), cache)
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "BUILD\tNAME\tKIND\tSTATUS\tARTIFACT")
+	for i, b := range bs {
+		if i == 20 {
+			break
+		}
+		art := "–"
+		if b.Artifact != nil {
+			art = fmt.Sprintf("%.1f MB  sha256 %.12s", float64(b.Artifact.Bytes)/(1<<20), b.Artifact.SHA256)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", b.ID, b.Name, b.Kind, b.Status, art)
+	}
+	return tw.Flush()
 }
 
 func mbs(n int64) string { return fmt.Sprintf("%d MB", n>>20) }

@@ -152,10 +152,56 @@ func (c *client) pull(ref, reference string) (*Image, error) {
 	return img, nil
 }
 
+// Digest is the digest of the manifest ref names in its registry (the index, for an image of
+// several platforms), asked of it with c (nil: http.DefaultClient): what a tag names now, to
+// tell a build of it from one of what it named before. A reference by digest is its digest.
+func Digest(ref string, c *http.Client) (string, error) {
+	r, err := ParseRef(ref)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(r.Reference, "sha256:") {
+		return r.Reference, nil
+	}
+	if c == nil {
+		c = http.DefaultClient
+	}
+	d, err := (&client{http: c, base: "https://" + r.Registry + "/v2/" + r.Repository}).digest(r.Reference)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", ref, err)
+	}
+	return d, nil
+}
+
+func (c *client) digest(reference string) (string, error) {
+	// HEAD: registries say the digest without the manifest (and Docker Hub doesn't count it)
+	resp, err := c.do("HEAD", c.base+"/manifests/"+reference, accept)
+	if err == nil {
+		resp.Body.Close()
+		if d := resp.Header.Get("Docker-Content-Digest"); strings.HasPrefix(d, "sha256:") {
+			return d, nil
+		}
+	}
+	// One that doesn't: the manifest's own hash is its digest
+	if resp, err = c.get(c.base+"/manifests/"+reference, accept); err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, io.LimitReader(resp.Body, 4<<20)); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // get asks the registry, fetching an anonymous token the first time it asks for one.
 func (c *client) get(u, accept string) (*http.Response, error) {
+	return c.do("GET", u, accept)
+}
+
+func (c *client) do(method, u, accept string) (*http.Response, error) {
 	for try := 0; try < 2; try++ {
-		req, err := http.NewRequest("GET", u, nil)
+		req, err := http.NewRequest(method, u, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -179,11 +225,11 @@ func (c *client) get(u, accept string) (*http.Response, error) {
 		}
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			return nil, fmt.Errorf("GET %s: %s", u, resp.Status)
+			return nil, fmt.Errorf("%s %s: %s", method, u, resp.Status)
 		}
 		return resp, nil
 	}
-	return nil, fmt.Errorf("GET %s: unauthorized", u)
+	return nil, fmt.Errorf("%s %s: unauthorized", method, u)
 }
 
 // authenticate answers a Bearer challenge with an anonymous token (public images).

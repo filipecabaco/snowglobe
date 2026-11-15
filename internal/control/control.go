@@ -5,6 +5,7 @@ package control
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,6 +38,9 @@ type JobResult struct {
 	Killed    bool              `json:"killed"`
 	Ms        int64             `json:"ms"`
 	Error     string            `json:"error,omitempty"`
+	// Bytes of the output and of out/'s files dropped as the answer was read (JobLimited)
+	OutputCut int64 `json:"output_cut,omitempty"`
+	OutCut    int64 `json:"out_cut,omitempty"`
 }
 
 // DefaultTimeout is a job's when its request gives none, in seconds.
@@ -44,17 +48,28 @@ const DefaultTimeout = 300
 
 // Job runs a job on the machine whose control socket is sock; name is what errors call it.
 func Job(sock, name string, req JobRequest) (*JobResult, error) {
+	return JobLimited(context.Background(), sock, name, req, 0)
+}
+
+// JobLimited is Job, given up on (its connection closed) when ctx is done, keeping at most keep
+// bytes of the output and keep of out/'s files together (0: all of them): the rest is dropped as
+// it is read, never held, and OutputCut and OutCut say how much went.
+func JobLimited(ctx context.Context, sock, name string, req JobRequest, keep int64) (*JobResult, error) {
 	if req.Timeout < 0 {
 		return nil, fmt.Errorf("timeout %v: 0 or more seconds", req.Timeout)
 	}
 	if req.Timeout == 0 {
 		req.Timeout = DefaultTimeout
 	}
-	conn, err := net.Dial("unix", sock)
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", sock)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	defer conn.Close()
+	// Given up: the connection closed, which ends the wait below
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	body := map[string]any{"mode": "job", "cmd": req.Cmd, "env": req.Env, "timeout": req.Timeout, "files": req.Files}
 	if req.Home {
 		body["home"] = true
@@ -67,7 +82,10 @@ func Job(sock, name string, req JobRequest) (*JobResult, error) {
 		return nil, err
 	}
 	conn.SetReadDeadline(time.Now().Add(time.Duration(req.Timeout+30) * time.Second))
-	line, err := bufio.NewReaderSize(conn, 1<<20).ReadBytes('\n')
+	line, cutOutput, cutOut, err := readClipped(bufio.NewReaderSize(conn, 1<<20), keep)
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("%s: the job was given up: %w", name, ctx.Err())
+	}
 	if errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%s stopped while the job ran (its logs say why)", name)
 	}
@@ -81,7 +99,102 @@ func Job(sock, name string, req JobRequest) (*JobResult, error) {
 	if res.Error != "" {
 		return nil, errors.New(res.Error)
 	}
+	res.OutputCut, res.OutCut = cutOutput, cutOut
 	return &res, nil
+}
+
+// readClipped reads one JSON line (a job's answer), keeping at most keep bytes of its "output"
+// and keep of the files in its "out" together (0: everything). Both are base64 strings, cut on a
+// whole group of 4 characters so that what is kept still decodes; what is dropped is counted, in
+// bytes decoded (about: to a few bytes). Keys and every other value are kept whole.
+func readClipped(r *bufio.Reader, keep int64) (line []byte, cutOutput, cutOut int64, err error) {
+	type level struct{ object, key bool }
+	var (
+		stack                   []level
+		inString, escape, isKey bool
+		clipping                bool
+		n                       int64 // characters of the current string kept
+		top, key                string
+		keyBuf                  []byte
+		// Characters of base64 left to keep, for the output and for out/'s files
+		left = map[string]int64{"output": keep / 3 * 4, "out": keep / 3 * 4}
+		cut  = map[string]int64{}
+	)
+	for {
+		chunk, rerr := r.ReadSlice('\n')
+		for _, c := range chunk {
+			if inString {
+				if clipping && (escape || c != '"') {
+					// Dropped, to the string's end
+					escape = !escape && c == '\\'
+					cut[top]++
+					continue
+				}
+				switch {
+				case escape:
+					escape = false
+				case c == '\\':
+					escape = true
+				case c == '"':
+					inString, clipping = false, false
+					if isKey && len(stack) == 1 {
+						key = string(keyBuf)
+					}
+				default:
+					budget, limited := left[top]
+					if keep > 0 && !isKey && limited && !clipping && budget <= 0 && n%4 == 0 {
+						clipping = true
+					}
+					if clipping {
+						cut[top]++
+						continue
+					}
+					n++
+					if limited && !isKey {
+						left[top]--
+					}
+					if isKey && len(stack) == 1 {
+						keyBuf = append(keyBuf, c)
+					}
+				}
+				line = append(line, c)
+				continue
+			}
+			switch c {
+			case '"':
+				inString, n, keyBuf = true, 0, keyBuf[:0]
+				isKey = len(stack) > 0 && stack[len(stack)-1].object && stack[len(stack)-1].key
+			case '{', '[':
+				stack = append(stack, level{object: c == '{', key: c == '{'})
+			case '}', ']':
+				if len(stack) > 0 {
+					stack = stack[:len(stack)-1]
+				}
+			case ':':
+				if len(stack) > 0 {
+					stack[len(stack)-1].key = false
+					if len(stack) == 1 {
+						top = key
+					}
+				}
+			case ',':
+				if len(stack) > 0 && stack[len(stack)-1].object {
+					stack[len(stack)-1].key = true
+				}
+				if len(stack) == 1 {
+					top = ""
+				}
+			}
+			line = append(line, c)
+		}
+		switch {
+		case errors.Is(rerr, bufio.ErrBufferFull):
+			continue
+		case rerr != nil:
+			return line, cut["output"] * 3 / 4, cut["out"] * 3 / 4, rerr
+		}
+		return line, cut["output"] * 3 / 4, cut["out"] * 3 / 4, nil
+	}
 }
 
 // ask sends one JSON line to sock and reads one back into v, within d.

@@ -3,6 +3,7 @@ package daemon
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestARunIsFireAndForget(t *testing.T) {
@@ -63,5 +64,23 @@ func TestOnlyTheNewestRunsAreKept(t *testing.T) {
 	}
 	if list, _ := d.c.Runs(); len(list) > 3 {
 		t.Errorf("%d runs kept", len(list))
+	}
+}
+
+// Past the room kept for runs' output, the oldest finished runs lose theirs (and say so)
+func TestOldRunsLoseTheirOutputPastTheRoomForIt(t *testing.T) {
+	old := keptRunOutput
+	keptRunOutput = 10
+	t.Cleanup(func() { keptRunOutput = old })
+	s := &Server{runs: newRuns()}
+	now := time.Now()
+	for i, id := range []string{"a", "b", "c"} {
+		created := now.Add(time.Duration(i) * time.Second)
+		s.runs.all[id] = &Run{ID: id, Created: created, Ended: &created, Output: []byte("123456")}
+	}
+	s.runs.all["running"] = &Run{ID: "running", Created: now, Output: []byte("123456")}
+	s.pruneRuns()
+	if a, c := s.runs.all["a"], s.runs.all["c"]; a.Output != nil || a.Error == "" || c.Output == nil || s.runs.all["running"].Output == nil {
+		t.Errorf("a: %+v, c: %+v", a, c)
 	}
 }

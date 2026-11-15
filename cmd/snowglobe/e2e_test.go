@@ -268,8 +268,14 @@ func (e *e2e) nativeInstance(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(logs, "console.log")); !bytes.Contains(data, []byte("console-42")) {
 		t.Errorf("console.log lacks the exec: %q", data)
 	}
-	if data, _ := os.ReadFile(filepath.Join(logs, "serial.log")); !bytes.Contains(data, []byte("SGDONE_")) {
-		t.Error("serial.log lacks the jobs")
+	// A job's traffic: with a kernel, its shell's on the serial line (the launcher's end marker);
+	// with none, what the job printed
+	mark := "SGDONE_"
+	if _, err := os.Stat(filepath.Join(e.site, "system", "user.bin")); err == nil {
+		mark = "hello\n"
+	}
+	if data, _ := os.ReadFile(filepath.Join(logs, "serial.log")); !bytes.Contains(data, []byte(mark)) {
+		t.Errorf("serial.log lacks the jobs (%q)", mark)
 	}
 }
 

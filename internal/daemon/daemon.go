@@ -225,6 +225,8 @@ func saveState(path string, st state) error {
 type apiError struct {
 	status int
 	msg    string
+	// The daemon's mode, when it is what has the route off
+	mode string
 }
 
 func (e *apiError) Error() string { return e.msg }
@@ -240,6 +242,16 @@ func statusOf(err error) int {
 		return a.status
 	}
 	return 500
+}
+
+// Disabled says whether err is the daemon's mode having off what was asked for (a provider has no
+// machines, say), and which mode that is.
+func Disabled(err error) (string, bool) {
+	var a *apiError
+	if errors.As(err, &a) && a.mode != "" {
+		return a.mode, true
+	}
+	return "", false
 }
 
 // ErrNotFound is the error the daemon answers with for what it doesn't have (NotFound says yes to

@@ -195,3 +195,28 @@ func TestABuildRunningWhenTheDaemonStoppedIsInterrupted(t *testing.T) {
 		t.Errorf("a running one: %+v", b)
 	}
 }
+
+// A build cancelled while its template restores ends cancelled, with no template
+func TestABuildCancelledAsItsTemplateRestoresLeavesNone(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_RESTORE_DELAY", "1s")
+	d := buildDaemon(t, true)
+	defer d.stop(t)
+	b, err := d.c.StartBuild(BuildRequest{Name: "app", Source: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Built: its template restoring
+	waitFor(t, func() bool { log, _ := d.c.BuildLog(b.ID, 0); return strings.Contains(log, "==> done") })
+	time.Sleep(200 * time.Millisecond)
+	if err := d.c.RemoveBuild(b.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { cur, _ := d.c.Build(b.ID); return cur != nil && cur.Ended != nil })
+	time.Sleep(1500 * time.Millisecond)
+	if cur, _ := d.c.Build(b.ID); cur.Status != "cancelled" || cur.Template != "" {
+		t.Errorf("build: %+v", cur)
+	}
+	if ts, _ := d.c.Templates(); len(ts) != 0 {
+		t.Errorf("templates: %+v", ts)
+	}
+}

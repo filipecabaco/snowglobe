@@ -142,12 +142,33 @@ type Stats struct {
 	MemoryUsed     int64            `json:"memory_used"`
 	MemoryBudget   int64            `json:"memory_budget"`
 	Memory         map[string]int64 `json:"memory"`
+	// The daemon's mode; its builds, those running, and the artifacts it keeps: how many, what
+	// they take and the most they may (CacheSize, 0: no bound)
+	Mode          string `json:"mode"`
+	Builds        int    `json:"builds"`
+	BuildsRunning int    `json:"builds_running"`
+	Artifacts     int    `json:"artifacts"`
+	CacheBytes    int64  `json:"cache_bytes"`
+	CacheSize     int64  `json:"cache_size"`
 }
 
 // Stats counts what the daemon keeps and measures what it takes: Memory by template server
 // ("template/NAME") and machine.
 func (s *Server) Stats() Stats {
-	st := Stats{MemoryBudget: s.o.Memory, Memory: map[string]int64{}}
+	st := Stats{MemoryBudget: s.o.Memory, Memory: map[string]int64{}, Mode: s.o.Features.Mode, CacheSize: s.o.CacheSize}
+	s.builds.mu.Lock()
+	st.Builds = len(s.builds.all)
+	for _, b := range s.builds.all {
+		if b.Status == "running" {
+			st.BuildsRunning++
+		}
+	}
+	st.CacheBytes, st.Artifacts = s.builds.cached()
+	s.builds.mu.Unlock()
+	// What it keeps for a mode with templates (none run in one without)
+	if !s.o.Features.Templates {
+		return st
+	}
 	for _, t := range s.Templates() {
 		st.Templates++
 		if !t.Asleep {

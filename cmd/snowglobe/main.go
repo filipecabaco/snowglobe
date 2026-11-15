@@ -80,6 +80,8 @@ Usage:
                                                      write_file and read_file tools; no Docker.
                      [--log-dir DIR]                 Logs to the cache's snowglobe/logs/mcp
                                                      (or <name> with --name) unless --log-dir
+                     [--cpus N]                      --cpus for a site with no kernel (default:
+                                                     the CPUs it was built on, up to this host's)
   snowglobe mcp --daemon                             serve the daemon to an agent over MCP: templates,
                                                      machines, commands and files, snapshots,
                                                      services, builds, fleets, status and events
@@ -107,6 +109,9 @@ Usage:
                                                      tunnels (a local proxy, say); --allow-private
                                                      lets the guest reach this machine's services
                                                      --jit on|off over the site's own choice
+                                                     --cpus N for a site with no kernel: its
+                                                     threads on N CPUs at once (default: as many
+                                                     as it was built on)
                                                      --max-runtime 30m ends the run after that long
                                                      (exit 124), --stop-file PATH once PATH exists
                                                      (exit 143): the job running in the guest is
@@ -142,7 +147,48 @@ Usage:
                                                      room, then is refused. Its servers and
                                                      machines end with it, a crash included;
                                                      started again, it restores its templates
+                   [--tls-cert F --tls-key F]        ADDR other hosts reach needs TLS (or
+                   [--insecure-listen]               --insecure-listen). Requests on ADDR name
+                   [--site-root DIR]...              no path of this host but sites they uploaded
+                   [--remote-allow-private]          (template add and apply upload a local one)
+                                                     and --site-root DIRs, fetch URLs on public
+                                                     addresses only, pull from registries on
+                                                     public addresses only, and give machines no
+                                                     private egress, unless --remote-allow-private
+                   [--mode full|provider]            full (the default) does all of it. provider
+                   [--cache-size 20G]                is a template provider: it builds images,
+                   [--build-timeout 30m]             Dockerfiles and build contexts into sites for
+                   [--max-context 1G]                the page and gives each back packed (snowglobe
+                   [--max-artifact 8G]               provide), and nothing else: no templates,
+                                                     machines, jobs, snapshots, services, links,
+                                                     ports, fleets, events or MCP, on the socket or
+                                                     ADDR. Its builds have no kernel unless asked.
+                                                     What was built of the same input (an image's
+                                                     digest, a Dockerfile's or context's content)
+                                                     with the same options is built once: the
+                                                     artifacts are kept up to --cache-size, those
+                                                     asked for longest ago let go of first. A build
+                                                     may run --build-timeout (a provider's: 30m),
+                                                     be sent --max-context, and pack --max-artifact
   snowglobe daemon stop                              stop the daemon, and everything it started
+  snowglobe provide <image | Dockerfile dir |        build it into a site for the page on the daemon
+                     Dockerfile> [-o site.tar.zst]   ($SNOWGLOBE_DAEMON, or this host's; a provider
+                   [--kernel none|linux]             or a full one) and download it packed (-o
+                   [--network fetch] [--cpus N]      .tar.zst or .tar.gz), printing its sha256 and
+                   [--memory MB] [--name N]          size: a directory is sent as the build's
+                                                     context, a file is the Dockerfile. The build's
+                                                     log streams as it builds; built already, the
+                                                     artifact comes at once. A provider builds with
+                                                     no kernel unless --kernel linux.
+                                                     The artifact is a static site: unpack it at
+                                                     any path of a static host or CDN. It needs
+                                                     .wasm served as application/wasm, .js as
+                                                     text/javascript and .json as application/json;
+                                                     a site on several CPUs makes itself
+                                                     cross-origin isolated with its service worker
+                                                     (sw.js, served from the site's directory), so
+                                                     the host needs no COOP/COEP headers, but must
+                                                     not send ones that forbid it
   snowglobe template add <site> [--name T]           restore a site once, for machines to be forked
                      [--max-machines N]              from; template ls lists them, template rm T
                      [--snapshot S] [--idle 30m]     removes one and its machines. --snapshot
@@ -206,7 +252,10 @@ Build flags:
   --cmd CMD       shell command to run on the terminal (default: the image's ENTRYPOINT + CMD)
   --ready TEXT    terminal output that means the app is ready to snapshot
                   (default: once the terminal has been quiet for 5 seconds)
-  --title TEXT    page title (default: the source)
+  --title TEXT    page title (default: the source, or --source-name)
+  --source-name NAME
+                  what the site calls its source (run.json, the default title), when the path
+                  built isn't a name to show (a daemon's copy of an uploaded context)
   --memory MB     guest RAM (default: 512)
   --warm REGEX    extra guest paths to preload, on top of what the guest read
   --network NAME  none (default) or fetch: the guest's plain HTTP requests go out through the
@@ -233,7 +282,7 @@ Build flags:
   --kernel none   no guest kernel: the image's command, an aarch64 Linux program, runs on its
                   own, its system calls answered by the machine, in the page and natively.
                   Smaller snapshots; one CPU in the page (the build runs it on --build-cpus at
-                  once), no exercises (default: linux)
+                  once, and natively it runs on as many) (default: linux)
   --cpus N        guest CPUs, 1 to 8 (default: 1). More than one runs each CPU in its own Web
                   Worker; the page then makes itself cross-origin isolated with a service worker
   --build-cpus N  CPUs to boot and warm up on before the snapshot (default: the larger of --cpus
@@ -347,6 +396,8 @@ func run(args []string) int {
 		err = instance.List()
 	case "daemon":
 		err = runDaemon(args[1:])
+	case "provide":
+		err = runProvide(args[1:])
 	case "ui":
 		err = runUI(args[1:])
 	case "ports":
@@ -452,6 +503,7 @@ func runBuild(args []string) error {
 	fs.Func("agent-exposed-to", "", func(v string) error { o.AgentExposedTo = append(o.AgentExposedTo, v); return nil })
 	fs.StringVar(&o.JIT, "jit", "", "")
 	fs.StringVar(&o.Kernel, "kernel", "", "")
+	fs.StringVar(&o.SourceName, "source-name", "", "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)
@@ -604,6 +656,7 @@ func runRun(args []string) error {
 	fs.StringVar(&o.StopFile, "stop-file", "", "")
 	fs.StringVar(&o.LogDir, "log-dir", "", "")
 	fs.StringVar(&o.JIT, "jit", "", "")
+	fs.IntVar(&o.CPUs, "cpus", 0, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	positional, err := parse(fs, args)
@@ -729,6 +782,7 @@ func runMCP(args []string) error {
 	keep := fs.Bool("keep", false, "")
 	logDir := fs.String("log-dir", "", "")
 	onDaemon := fs.Bool("daemon", false, "")
+	cpus := fs.Int("cpus", 0, "")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	positional, err := parse(fs, args)
 	if err != nil {
@@ -741,6 +795,9 @@ func runMCP(args []string) error {
 		c, err := daemonClient()
 		if err != nil {
 			return err
+		}
+		if v, err := c.Version(); err == nil && !v.Features.MCP() {
+			return fmt.Errorf("the daemon at %s runs in %s mode (%s): mcp --daemon serves a daemon in full mode", c.Addr, v.Mode, v.Features.Says)
 		}
 		return (&mcp.Daemon{API: c, Version: version, Build: buildSite}).Stdio()
 	}
@@ -772,7 +829,7 @@ func runMCP(args []string) error {
 	started := false
 	if err := instance.Shell(*name, "true", false, 30); err != nil {
 		// Not running yet: start it, natively (stdout stays the protocol's)
-		if err := instance.Run(instance.Options{Site: site, Name: *name, Detach: true, Runtime: "native", LogDir: *logDir}, version); err != nil {
+		if err := instance.Run(instance.Options{Site: site, Name: *name, Detach: true, Runtime: "native", LogDir: *logDir, CPUs: *cpus}, version); err != nil {
 			return err
 		}
 		started = true
