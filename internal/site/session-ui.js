@@ -253,6 +253,8 @@
           this.initialState = URL.createObjectURL(await S.stateBlob(saved));
           // With no kernel, the program's process goes back with the machine (machine-core.js boot)
           this.processState = saved.process ?? null;
+          // When it was saved: its clocks go on by the time since (machine-core.js boot)
+          this.processSavedAt = saved.process ? saved.savedAt : null;
           this.savedRevision = this.revision = saved.revision ?? 0;
           this.records = [saved.console];
           this.replay = S.consoleEvents(await saved.console.arrayBuffer());
@@ -291,6 +293,7 @@
       if (this.initialState) URL.revokeObjectURL(this.initialState);
       this.initialState = null;
       this.processState = null;
+      this.processSavedAt = null;
       this.replay = null;
       this.term = term;
       this.controls();

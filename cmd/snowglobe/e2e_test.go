@@ -127,6 +127,51 @@ func stubborn(n int) string {
 	return fmt.Sprintf(`sleep %d & (trap "" TERM; sleep %d) & sh -c "sleep %d; true"; sleep %d`, n, n+1, n+2, n+3)
 }
 
+// zombies is a command printing how many guest processes have ended and not been waited for.
+const zombies = `cat /proc/[0-9]*/status 2>/dev/null | grep -c "^State:[[:space:]]*Z" || true`
+
+// userMode says whether the site has no kernel (its program runs in armless's user mode).
+func (e *e2e) userMode() bool {
+	_, err := os.Stat(filepath.Join(e.site, "system", "user.bin"))
+	return err == nil
+}
+
+// title is the site's title (run.json).
+func (e *e2e) title(t *testing.T) string {
+	t.Helper()
+	var info struct {
+		Title string `json:"title"`
+	}
+	data, err := os.ReadFile(filepath.Join(e.site, "run.json"))
+	if err != nil || json.Unmarshal(data, &info) != nil {
+		t.Fatalf("run.json: %v", err)
+	}
+	return info.Title
+}
+
+// hostnameOf is the hostname a site with no kernel's program has: its title lowercased, each run
+// of anything but a-z and 0-9 a dash, none at either end, at most 63 bytes (snowglobe-vm's
+// user::hostname)
+func hostnameOf(title string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(title) {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case b.Len() > 0 && !strings.HasSuffix(b.String(), "-"):
+			b.WriteByte('-')
+		}
+	}
+	h := b.String()
+	if len(h) > 63 {
+		h = h[:63]
+	}
+	if h = strings.Trim(h, "-"); h == "" {
+		return "snowglobe"
+	}
+	return h
+}
+
 // countSleeping is a command printing how many guest processes are `sleep <n>` for n in n..n+3.
 func countSleeping(n int) string {
 	return fmt.Sprintf(`for p in /proc/[0-9]*; do tr "\000" " " < $p/cmdline 2>/dev/null; echo; done | grep -cE "^sleep (%d|%d|%d|%d) $" || true`, n, n+1, n+2, n+3)
@@ -177,6 +222,18 @@ func (e *e2e) nativeInstance(t *testing.T) {
 	if err := json.Unmarshal([]byte(e.must(t, 0, "sh", name, "--json", "echo json")), &res); err != nil || res.Output != "json\n" {
 		t.Errorf("sh --json: %+v %v", res, err)
 	}
+	// A job has no terminal: its output is as it printed it (no \r\n, no escapes)
+	if out := e.must(t, 0, "sh", name, `[ -t 0 ] || [ -t 1 ] && echo tty || printf 'no tty\nplain\n'`); out != "no tty\nplain\n" {
+		t.Errorf("a job's streams: %q", out)
+	}
+	user := e.userMode()
+	// With no kernel, the program is named after the site (its title, made a hostname)
+	if user {
+		want := hostnameOf(e.title(t))
+		if out := e.must(t, 0, "sh", name, "uname -n; cat /proc/sys/kernel/hostname"); out != want+"\n"+want+"\n" {
+			t.Errorf("hostname: %q, want %q", out, want)
+		}
+	}
 
 	// What a job leaves running when it ends is its own business (a server, say); the check
 	// below sees it, so it would see what a kill left
@@ -196,6 +253,11 @@ func (e *e2e) nativeInstance(t *testing.T) {
 	if out := e.must(t, 0, "sh", name, "echo after"); out != "after\n" {
 		t.Errorf("the next job: %q", out)
 	}
+	// What the killed job left behind went: none of it is a zombie (with no kernel, the program
+	// reaps the orphans, as a container's pid 1 must)
+	waitFor(t, 20*time.Second, "no zombies", func() bool {
+		return strings.TrimSpace(e.must(t, 0, "sh", name, zombies)) == "0"
+	})
 
 	// cp, both ways, a file and a directory
 	local := t.TempDir()
@@ -265,13 +327,20 @@ func (e *e2e) nativeInstance(t *testing.T) {
 	if ev := event(t, logs, "job_start", map[string]any{"cmd": "echo hello; exit 3"}); ev != nil && ev["env"] == nil {
 		t.Error("job_start without env names")
 	}
+	// With no kernel, the program's clocks went on by the time since the build saved it
+	if user {
+		ev := event(t, logs, "restored", nil)
+		if ms, _ := ev["asleep_ms"].(float64); ms <= 0 {
+			t.Errorf("restored without the time it was saved for: %v", ev)
+		}
+	}
 	if data, _ := os.ReadFile(filepath.Join(logs, "console.log")); !bytes.Contains(data, []byte("console-42")) {
 		t.Errorf("console.log lacks the exec: %q", data)
 	}
 	// A job's traffic: with a kernel, its shell's on the serial line (the launcher's end marker);
 	// with none, what the job printed
 	mark := "SGDONE_"
-	if _, err := os.Stat(filepath.Join(e.site, "system", "user.bin")); err == nil {
+	if user {
 		mark = "hello\n"
 	}
 	if data, _ := os.ReadFile(filepath.Join(logs, "serial.log")); !bytes.Contains(data, []byte(mark)) {

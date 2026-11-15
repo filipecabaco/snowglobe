@@ -65,6 +65,10 @@ type Page struct {
 	// User: the site has no kernel (snowglobe build --kernel none): its program runs on its own in
 	// armless's user mode, a process (system/user.bin) restored with the machine's state. One CPU
 	User bool
+	// SavedAtMs is when the snapshot was saved (ms since the epoch; 0: not known). With User, the
+	// page restores the program's process with its clocks gone on by the time since
+	// (armless's user_asleep_ms), as a machine's clocks go on through a suspend
+	SavedAtMs int64
 	// Guest TCP destinations the page carries over WebSockets (armless's network.tunnels)
 	Tunnels []tunnel.Tunnel
 	// Where the page gets a fresh access token for each tunnel connection whose URL has {token}

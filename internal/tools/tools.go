@@ -255,11 +255,13 @@ func (i *Image) Snapshot(out string, memoryMB int, ready string, exercises []str
 const ExitBootStalled = 75
 
 // UserProgram is what a site with no kernel runs (snowglobe build --kernel none): the image's program
-// and its arguments, its environment (NAME=VALUE) and its working directory.
+// and its arguments, its environment (NAME=VALUE) and its working directory, and the site's name,
+// which its hostname is made of (snowglobe-vm makes it one: lowercase letters, digits and dashes).
 type UserProgram struct {
-	Argv []string
-	Env  []string
-	Cwd  string
+	Argv     []string
+	Env      []string
+	Cwd      string
+	Hostname string
 }
 
 // SnapshotArgs are snowglobe-vm's arguments to boot the site's system directory and snapshot it,
@@ -289,6 +291,9 @@ func SnapshotArgs(system string, memoryMB int, ready string, exercises []string,
 		}
 		if user.Cwd != "" {
 			args = append(args, "--user-cwd", user.Cwd)
+		}
+		if user.Hostname != "" {
+			args = append(args, "--user-hostname", user.Hostname)
 		}
 	}
 	return append(args, TunnelArgs(tunnels, allowPrivate)...)

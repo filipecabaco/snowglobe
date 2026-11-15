@@ -65,8 +65,9 @@ func fakeKernel(t *testing.T) {
 // The snapshot's output, written into $sys (the site's system directory) by a fake snowglobe-vm.
 const snapshotOutput = `echo state > "$sys/state.bin.zst"
 echo '{"boot":[],"exercise":{}}' > "$sys/reads.json"
-echo '{"bootSeconds":1.5,"stateBytes":6,"snapshotBytes":9}' > "$sys/run-meta.json"
-echo '[]' > "$sys/transcript.json"`
+echo '{"bootSeconds":1.5,"stateBytes":6,"snapshotBytes":9,"savedAtMs":1789000000123}' > "$sys/run-meta.json"
+echo '[]' > "$sys/transcript.json"
+case "$*" in *" --user "*) echo process > "$sys/user.bin" ;; esac`
 
 // fakeBuildDocker puts a docker on the PATH that has the tools image, pulls, tags and builds
 // anything, saves the image in saved, copies a runtime out of the tools image and snapshots as
@@ -160,6 +161,30 @@ func TestRunBuildsASiteWithDocker(t *testing.T) {
 	}
 	if js, _ := os.ReadFile(filepath.Join(out, "armless", "armless.js")); !strings.Contains(string(js), "o.memory_mb + 1024") {
 		t.Errorf("armless.js changed on the way: %s", js)
+	}
+}
+
+// With no kernel: the program, its environment and directory, and the site's title (its hostname,
+// once snowglobe-vm has made one of it) go to the snapshot; when it saved the state goes in run.json
+// and the page, which restore the program's clocks gone on by the time since
+func TestRunBuildsASiteWithNoKernel(t *testing.T) {
+	buildEnv(t)
+	log := fakeBuildDocker(t, savedImage(t, "arm64", map[string]string{"snowglobe.title": "My Shell"}))
+	out := filepath.Join(t.TempDir(), "dist")
+	if err := Run(Options{Source: "alpine", Out: out, Memory: 128, Kernel: "none"}, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ := os.ReadFile(log)
+	if want := "--user /bin/sh --user-env PATH=/bin --user-cwd /root --user-hostname My Shell"; !strings.Contains(string(calls), want) {
+		t.Errorf("%q isn't in the docker calls:\n%s", want, calls)
+	}
+	var info RunInfo
+	data, _ := os.ReadFile(filepath.Join(out, "run.json"))
+	if err := json.Unmarshal(data, &info); err != nil || info.SavedAtMs != 1789000000123 || info.Kernel != "none" {
+		t.Errorf("run.json: %s %v", data, err)
+	}
+	if page, _ := os.ReadFile(filepath.Join(out, "index.html")); !strings.Contains(strings.Join(strings.Fields(string(page)), " "), "user_saved_at: 1789000000123 ,") {
+		t.Errorf("the page doesn't say when its state was saved")
 	}
 }
 

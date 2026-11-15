@@ -1280,6 +1280,26 @@ test('no kernel: a capture has the process, taken in the same stop; a boot from 
   assert.equal(mismatched.vm, null);
 });
 
+test('no kernel: the process\'s clocks go on by the time since it was saved (user_asleep_ms)', async (t) => {
+  assert.equal(MC.asleepMs(1000, 61_000), 60_000);
+  assert.equal(MC.asleepMs(90_000, 61_000), 0, 'saved in the future (another clock ahead): no time');
+  for (const unknown of [null, undefined, 0, NaN, 'x']) assert.equal(MC.asleepMs(unknown, 61_000), 0, String(unknown));
+
+  t.mock.timers.enable({ apis: ['Date'], now: 1_800_000_000_000 });
+  const cfg = { initial_state: 'https://x/s', user_state: 'https://x/u', user_saved_at: 1_800_000_000_000 - 3 * 86_400_000, filesystem: { json: 'f', baseurl: 'b' } };
+  // The site's own snapshot: since the build saved it, days ago
+  await new MC.Core({ config: cfg, Armless: UserArmless, agent: null }).boot('https://x/s');
+  assert.equal(UserArmless.last.options.user_asleep_ms, 3 * 86_400_000);
+  // A workspace saved since: since its save
+  await new MC.Core({ config: cfg, Armless: UserArmless, agent: null }).boot(new Blob([new Uint8Array([1])]), 'raw', new Uint8Array([7]), 1_800_000_000_000 - 5000);
+  assert.equal(UserArmless.last.options.user_asleep_ms, 5000);
+  // A workspace that doesn't say when (saved before it was recorded), or a site built before: none
+  await new MC.Core({ config: cfg, Armless: UserArmless, agent: null }).boot(new Blob([new Uint8Array([1])]), 'raw', new Uint8Array([7]));
+  assert.equal(UserArmless.last.options.user_asleep_ms, 0);
+  await new MC.Core({ config: { ...cfg, user_saved_at: undefined }, Armless: UserArmless, agent: null }).boot('https://x/s');
+  assert.equal(UserArmless.last.options.user_asleep_ms, 0);
+});
+
 test('with a kernel: no process is captured or passed', async () => {
   class KernelArmless extends UserArmless { constructor(o) { super(o); this.user = false; } }
   const core = new MC.Core({ config: { initial_state: 'https://x/s', filesystem: { json: 'f', baseurl: 'b' } }, Armless: KernelArmless, agent: null, sessions: null });

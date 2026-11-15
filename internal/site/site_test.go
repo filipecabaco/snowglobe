@@ -324,9 +324,11 @@ func TestBuildFilesCarryTheAssetVersion(t *testing.T) {
 }
 
 func TestASiteWithNoKernelRestoresItsProcessWithItsState(t *testing.T) {
-	page, _ := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none", User: true})
+	page, _ := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none", User: true, SavedAtMs: 1789000000123})
 	lacks(t, "the page", page, `const user = true ;`, `user_state: versioned("system/user.bin")`,
-		`initial_state: versioned("system/state.bin.zst")`, `sessions.processState ?? null`, `await sessions.prepare()`)
+		`initial_state: versioned("system/state.bin.zst")`, `sessions.processState ?? null`, `await sessions.prepare()`,
+		// Its clocks go on from when the build saved it, a workspace's from when it was saved
+		`user_saved_at: 1789000000123 ,`, `sessions.processSavedAt ?? null`)
 	if strings.Contains(page, "natively only") {
 		t.Error("a site with no kernel runs in the page")
 	}

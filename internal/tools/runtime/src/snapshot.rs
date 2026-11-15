@@ -4,7 +4,7 @@
 //! Reads <system>/filesystem.json + filesystem/; writes into <system>:
 //! - state.bin.zst  the snapshot (zstd)
 //! - console.bin    the app's console output so far, which the page replays into the terminal
-//! - run-meta.json  boot time and sizes
+//! - run-meta.json  boot time, sizes, and when it was saved
 //! - reads.json     every file the guest fetched while booting; then, from the snapshot on (with
 //!   the file cache emptied, as a visitor's tab starts), while it settled and while it ran each
 //!   --exercise command typed in: what a restored machine reads, what a visitor would otherwise
@@ -249,13 +249,16 @@ fn offline(cpus: usize, build_cpus: usize) -> (String, String) {
 /// boot time, and the console the page replays (what the screen shows, without the terminal
 /// queries and progress reports).
 pub(crate) fn save(system: &std::path::Path, state: &[u8], boot_seconds: f64, console: &[u8]) -> Result<(), String> {
+    // When it was saved (ms since the epoch), before the compression: a site with no kernel's
+    // process is restored with its clocks gone on by the time since (run.json's saved_at_ms)
+    let saved_at_ms = crate::user::epoch_ms(std::time::SystemTime::now());
     eprintln!("\nCompressing {} MB snapshot ...", state.len() >> 20);
     let compressed = compress(state)?;
     let out = system.join("state.bin.zst");
     std::fs::write(&out, &compressed).map_err(|e| e.to_string())?;
     write_json(
         &system.join("run-meta.json"),
-        &json!({ "bootSeconds": boot_seconds, "stateBytes": state.len(), "snapshotBytes": compressed.len() }),
+        &json!({ "bootSeconds": boot_seconds, "stateBytes": state.len(), "snapshotBytes": compressed.len(), "savedAtMs": saved_at_ms }),
     )?;
     let replay = text::without_progress_reports(&text::without_queries(text::since_last_clear(console)));
     std::fs::write(system.join("console.bin"), replay).map_err(|e| e.to_string())?;
@@ -537,7 +540,11 @@ mod tests {
         // A zstd frame with its size in it, as a restore streams it
         assert_eq!(zstd::stream::decode_all(&compressed[..]).unwrap(), state);
         assert_eq!(zstd::zstd_safe::get_frame_content_size(&compressed).ok(), Some(Some(state.len() as u64)));
-        let meta: serde_json::Value = serde_json::from_slice(&std::fs::read(system.join("run-meta.json")).unwrap()).unwrap();
+        let before = crate::user::epoch_ms(std::time::SystemTime::now());
+        let mut meta: serde_json::Value = serde_json::from_slice(&std::fs::read(system.join("run-meta.json")).unwrap()).unwrap();
+        // When it was saved: a moment ago
+        let saved_at = meta.as_object_mut().unwrap().remove("savedAtMs").and_then(|v| v.as_u64()).unwrap();
+        assert!(saved_at <= before && before - saved_at < 60_000, "{saved_at} {before}");
         assert_eq!(meta, json!({ "bootSeconds": 12.5, "stateBytes": 300_000, "snapshotBytes": compressed.len() }));
         assert_eq!(std::fs::read(system.join("console.bin")).unwrap(), b"iex(1)> ready");
         // Nowhere to write it

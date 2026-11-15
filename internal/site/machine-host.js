@@ -277,8 +277,9 @@
       config: cfg,
       on,
       /** Boot from a state: a URL (default: the site's snapshot), or a captured Blob and its encoding,
-       *  and with no kernel the process captured with it (capture()'s `process`). */
-      boot: (state = cfg.initial_state, encoding = "raw", process = null) => t.call("boot", [state, encoding, process]),
+       *  and with no kernel the process captured with it (capture()'s `process`) and when it was
+       *  saved (ms since the epoch). */
+      boot: (state = cfg.initial_state, encoding = "raw", process = null, savedAt = null) => t.call("boot", [state, encoding, process, savedAt]),
       run: () => t.call("run"),
       input: (data) => t.send("input", [data]),
       resize: (cols, rows) => t.send("resize", [cols, rows]),

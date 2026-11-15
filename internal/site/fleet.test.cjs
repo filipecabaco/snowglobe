@@ -352,6 +352,28 @@ test('run: ready is retried until it passes, or the timeout', async () => {
   assert.match(r.error, /not ready after 120s/);
 });
 
+test('run: the ready check waits longer each time, within the step, and says why it failed', async () => {
+  const pauses = [];
+  let t = 0;
+  const never = fakeApi({ exits: (c) => (/wget/.test(c) ? 4 : 0) });
+  const limits = [];
+  const runCommand = never.runCommand.bind(never);
+  never.runCommand = async (req, opts) => {
+    if (/wget/.test(req.command)) limits.push(req.timeoutSeconds);
+    return runCommand(req, opts);
+  };
+  const run = F.createRun(never, F.plan(F.parse(example), runtimes), {
+    // (Polls of a running job sleep too, for no time: only the pauses between checks are kept)
+    ...fast, now: () => t, sleep: async (ms) => { if (ms > 0) pauses.push(ms); t += ms; },
+  });
+  const r = await run.runStep('snapshot/serving');
+  assert.equal(r.status, 'failed');
+  assert.deepEqual(pauses.slice(0, 5), [1000, 2000, 4000, 5000, 5000], 'a little less often each time, up to every 5s');
+  assert.ok(limits.every((l) => l >= 1 && l <= 10), `each check within what is left: ${limits}`);
+  assert.match(r.error, /not ready after 120s: its check exited 4 \(out of wget/);
+  assert.match(r.output, /\$ wget .*\nout of wget.*\n\[exit 4\]/);
+});
+
 test('run: a preview whose first request failed, and an api that throws, fail the step', async () => {
   const api = fakeApi();
   api.openPreview = async () => ({ error: 'connection refused' });
