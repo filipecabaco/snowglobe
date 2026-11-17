@@ -14,6 +14,13 @@ pub fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/// Whether this process may write `path` (access(2) with W_OK): a read-only mount says no.
+#[cfg(all(test, target_os = "linux"))]
+pub fn writable(path: &std::ffi::CStr) -> bool {
+    // SAFETY: path is a valid NUL-terminated string for the duration of the call
+    unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
+}
+
 // ---------------------------------------------------------------- the terminal
 
 /// The terminal settings of `fd`, if it is a terminal.

@@ -2101,10 +2101,9 @@ exit 7"#,
         fn root() -> Option<std::sync::MutexGuard<'static, ()>> {
             static ONE: Mutex<()> = Mutex::new(());
             // Root in a container that isn't privileged has /sys/fs/cgroup mounted read-only
-            let writable = c"/sys/fs/cgroup/cgroup.subtree_control";
             let root = crate::sys::euid() == 0
                 && Path::new("/sys/fs/cgroup/cgroup.controllers").exists()
-                && unsafe { libc::access(writable.as_ptr(), libc::W_OK) } == 0;
+                && crate::sys::writable(c"/sys/fs/cgroup/cgroup.subtree_control");
             if !root {
                 eprintln!("skipped: needs root and a writable cgroup v2");
                 return None;
