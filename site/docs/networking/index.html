@@ -51,7 +51,7 @@
                 <tr><td>HTTP, HTTPS, WebSockets</td><td><a href="#fetch"><code>--network fetch</code></a>, and a server that allows CORS</td></tr>
                 <tr><td>Other TCP (a database)</td><td><a href="#tunnels">a tunnel</a>, over a WebSocket in a page</td></tr>
                 <tr><td>A password or token</td><td><a href="#credentials">a token endpoint</a>, never a secret in the image</td></tr>
-                <tr><td>Your own machine (loopback, private addresses)</td><td><a href="#credentials"><code>--allow-private</code></a>, for builds and <code>snowglobe run</code></td></tr>
+                <tr><td>Your own machine (loopback, private addresses)</td><td><a href="#credentials"><code>--allow-private</code></a>, for builds and <code>snowglobe run</code>; never in a page</td></tr>
                 <tr><td>Another machine of the daemon</td><td><a href="#machines">a link</a></td></tr>
                 <tr><td>UDP</td><td>not possible in a page</td></tr>
               </tbody>
@@ -72,6 +72,12 @@
           <p>The browser's rules still apply:</p>
           <ul>
             <li>HTTP(S) only reaches servers that allow CORS. Others answer with a 502 that says so.</li>
+            <li>Loopback, private and link-local addresses (<code>localhost</code>, 10/8, 192.168/16, 169.254/16,
+              fc00::/7 and the like) are refused, so a guest can't reach the visitor's own machine or network.
+              The page's own origin stays reachable.</li>
+            <li>Requests carry none of the visitor's cookies, HTTP authentication or referrer: they are the guest's,
+              not the visitor's.</li>
+            <li>A request body or WebSocket message is at most 64 MiB.</li>
             <li>UDP goes nowhere.</li>
             <li>Other TCP goes only through a tunnel.</li>
           </ul>
@@ -98,7 +104,8 @@ snowglobe build ./my-app --network fetch --tunnel db.internal:5432=wss://db-prox
           </ol>
           <p>A token only replaces the password. What it opens is whatever the gateway lets any visitor do.</p>
           <p>Builds and <code>snowglobe run</code> refuse loopback and private addresses, so a guest can't reach the
-            host's own services. <code>--allow-private</code> lets them, for a tunnel endpoint on your own machine
+            host's own services. That holds through <code>HTTPS_PROXY</code> or <code>HTTP_PROXY</code> too: a private IP
+            or <code>localhost</code> handed to the proxy is refused. <code>--allow-private</code> lets them, for a tunnel endpoint on your own machine
             while developing.</p>
 
           <h2 class="h3" id="native">Outside a browser</h2>
