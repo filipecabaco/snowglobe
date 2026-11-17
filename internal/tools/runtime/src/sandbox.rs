@@ -32,16 +32,25 @@ pub struct Policy {
     pub bind: Vec<u16>,
     /// Whether the guest has a network: TCP out, DNS, TLS roots
     pub network: bool,
+    /// Directories nothing may be read from but what `read` and `write` grant: what Landlock
+    /// denies anyway (everything not granted), and Seatbelt, which otherwise denies reads only
+    /// of the home directory, must be told (a serving process's jobs root, for each job)
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub hidden: Vec<PathBuf>,
 }
 
 /// Which part of the sandbox to apply: all of it (a run), or split around fork (`serve`): the
 /// parent takes what its children inherit and still lets it fork (no_new_privs, Landlock); each
-/// child adds what forbids new processes (seccomp, Seatbelt) before it starts a thread.
+/// child adds what forbids new processes (seccomp, Seatbelt) before it starts a thread. A child
+/// that runs one job (`Job`) also narrows the filesystem to that job's own (a Landlock ruleset of
+/// its own on top of its server's, or its Seatbelt profile): its workspace, not the rest of the
+/// jobs root, where other jobs' workspaces and secrets are.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     Whole,
     Parent,
     Child,
+    Job,
 }
 
 /// Apply the policy. Returns what is in force, for the run's banner.
@@ -140,7 +149,7 @@ mod imp {
     pub fn apply(p: &Policy, stage: Stage) -> (Vec<String>, Vec<String>) {
         let mut applied = Vec::new();
         let mut missing = Vec::new();
-        if stage != Stage::Child {
+        if stage == Stage::Whole || stage == Stage::Parent {
             // Needed for both Landlock and seccomp without privileges
             if sys::no_new_privs() {
                 applied.push("no_new_privs".to_string());
@@ -153,8 +162,16 @@ mod imp {
             }
             rlimits();
         }
+        if stage == Stage::Job {
+            match landlock(p) {
+                Ok(what) => applied.push(format!("{what} for this job")),
+                Err(e) => missing.push(format!("landlock for this job ({e})")),
+            }
+        }
         if stage != Stage::Parent {
-            match seccomp() {
+            // A job (or a machine) confined to its own: no new Unix socket either, so nothing it
+            // runs can connect to its server's, or another machine's, control socket
+            match seccomp(stage == Stage::Job) {
                 Ok(()) => applied.push("seccomp".to_string()),
                 Err(e) => missing.push(format!("seccomp ({e})")),
             }
@@ -334,13 +351,13 @@ mod imp {
         v
     }
 
-    fn seccomp() -> Result<(), String> {
+    fn seccomp(no_unix: bool) -> Result<(), String> {
         // no_new_privs is set
-        sys::seccomp(&program()?).map_err(|e| e.to_string())
+        sys::seccomp(&program(no_unix)?).map_err(|e| e.to_string())
     }
 
-    /// The seccomp filter, assembled.
-    fn program() -> Result<Vec<Insn>, String> {
+    /// The seccomp filter, assembled. With `no_unix`, socket(AF_UNIX) is refused too.
+    fn program(no_unix: bool) -> Result<Vec<Insn>, String> {
         const NR: u32 = 0;
         const ARCH_OFF: u32 = 4;
         const ARG0: u32 = 16;
@@ -369,6 +386,9 @@ mod imp {
         for nr in denied() {
             at(None, JEQ, nr as u32, J::To("deny"), J::Next);
         }
+        if no_unix {
+            at(None, JEQ, libc::SYS_socket as u32, J::To("socket"), J::Next);
+        }
         at(None, JEQ, libc::SYS_clone as u32, J::To("clone"), J::Next);
         // clone3's flags are behind a pointer: have the C library fall back to clone
         at(None, JEQ, libc::SYS_clone3 as u32, J::To("nosys"), J::Next);
@@ -377,6 +397,10 @@ mod imp {
         at(Some("clone"), LD_W_ABS, ARG0, J::Next, J::Next);
         at(None, JSET, namespaces, J::To("deny"), J::Next);
         at(None, JSET, libc::CLONE_THREAD as u32, J::To("allow"), J::To("deny"));
+        if no_unix {
+            at(Some("socket"), LD_W_ABS, ARG0, J::Next, J::Next);
+            at(None, JEQ, libc::AF_UNIX as u32, J::To("deny"), J::To("allow"));
+        }
         at(Some("allow"), RET, ALLOW, J::Next, J::Next);
         at(Some("deny"), RET, errno(libc::EPERM), J::Next, J::Next);
         at(Some("nosys"), RET, errno(libc::ENOSYS), J::Next, J::Next);
@@ -453,6 +477,7 @@ mod imp {
                 socket_dir: Some("/sock".into()),
                 bind: vec![],
                 network: false,
+                hidden: vec![],
             };
             let r = rules(&p);
             let rights = |path: &str| r.iter().find(|(p, _)| p == Path::new(path)).map(|(_, a)| *a);
@@ -469,8 +494,10 @@ mod imp {
 
         #[test]
         fn the_filter_refuses_new_programs_and_processes_but_not_threads() {
-            let p = program().unwrap();
+            let p = program(false).unwrap();
             let call = |nr, arg0| verdict(&p, ARCH, nr, arg0);
+            // A server's children may make Unix sockets (a machine binds its control socket)
+            assert_eq!(call(libc::SYS_socket, libc::AF_UNIX as u32), ALLOW);
             assert_eq!(call(libc::SYS_read, 0), ALLOW);
             assert_eq!(call(libc::SYS_openat, 0), ALLOW);
             for nr in denied() {
@@ -485,6 +512,19 @@ mod imp {
             // Calls of another architecture end the process
             assert_eq!(verdict(&p, 0x1234, libc::SYS_read, 0), KILL_PROCESS);
         }
+
+        #[test]
+        fn a_confined_job_makes_no_unix_socket_but_still_tcp() {
+            let p = program(true).unwrap();
+            let call = |nr, arg0| verdict(&p, ARCH, nr, arg0);
+            assert_eq!(call(libc::SYS_socket, libc::AF_UNIX as u32), errno(libc::EPERM));
+            assert_eq!(call(libc::SYS_socket, libc::AF_INET as u32), ALLOW);
+            assert_eq!(call(libc::SYS_socket, libc::AF_INET6 as u32), ALLOW);
+            // The rest as before
+            assert_eq!(call(libc::SYS_read, 0), ALLOW);
+            assert_eq!(call(libc::SYS_clone, libc::SIGCHLD as u32), errno(libc::EPERM));
+            assert_eq!(call(libc::SYS_execve, 0), errno(libc::EPERM));
+        }
     }
 }
 
@@ -498,8 +538,11 @@ mod imp {
         format!("\"{}\"", p.display().to_string().replace('\\', "\\\\").replace('"', "\\\""))
     }
 
-    /// The Seatbelt profile for a policy, `home` the user's home directory.
-    pub fn profile(p: &Policy, home: Option<&Path>) -> String {
+    /// The Seatbelt profile for a policy, `home` the user's home directory. `job`: a job (or a
+    /// machine) confined to its own, which may connect to no Unix socket (what seccomp's refusal
+    /// of socket(AF_UNIX) is on Linux): not its server's control socket, not another machine's.
+    /// With a network, the system's DNS resolver's socket only, which the host's lookups use.
+    pub fn profile(p: &Policy, home: Option<&Path>, job: bool) -> String {
         let subpaths = |v: &[PathBuf]| v.iter().map(|d| format!("(subpath {})", quoted(d))).collect::<Vec<_>>().join(" ");
         let mut writable = p.write.clone();
         writable.extend(p.socket_dir.iter().cloned());
@@ -514,6 +557,12 @@ mod imp {
             "(deny file-write*)\n(allow file-write* (subpath \"/dev\") {})\n",
             subpaths(&writable)
         );
+        if !p.hidden.is_empty() {
+            profile += &format!("(deny file-read* {})\n", subpaths(&p.hidden));
+            if home.is_none() && !readable.is_empty() {
+                profile += &format!("(allow file-read* {})\n", subpaths(&readable));
+            }
+        }
         if let Some(home) = home {
             profile += &format!("(deny file-read* (subpath {}))\n", quoted(home));
             if !readable.is_empty() {
@@ -525,6 +574,12 @@ mod imp {
         if !p.network {
             profile += "(deny network-outbound (remote ip))\n";
         }
+        if job {
+            profile += "(deny network-outbound (remote unix-socket))\n";
+            if p.network {
+                profile += "(allow network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")))\n";
+            }
+        }
         profile
     }
 
@@ -534,7 +589,7 @@ mod imp {
             return (vec!["seatbelt per job".into()], vec![]);
         }
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let Ok(c) = CString::new(profile(p, home.as_deref())) else {
+        let Ok(c) = CString::new(profile(p, home.as_deref(), stage == Stage::Job)) else {
             return (vec![], vec!["seatbelt".into()]);
         };
         match crate::sys::seatbelt(&c) {
@@ -545,6 +600,9 @@ mod imp {
             }
             if !p.network {
                 what.push("network");
+            }
+            if stage == Stage::Job {
+                what.push("unix sockets");
             }
             (vec![format!("seatbelt ({})", what.join(", "))], vec![])
             },
@@ -574,7 +632,7 @@ pub fn parent_of(p: &Path) -> Option<PathBuf> {
 pub fn check(forked: bool) -> Result<u8, String> {
     let scratch = std::env::temp_dir().join(format!("snowglobe-sandbox-check-{}", std::process::id()));
     let allowed = scratch.join("cache");
-    let policy = Policy { read: vec![], write: vec![allowed.clone()], socket_dir: None, bind: vec![], network: false };
+    let policy = Policy { read: vec![], write: vec![allowed.clone()], socket_dir: None, bind: vec![], network: false, hidden: vec![] };
     if forked {
         println!("parent: {}", apply_stage(&policy, Stage::Parent)?);
         // Single-threaded here; the child runs the checks and exits
@@ -596,6 +654,77 @@ pub fn check(forked: bool) -> Result<u8, String> {
     }
     println!("{}", apply(&policy)?);
     Ok(attempts(&scratch, &allowed))
+}
+
+/// `snowglobe-vm sandbox-check --job`: what a job forked by a serving process can reach of the
+/// jobs root. The parent sandboxes itself as a server does (the whole root writable), makes two
+/// workspaces in it and forks; the child narrows itself to the first (`Stage::Job`) and tries
+/// the second, which another job's would be, what the server shares (its JIT profile cache, its
+/// logs) and Unix sockets. Exits non-zero if any of that worked, or if the
+/// child couldn't use its own workspace.
+pub fn check_job() -> Result<u8, String> {
+    let root = std::env::temp_dir().join(format!("snowglobe-sandbox-check-job-{}", std::process::id()));
+    let (mine, theirs) = (root.join("job-a"), root.join("job-b"));
+    for d in [&mine, &theirs] {
+        std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+    }
+    std::fs::write(theirs.join("env.json"), b"{\"SECRET\":\"x\"}").map_err(|e| e.to_string())?;
+    // The server's control socket, which a job must not reach (another job's machine's is the same)
+    let sock = root.join("server.sock");
+    let _listening = std::os::unix::net::UnixListener::bind(&sock).map_err(|e| format!("{}: {e}", sock.display()))?;
+    // And one the job may read the directory of: refused for being a Unix socket, not for its path
+    let open_dir = std::env::temp_dir().join(format!("snowglobe-sandbox-check-sock-{}", std::process::id()));
+    std::fs::create_dir_all(&open_dir).map_err(|e| format!("{}: {e}", open_dir.display()))?;
+    let open_sock = open_dir.join("other.sock");
+    let _ = std::fs::remove_file(&open_sock);
+    let _listening_too = std::os::unix::net::UnixListener::bind(&open_sock).map_err(|e| format!("{}: {e}", open_sock.display()))?;
+    // What the server writes besides the jobs root, as its JIT profile cache and --log-dir are:
+    // shared by every job it serves, of every team, so no job may write it
+    let shared = std::env::temp_dir().join(format!("snowglobe-sandbox-check-shared-{}", std::process::id()));
+    std::fs::create_dir_all(&shared).map_err(|e| format!("{}: {e}", shared.display()))?;
+    std::fs::write(shared.join("profile.bin"), b"profile").map_err(|e| e.to_string())?;
+    std::fs::write(shared.join("events.jsonl"), b"").map_err(|e| e.to_string())?;
+    let server = Policy { read: vec![root.clone()], write: vec![root.clone(), shared.clone()], socket_dir: None, bind: vec![], network: false, hidden: vec![] };
+    println!("server: {}", apply_stage(&server, Stage::Parent)?);
+    match crate::sys::fork().map_err(|e| format!("fork: {e}"))? {
+        crate::sys::Forked::Child => {
+            let job = Policy { read: vec![mine.clone(), open_dir.clone()], write: vec![mine.clone()], socket_dir: None, bind: vec![], network: false, hidden: vec![root.clone()] };
+            let code = apply_stage(&job, Stage::Job).map_or(2, |s| {
+                println!("job: {s}");
+                let mut escaped = 0u8;
+                let mut try_it = |what: String, worked: bool| {
+                    println!("  {} {what}", if worked { "ALLOWED" } else { "refused" });
+                    escaped += worked as u8;
+                };
+                try_it(format!("read {}", theirs.join("env.json").display()), std::fs::read(theirs.join("env.json")).is_ok());
+                try_it(format!("write {}", theirs.join("x").display()), std::fs::write(theirs.join("x"), b"x").is_ok());
+                try_it(format!("list {}", theirs.display()), std::fs::read_dir(&theirs).is_ok());
+                try_it(format!("list {}", root.display()), std::fs::read_dir(&root).is_ok());
+                try_it(format!("write {}", root.join("x").display()), std::fs::write(root.join("x"), b"x").is_ok());
+                try_it(format!("write {}", shared.join("profile.bin").display()), std::fs::write(shared.join("profile.bin"), b"x").is_ok());
+                let append = std::fs::OpenOptions::new().append(true).open(shared.join("events.jsonl"));
+                try_it(format!("append to {}", shared.join("events.jsonl").display()), append.is_ok());
+                try_it(format!("write {}", shared.join("new").display()), std::fs::write(shared.join("new"), b"x").is_ok());
+                // No Unix socket reached: seccomp makes none at all (Linux), Seatbelt connects to
+                // none (macOS)
+                try_it(format!("connect {}", sock.display()), std::os::unix::net::UnixStream::connect(&sock).is_ok());
+                try_it(format!("connect {}", open_sock.display()), std::os::unix::net::UnixStream::connect(&open_sock).is_ok());
+                let own = std::fs::write(mine.join("out"), b"x").is_ok() && std::fs::read(mine.join("out")).is_ok();
+                println!("  {} write and read its own workspace (must work)", if own { "ok" } else { "FAILED" });
+                if escaped == 0 && own {
+                    0
+                } else {
+                    1
+                }
+            });
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            crate::sys::exit_now(code as i32);
+        },
+        crate::sys::Forked::Parent(pid) => {
+            let code = crate::sys::wait(pid, true).and_then(|(_, code)| code);
+            Ok(code.map_or(1, |c| c as u8))
+        },
+    }
 }
 
 /// What a sandboxed run must not be able to do, tried; 0 if none of it worked.
@@ -667,8 +796,9 @@ mod tests {
             socket_dir: Some("/sock".into()),
             bind: vec![],
             network: false,
+            hidden: vec![],
         };
-        let profile = imp::profile(&p, Some(Path::new("/Users/me")));
+        let profile = imp::profile(&p, Some(Path::new("/Users/me")), false);
         let lines: Vec<&str> = profile.lines().collect();
         assert_eq!(
             lines,
@@ -686,15 +816,27 @@ mod tests {
             ]
         );
         // With a network: no network rule, and its configuration readable
-        let net = imp::profile(&Policy { network: true, ..p }, None);
+        let net = imp::profile(&Policy { network: true, ..p }, None, false);
         assert!(!net.contains("network-outbound"));
         assert!(!net.contains("file-read"), "no home, nothing to hide reads from");
     }
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn a_confined_jobs_seatbelt_connects_to_no_unix_socket() {
+        let p = Policy { read: vec![], write: vec![], socket_dir: None, bind: vec![], network: false, hidden: vec![] };
+        assert!(!imp::profile(&p, None, false).contains("unix-socket"), "a server, a whole run: as before");
+        let job = imp::profile(&p, None, true);
+        assert!(job.ends_with("(deny network-outbound (remote unix-socket))\n"), "{job}");
+        // With a network, the system's resolver only (later rules win)
+        let job = imp::profile(&Policy { network: true, ..p }, None, true);
+        assert!(job.ends_with("(deny network-outbound (remote unix-socket))\n(allow network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")))\n"), "{job}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn seatbelt_paths_are_quoted() {
-        let p = Policy { read: vec![], write: vec!["/a \"b\"\\c".into()], socket_dir: None, bind: vec![], network: true };
-        assert!(imp::profile(&p, None).contains(r#"(subpath "/a \"b\"\\c")"#));
+        let p = Policy { read: vec![], write: vec!["/a \"b\"\\c".into()], socket_dir: None, bind: vec![], network: true, hidden: vec![] };
+        assert!(imp::profile(&p, None, false).contains(r#"(subpath "/a \"b\"\\c")"#));
     }
 }

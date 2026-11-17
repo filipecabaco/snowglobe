@@ -97,7 +97,7 @@ pub fn main(args: &Args) -> Result<u8, String> {
     // The kernel and initramfs: read from the filesystem to boot, but never by the guest after
     // a restore, so they are not "boot reads"
     loop {
-        match vm.boot_from_fs(machine::CMDLINE) {
+        match vm.boot_from_fs(&machine::cmdline(args.has("memory-cgroup"))) {
             Ok(_) => break,
             Err(BootError::Need(names)) => {
                 for n in names {

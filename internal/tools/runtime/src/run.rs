@@ -260,6 +260,16 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     let socket = args.get("socket").unwrap_or(SOCKET).to_string();
 
     let env_file = args.get("env-file").map(env_file).transpose()?.unwrap_or_default();
+    // A job's limits, checked before anything is restored; the status file made now (the sandbox
+    // then needn't let this process write where it is), written as the run ends
+    let limits = crate::limits::Limits::from_args(args)?;
+    if let Some(p) = args.get("status-file") {
+        crate::limits::open_status_file(std::path::Path::new(p))?;
+    }
+    if crate::user::is_user(&site) && limits.in_guest() {
+        return Err(crate::limits::NO_KERNEL.into());
+    }
+    limits.apply_to_process()?;
 
     let controls = driver::Controls::from_args(args)?;
     let log_dir = args.get("log-dir").map(std::path::absolute).transpose().map_err(|e| format!("--log-dir: {e}"))?;
@@ -386,12 +396,19 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         // show to everyone on the machine. Read before the sandbox takes the file away
         env.extend(env_file);
         let timeout = job::timeout_flag(args.get("timeout"))?;
-        let w = job::Workspace { dir: PathBuf::from(ws), command, env, timeout };
+        let w = job::Workspace { dir: PathBuf::from(ws), command, env, timeout, limits };
         let begun = Instant::now();
         let (done, out_files) = job::run_workspace(&board, &activity, &w)?;
         let mut out = std::io::stdout();
         let _ = out.write_all(&done.output);
         let _ = out.flush();
+        let code = crate::limits::exit_code(&done);
+        crate::limits::say_why(&done, w.timeout);
+        crate::limits::write_status(&done, code);
+        // Ended for this process's memory or CPU time: nothing more of it is spent
+        if done.oom && done.status.is_none() || done.cpu_time_exceeded {
+            return Ok(driver::end("end", code));
+        }
         if timing {
             eprintln!(
                 "timing: job {:?} in {:.0} ms ({} files to out/), {:.0} ms in all",
@@ -405,10 +422,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
         if let Some(learned) = &learned {
             learned.learn(&runner);
         }
-        if done.status.is_none() && !done.cancelled {
-            eprintln!("snowglobe: the job ran out of time ({}s)", w.timeout.as_secs_f64());
-        }
-        return Ok(driver::end("end", job::exit_code(done.status.map(i64::from))));
+        return Ok(driver::end("end", code));
     }
 
     // The control socket: attach and exec from other sessions
@@ -536,6 +550,7 @@ fn policy(args: &Args, site: &Site, controls: &driver::Controls, log_dir: Option
         socket_dir: sandbox::parent_of(std::path::Path::new(socket)),
         bind: args.all("forward").iter().filter_map(|f| forward(f).ok()).map(|(_, listen, _)| listen).collect(),
         network,
+        hidden: Vec::new(),
     }
 }
 
@@ -612,7 +627,16 @@ fn serve(session: &Session, stream: UnixStream) {
         },
         Some("job") => {
             // A job on the serial shell: answered with one JSON line
-            let answer = match job::from_json(&request).and_then(|r| job::run(&session.board, &session.activity, &r)) {
+            let answer = match job::from_json(&request)
+                .and_then(|r| crate::limits::for_instance(&r.limits, crate::machine::egress()).map(|_| r))
+                .and_then(|mut r| {
+                    // A machine's job: killed past its limits (the machine goes on), and when its
+                    // client goes
+                    r.instance = true;
+                    job::watch_cancel(&writer, r.cancel.clone());
+                    job::run(&session.board, &session.activity, &r)
+                })
+            {
                 Ok(done) => job::to_json(&done),
                 Err(e) => json!({ "error": e }),
             };

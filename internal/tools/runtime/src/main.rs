@@ -19,6 +19,7 @@ mod driver;
 mod image;
 mod job;
 mod lifeline;
+mod limits;
 mod log;
 mod machine;
 mod profile;
@@ -42,16 +43,20 @@ fn usage() -> ExitCode {
         "usage:
   snowglobe-vm snapshot <system dir> [--memory MB] [--cpus N] [--network none|fetch]
                         [--free-page-reporting]   (the snapshot leaves out memory the guest freed)
-                        [--ready TEXT] [--exercise COMMAND ...]
+                        [--ready TEXT] [--exercise COMMAND ...] [--sandbox] [--memory-cgroup]
                         [--tunnel [HOST:]PORT=URL ...] [--egress none|internet|private] [--allow-private]
                         [--user PROGRAM --user ARG ... [--user-env NAME=VALUE ...] [--user-cwd DIR] [--user-hostname NAME]]   (no kernel: the program runs on its own)
   snowglobe-vm run <site dir> [--blobs DIR] [--detached] [--socket PATH] [--forward PORT:GUEST ...]
-                   [--tunnel [HOST:]PORT=URL ...] [--egress none|internet|private] [--allow-private] [--record-reads FILE]
+                   [--tunnel [HOST:]PORT=URL ...] [--egress none|https|internet|private] [--allow-private] [--record-reads FILE]
                    [--workspace DIR --cmd COMMAND [--env K=V ...] [--env-file JSON] [--timeout SECS]]
                    [--max-runtime SECS] [--stop-file PATH ...] [--log-dir DIR]
                    [--jit on|off]   (over the site's own choice; ARMLESS_JIT=off as well)
                    [--serve SOCKET --jobs-root DIR [--max-jobs N]]   (jobs forked from one restore)
                    [--server SOCKET --workspace DIR --cmd COMMAND ...]  (a job for --serve)
+                   a job's limits (each also a field of a --serve request):
+                   [--disk-limit MB] [--max-rss MB] [--memory-limit MB] [--cpus-limit N] [--pids-limit N]
+                   [--cpu-time S] [--output-limit BYTES] [--copy-limit MB] [--read-only-in]
+                   [--egress none|https|internet|private] [--status-file PATH]
   (a bundle takes run's flags itself: ./site --workspace DIR --cmd COMMAND)
   snowglobe-vm exec [--socket PATH] <command>
   snowglobe-vm attach [--socket PATH]"
@@ -102,7 +107,9 @@ impl Args {
     }
 }
 
-pub const RUN_FLAGS: &[&str] = &["egress", "max-runtime", "stop-file", "log-dir", "blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "max-machines", "state", "server", "jit", "cpus"];
+pub const RUN_FLAGS: &[&str] = &["egress", "max-runtime", "stop-file", "log-dir", "blobs", "socket", "forward", "tunnel", "record-reads", "workspace", "cmd", "env", "env-file", "timeout", "serve", "jobs-root", "max-jobs", "max-machines", "state", "server", "jit", "cpus",
+    // A job's limits (limits.rs) and where its result is written
+    "disk-limit", "max-rss", "memory-limit", "cpus-limit", "pids-limit", "cpu-time", "output-limit", "copy-limit", "status-file"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -128,6 +135,7 @@ fn main() -> ExitCode {
                 .and_then(|a| snapshot::main(&a))
         },
         "run" => Args::parse(rest, RUN_FLAGS).and_then(|a| run::main(&a, None)),
+        "sandbox-check" if rest.iter().any(|a| a == "--job") => sandbox::check_job(),
         "sandbox-check" => sandbox::check(rest.iter().any(|a| a == "--forked")),
         "exec" => {
             // Everything after the flags is the command, as typed
@@ -150,6 +158,7 @@ fn finish(result: Result<u8, String>) -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
             term::restore();
+            limits::write_status_error(&e);
             eprintln!("snowglobe-vm: {e}");
             ExitCode::from(1)
         },

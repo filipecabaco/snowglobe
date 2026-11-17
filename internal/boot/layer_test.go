@@ -18,6 +18,14 @@ func TestFilesBootWithBusyBox(t *testing.T) {
 		!strings.Contains(off["etc/inittab"], "hvc0::respawn:") || !strings.Contains(off["etc/inittab"], "ttyS0::respawn:") {
 		t.Fatalf("inittab: %q", off["etc/inittab"])
 	}
+	// The serial shell jobs are typed into: no echo (no line editor, which sleeps 20 ms after a
+	// line when the terminal hasn't answered its cursor query) and no history file
+	if !strings.Contains(off["etc/inittab"], "ttyS0::respawn:/sbin/getty -n -i -l /usr/local/sbin/snowglobe-shell ") {
+		t.Fatalf("ttyS0's shell: %q", off["etc/inittab"])
+	}
+	if sh := off["usr/local/sbin/snowglobe-shell"]; !strings.Contains(sh, "stty -echo") || !strings.Contains(sh, "HISTFILE=/dev/null") || !strings.HasSuffix(sh, "exec /bin/sh\n") {
+		t.Fatalf("snowglobe-shell: %q", sh)
+	}
 	if !strings.Contains(off["usr/local/bin/snowglobe-console"], "exec 'python3'") {
 		t.Fatalf("console: %q", off["usr/local/bin/snowglobe-console"])
 	}

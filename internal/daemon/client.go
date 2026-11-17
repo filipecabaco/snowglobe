@@ -375,7 +375,15 @@ func (c *Client) RemoveMachine(name string) error {
 
 func (c *Client) Job(name string, req control.JobRequest) (*control.JobResult, error) {
 	var res control.JobResult
-	return &res, c.call("POST", "/v1/machines/"+url.PathEscape(name)+"/jobs", req, &res)
+	return jobAnswer(&res, c.call("POST", "/v1/machines/"+url.PathEscape(name)+"/jobs", req, &res))
+}
+
+// jobAnswer is a job's answer: one that couldn't run (200, with an error) is its error.
+func jobAnswer(res *control.JobResult, err error) (*control.JobResult, error) {
+	if err == nil && res.Error != "" {
+		return res, &control.JobError{Msg: res.Error}
+	}
+	return res, err
 }
 
 func (c *Client) Snapshot(machine, name string) (*Snapshot, error) {
@@ -419,7 +427,7 @@ func (c *Client) RemoveService(name string) error {
 
 func (c *Client) ServiceJob(name string, req control.JobRequest) (*control.JobResult, error) {
 	var res control.JobResult
-	return &res, c.call("POST", "/v1/services/"+url.PathEscape(name)+"/jobs", req, &res)
+	return jobAnswer(&res, c.call("POST", "/v1/services/"+url.PathEscape(name)+"/jobs", req, &res))
 }
 
 func (c *Client) Stats() (*Stats, error) {
@@ -467,7 +475,7 @@ func (c *Client) Events(ctx context.Context, after int64, f func(Event) bool) er
 
 func (c *Client) TemplateJob(name string, req control.JobRequest) (*control.JobResult, error) {
 	var res control.JobResult
-	return &res, c.call("POST", "/v1/templates/"+url.PathEscape(name)+"/jobs", req, &res)
+	return jobAnswer(&res, c.call("POST", "/v1/templates/"+url.PathEscape(name)+"/jobs", req, &res))
 }
 
 // Builds is every build, newest first.

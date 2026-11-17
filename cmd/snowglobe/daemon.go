@@ -176,7 +176,7 @@ func daemonClient() (*daemon.Client, error) {
 	return c, nil
 }
 
-// runTemplate: template add <site> [--name T] [--max-machines N] | ls | rm <T>
+// runTemplate: template add <site> [--name T] [--max-machines N] [--warm CMD]... [--warm-runs N] | ls | rm <T>
 func runTemplate(args []string) error {
 	if len(args) == 0 {
 		return errors.New("template takes add, ls or rm")
@@ -197,6 +197,11 @@ func runTemplate(args []string) error {
 			req.Idle = daemon.Duration(d)
 			return err
 		})
+		fs.Func("warm", "", func(v string) error {
+			req.Warm = append(req.Warm, v)
+			return nil
+		})
+		fs.IntVar(&req.WarmRuns, "warm-runs", 0, "")
 		positional, err := parse(fs, args[1:])
 		if err != nil {
 			return err
@@ -245,12 +250,13 @@ func runTemplate(args []string) error {
 	return nil
 }
 
-// runUp: up <template> [--name N] [-p [IP:][HOST:]GUEST]... [--label K=V]...
+// runUp: up <template> [--name N] [-p [IP:][HOST:]GUEST]... [--label K=V]... [--egress E]
 func runUp(args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	var req daemon.Up
 	fs.StringVar(&req.Name, "name", "", "")
 	fs.StringVar(&req.Snapshot, "snapshot", "", "")
+	fs.StringVar(&req.Egress, "egress", "", "")
 	fs.Func("ttl", "", func(v string) error {
 		d, err := time.ParseDuration(v)
 		req.TTL = daemon.Duration(d)

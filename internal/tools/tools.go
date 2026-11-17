@@ -240,8 +240,8 @@ func NativeSource(version string) *native.Image {
 //
 // After the snapshot it types each exercise command into the app and records what it reads.
 func (i *Image) Snapshot(out string, memoryMB int, ready string, exercises []string, network string,
-	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox bool, user *UserProgram) error {
-	args := append([]string{VM}, SnapshotArgs("/out/system", memoryMB, ready, exercises, network, tunnels, allowPrivate, cpus, buildCPUs, sandbox, user)...)
+	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox, memoryCgroup bool, user *UserProgram) error {
+	args := append([]string{VM}, SnapshotArgs("/out/system", memoryMB, ready, exercises, network, tunnels, allowPrivate, cpus, buildCPUs, sandbox, memoryCgroup, user)...)
 	var extra []string
 	if network != "none" {
 		extra = NetworkArgs()
@@ -267,8 +267,10 @@ type UserProgram struct {
 // SnapshotArgs are snowglobe-vm's arguments to boot the site's system directory and snapshot it,
 // in the tools container or natively. With user (a program and its arguments), there is no kernel to
 // boot: the program runs, and is snapshotted, on its own (snowglobe build --kernel none).
+// memoryCgroup boots the guest with its kernel's memory controller on (what memory_limit_mb
+// needs; off, a fork-heavy job runs ~5% faster).
 func SnapshotArgs(system string, memoryMB int, ready string, exercises []string, network string,
-	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox bool, user *UserProgram) []string {
+	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox, memoryCgroup bool, user *UserProgram) []string {
 	args := []string{"snapshot", system,
 		"--memory", fmt.Sprint(memoryMB), "--network", network,
 		"--cpus", fmt.Sprint(cpus), "--build-cpus", fmt.Sprint(buildCPUs),
@@ -278,6 +280,9 @@ func SnapshotArgs(system string, memoryMB int, ready string, exercises []string,
 	}
 	if sandbox {
 		args = append(args, "--sandbox")
+	}
+	if memoryCgroup {
+		args = append(args, "--memory-cgroup")
 	}
 	for _, e := range exercises {
 		args = append(args, "--exercise", e)

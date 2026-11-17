@@ -43,6 +43,37 @@ func TestTheKernelHasArmlesssMachineBuiltIn(t *testing.T) {
 	}
 }
 
+// A job's limits (--memory-limit, --cpus-limit, --pids-limit) are a cgroup v2 of its own in the
+// guest: the kernel has the controllers they set, and init mounts the hierarchy
+func TestTheKernelHasTheCgroupControllersAJobsLimitsUse(t *testing.T) {
+	config := kernelConfig(t)
+	for _, opt := range []string{"CGROUPS", "MEMCG", "CGROUP_PIDS", "CGROUP_SCHED", "FAIR_GROUP_SCHED", "CFS_BANDWIDTH"} {
+		if config["CONFIG_"+opt] != "y" {
+			t.Errorf("CONFIG_%s is not built in", opt)
+		}
+	}
+	init := ""
+	for _, f := range Files(Console{}, "none", nil) {
+		if f.Name == "usr/local/sbin/snowglobe-init" {
+			init = string(f.Data)
+		}
+	}
+	if !strings.Contains(init, "mount -t cgroup2 cgroup2 /sys/fs/cgroup") {
+		t.Errorf("init doesn't mount cgroup2:\n%s", init)
+	}
+	// The controllers handed down and the jobs' cgroup made at boot, not by each job
+	for _, want := range []string{`for c in memory cpu pids; do echo "+$c" >/sys/fs/cgroup/cgroup.subtree_control`, "mkdir /sys/fs/cgroup/sgjob"} {
+		if !strings.Contains(init, want) {
+			t.Errorf("init doesn't %q:\n%s", want, init)
+		}
+	}
+	// SCHED_MM_CID, which CGROUPS turns on and Kconfig can't turn off, is patched off (and checked)
+	d := string(kernelDockerfile)
+	if !strings.Contains(d, "s/def_bool y/def_bool n/") || !strings.Contains(d, "! grep -q '^CONFIG_SCHED_MM_CID=y' .config") {
+		t.Error("the kernel build doesn't turn SCHED_MM_CID off")
+	}
+}
+
 // The kernel's source is the one release, checked
 func TestTheKernelsSourceIsPinned(t *testing.T) {
 	d := string(kernelDockerfile)

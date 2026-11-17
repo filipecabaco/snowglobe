@@ -98,6 +98,48 @@ echo 'sum(i*i for i in range(10))' | ./python</pre>
           <pre>./toolkit --workspace job --cmd 'sh main.sh' --env 'N=42'
 ./toolkit --serve /run/toolkit.sock --jobs-root /var/lib/jobs &amp;
 ./toolkit --server /run/toolkit.sock --workspace /var/lib/jobs/1 --cmd 'sh main.sh'</pre>
+          <h3 class="h4" id="job-limits">A job's limits</h3>
+          <p>Past its <code>--timeout</code>, nothing a job may use is limited unless asked. Each limit is a flag of
+            a one-shot job and the same field of a request to <code>--serve</code>, where every forked job has its
+            own:</p>
+          <ul>
+            <li><code>--disk-limit MB</code> (<code>disk_limit_mb</code>): what the guest's file writes may hold
+              (its filesystem is in the process's memory). Past it, writes fail with ENOSPC and <code>df</code>
+              shows what is left. What the job prints has a limit of its own, outside it.</li>
+            <li><code>--max-rss MB</code> (<code>max_rss_mb</code>): the process's (or the fork's) resident
+              memory. Past it the job ends at once, out of memory (exit 137).</li>
+            <li><code>--memory-limit MB</code>, <code>--cpus-limit N</code>, <code>--pids-limit N</code>
+              (<code>memory_limit_mb</code>, <code>cpus_limit</code>, <code>pids_limit</code>): the command runs in
+              a cgroup v2 in the guest, made at boot and reused, so a limit costs a job a few writes, not a
+              process. A guest OOM kill ends it with 137, and whatever the job left running ends with it. The
+              memory limit needs a site built with <code>snowglobe build --memory-limits</code> (its guest
+              boots with the kernel's memory controller, which costs fork-heavy jobs about 5%); the CPU and
+              process limits work on any site built by this snowglobe. A guest that can't enforce one (a site
+              built without it, before its kernel had cgroups, or with no kernel) fails the job, saying
+              so.</li>
+            <li><code>--cpu-time S</code> (<code>cpu_time_s</code>): the process's CPU time, every thread. Past it
+              the job ends (exit 152); RLIMIT_CPU backs it up.</li>
+            <li><code>--output-limit BYTES</code> (<code>output_limit</code>): past it the command is killed and its
+              output cut there (exit 153).</li>
+            <li><code>--copy-limit MB</code> (<code>copy_limit_mb</code>, default 2048): the workspace copied in,
+              and <code>out/</code> copied back, each. <code>out/</code> comes back even from a job out of time,
+              and is never written through a symbolic link.</li>
+            <li><code>--read-only-in</code> (<code>read_only_in</code>): <code>in/</code> is mounted read-only in
+              the guest.</li>
+            <li><code>--egress none|https|internet|private</code> (<code>egress</code>): <code>https</code> is TCP
+              443 to public addresses only. A forked job's is at most its server's.</li>
+          </ul>
+          <p><code>--status-file PATH</code> writes the result as JSON as the run ends: <code>status</code> (null if
+            the command didn't end by itself), <code>exit</code>, <code>timed_out</code>, <code>killed</code>,
+            <code>oom</code>, <code>output_truncated</code>, <code>disk_full</code>, <code>cpu_time_exceeded</code>,
+            <code>out_truncated</code>, <code>ms</code>. A server's answer carries the same fields. Each forked job
+            is confined to its own workspace (Landlock, or Seatbelt), not the rest of the jobs root, can't
+            connect to any Unix socket, and is cancelled when its client's connection closes. A job writes
+            nothing its server shares with other jobs: a server's <code>--log-dir</code> has the server's own
+            events (each job's log handles are closed before it runs), and the JIT profile a server starts
+            from is only read, never added to by its jobs (a single-tenant <code>snowglobe run</code> or
+            one-shot job still adds to it).</p>
+          <pre>./toolkit --workspace job --cmd 'sh main.sh' --memory-limit 256 --disk-limit 512 --status-file job.json</pre>
 
           <h2 class="h3" id="shared-memory">Instances share their memory</h2>
           <p>Native instances of one site don't each hold a copy of its snapshot:</p>

@@ -63,6 +63,10 @@ type Options struct {
 	// Sandbox snapshots for running natively (snowglobe run, a bundle) rather than in a page:
 	// the guest keeps its file cache, and exercises run before the snapshot instead of after
 	Sandbox bool
+	// MemoryLimits boots the guest with its kernel's memory cgroup controller on, so a job may
+	// ask for memory_limit_mb (--memory-limits). Off by default: accounting every guest page to
+	// a cgroup costs fork-heavy jobs ~5% in the emulator. cpus_limit and pids_limit need nothing
+	MemoryLimits bool
 	// Builder is "docker" (the default: Docker builds and exports the image, the tools image
 	// boots and snapshots it) or "native" (no Docker: the image comes from its registry or an
 	// archive, the boot layer is written rather than built, and snowglobe-vm runs here). Native
@@ -310,7 +314,7 @@ func Run(o Options, version string) error {
 			}
 			if nativeBuild {
 				cmd := exec.Command(vm, tools.SnapshotArgs(filepath.Join(out, "system"), s.Memory, s.Ready, s.Exercise,
-					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, userProgram(s))...)
+					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, o.MemoryLimits, userProgram(s))...)
 				cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 				// It ends with this build, however the build ends (a SIGTERM, a kill -9, the
 				// daemon that started the build stopping): never left booting on its own
@@ -319,7 +323,7 @@ func Run(o Options, version string) error {
 				}
 				return cmd.Run()
 			}
-			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, userProgram(s))
+			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, o.MemoryLimits, userProgram(s))
 		}
 		return retryStalled(snapshot, os.Stderr)
 	}); err != nil {

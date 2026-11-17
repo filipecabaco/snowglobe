@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use armless::dev::{DeviceConfig, Event};
 use armless::native::{Egress, HostOptions, NativeHost, Tunnel};
+
+use crate::limits::Egress as Egress_;
 use armless::platform::{Clock, NativePlatform};
 use armless::vm::{Config, Vm};
 
@@ -14,6 +16,24 @@ use crate::site::Site;
 /// The guest's kernel command line: the root filesystem is the 9p device.
 pub const CMDLINE: &str = "rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose \
                            modules=virtio_pci console=ttyS0 init_on_free=on";
+
+/// The command line a site boots with. Without `memory_cgroup` (`snapshot --memory-cgroup`,
+/// `snowglobe build --memory-limits`) the kernel's memory controller is off: every page the
+/// guest allocates or frees is then not accounted to a cgroup, which costs a fork-heavy job ~5%
+/// in the emulator, and a job asking for `memory_limit_mb` there fails saying so. The CPU and
+/// pids controllers cost nothing measurable and are always there.
+///
+/// A site built for limits also expedites RCU grace periods: the first move of a process into a
+/// cgroup after a restore (every limited job's) waits for one, ~6 ms in the emulator, ~0.5 ms
+/// expedited on its one CPU. It costs other jobs ~1.5 ms (results-exclave-2026-11.md), which a
+/// site whose jobs take no memory limit needn't pay.
+pub fn cmdline(memory_cgroup: bool) -> String {
+    if memory_cgroup {
+        format!("{CMDLINE} rcupdate.rcu_expedited=1")
+    } else {
+        format!("{CMDLINE} cgroup_disable=memory")
+    }
+}
 
 /// Everything here must match between the snapshot and every restore of it.
 #[derive(Clone)]
@@ -353,6 +373,22 @@ pub struct Net {
     pub allow_private: bool,
     /// Nothing leaves at all but links (`--egress none`)
     pub deny_all: bool,
+    /// Only these TCP ports are reached (empty: any): `--egress https` is 443
+    pub ports: Vec<u16>,
+}
+
+/// This process's machine's egress (`host` sets it): what every job on its control socket has
+static EGRESS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(Egress_::None as u8);
+
+/// How far this process's machine reaches (none until its host side has started, or without a
+/// network)
+pub fn egress() -> Egress_ {
+    match EGRESS.load(std::sync::atomic::Ordering::SeqCst) {
+        x if x == Egress_::Https as u8 => Egress_::Https,
+        x if x == Egress_::Internet as u8 => Egress_::Internet,
+        x if x == Egress_::Private as u8 => Egress_::Private,
+        _ => Egress_::None,
+    }
 }
 
 impl Net {
@@ -380,20 +416,54 @@ impl Net {
                 .collect::<Option<_>>()
                 .ok_or("run.json: tunnels must be { host, port, url }")?
         };
-        // --egress none | internet | private (--allow-private is private)
-        let (allow_private, deny_all) = match args.get("egress") {
-            None | Some("internet") => (args.has("allow-private"), false),
-            Some("private") => (true, false),
-            Some("none") => (false, true),
-            Some(other) => return Err(format!("--egress {other}: none, internet or private")),
+        // --egress none | https | internet | private (--allow-private is private)
+        let egress = match args.get("egress") {
+            None | Some("internet") if args.has("allow-private") => Egress_::Private,
+            None => Egress_::Internet,
+            Some(e) => Egress_::parse(e).map_err(|e| format!("--{e}"))?,
         };
-        Ok(Net { tunnels, allow_private, deny_all })
+        Ok(Net { tunnels, ..Net::default() }.with_egress(egress))
+    }
+
+    /// How far the guest's TCP reaches (`limits::Egress`)
+    pub fn egress(&self) -> Egress_ {
+        if self.deny_all {
+            Egress_::None
+        } else if self.allow_private {
+            Egress_::Private
+        } else if self.ports == [443] {
+            Egress_::Https
+        } else {
+            Egress_::Internet
+        }
+    }
+
+    fn with_egress(self, e: Egress_) -> Net {
+        Net {
+            deny_all: e == Egress_::None,
+            allow_private: e == Egress_::Private,
+            ports: if e == Egress_::Https { vec![443] } else { Vec::new() },
+            ..self
+        }
+    }
+
+    /// A job's own egress, no more than this one's (what a serving process was started with is
+    /// the most any of its jobs gets).
+    pub fn narrowed(self, e: Option<Egress_>) -> Result<Net, String> {
+        let Some(e) = e else { return Ok(self) };
+        let most = self.egress();
+        if e > most {
+            return Err(format!("egress {}: this server allows at most {} (its --egress)", e.name(), most.name()));
+        }
+        Ok(self.with_egress(e))
     }
 }
 
 /// The host side of the machine: the site's blobs, the network if the site has one.
 pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, activity: &Arc<Activity>) -> NativeHost {
     *activity.tunnels.lock().unwrap() = net.tunnels.clone();
+    let e = if network == "fetch" { net.egress() } else { Egress_::None };
+    EGRESS.store(e as u8, std::sync::atomic::Ordering::SeqCst);
     let a = activity.clone();
     NativeHost::spawn(
         board.clone(),
@@ -403,7 +473,7 @@ pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, a
             network: network == "fetch",
             // Direct, or through the proxy the environment names: sandboxes that only let HTTPS
             // out through a (TLS-intercepting) proxy work too
-            egress: Egress { allow_private: net.allow_private, deny_all: net.deny_all, ..Egress::from_env() },
+            egress: Egress { allow_private: net.allow_private, deny_all: net.deny_all, ports: net.ports, ..Egress::from_env() },
             tunnels: net.tunnels,
         },
         Box::new(move |e| a.observe(e)),
@@ -453,6 +523,13 @@ pub fn enable_jit(runner: &armless::runner::Runner, cpus: usize) {
 mod tests {
     use super::*;
     use crate::testing::{self, site, EMPTY_FS};
+
+    #[test]
+    fn a_site_built_for_limits_boots_with_the_memory_controller() {
+        assert!(cmdline(false).ends_with(" cgroup_disable=memory") && cmdline(false).starts_with(CMDLINE));
+        let limits = cmdline(true);
+        assert!(limits.starts_with(CMDLINE) && !limits.contains("cgroup_disable") && limits.contains("rcupdate.rcu_expedited=1"), "{limits}");
+    }
 
     #[test]
     fn the_jit_is_the_runs_choice_then_the_hosts_then_the_sites() {
@@ -655,6 +732,33 @@ mod tests {
         assert!(!n.deny_all && n.allow_private);
         assert!(!Net::from_args(&args(&[]), None).unwrap().deny_all);
         assert!(Net::from_args(&args(&["--egress", "sometimes"]), None).is_err());
+        let n = Net::from_args(&args(&["--egress", "internet", "--allow-private"]), None).unwrap();
+        assert_eq!(n.egress(), Egress_::Private);
+    }
+
+    #[test]
+    fn egress_https_is_port_443_to_public_addresses_only() {
+        let n = Net::from_args(&args(&["--egress", "https"]), None).unwrap();
+        assert!(!n.deny_all && !n.allow_private);
+        assert_eq!(n.ports, [443]);
+        assert_eq!(n.egress(), Egress_::Https);
+        assert!(Net::from_args(&args(&[]), None).unwrap().ports.is_empty());
+    }
+
+    #[test]
+    fn a_jobs_egress_is_at_most_its_servers() {
+        let server = || Net::from_args(&args(&[]), None).unwrap();
+        assert_eq!(server().egress(), Egress_::Internet);
+        assert_eq!(server().narrowed(None).unwrap().egress(), Egress_::Internet);
+        for e in [Egress_::None, Egress_::Https, Egress_::Internet] {
+            assert_eq!(server().narrowed(Some(e)).unwrap().egress(), e);
+        }
+        let e = server().narrowed(Some(Egress_::Private)).err().unwrap();
+        assert_eq!(e, "egress private: this server allows at most internet (its --egress)");
+        let none = Net::from_args(&args(&["--egress", "none"]), None).unwrap();
+        assert!(none.narrowed(Some(Egress_::Https)).is_err());
+        let private = Net::from_args(&args(&["--egress", "private"]), None).unwrap();
+        assert_eq!(private.narrowed(Some(Egress_::Https)).unwrap().ports, [443]);
     }
 
     #[test]

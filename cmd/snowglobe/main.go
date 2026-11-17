@@ -192,16 +192,22 @@ Usage:
   snowglobe template add <site> [--name T]           restore a site once, for machines to be forked
                      [--max-machines N]              from; template ls lists them, template rm T
                      [--snapshot S] [--idle 30m]     removes one and its machines. --snapshot
-                                                     restores a saved machine instead of the site;
+                     [--warm CMD]... [--warm-runs N] restores a saved machine instead of the site;
                                                      --idle stops its server after that long with
-                                                     no machine, and the next use restores it
+                                                     no machine, and the next use restores it.
+                                                     --warm runs CMD on the site N times (3) first,
+                                                     one-shot and trusted, so the JIT profile its
+                                                     jobs start from (read only) has it compiled
   snowglobe up <template> [--name N] [-p PORT]...    a machine forked from a template in tens of
                 [--label K=V]...                     milliseconds, sharing its memory: it lasts
                                                      until stopped, keeps what it writes, and its
                                                      ports are forwarded (-p 8000 picks a host
                                                      port, -p 8080:8000 or IP:8080:8000 names one);
                                                      --snapshot S starts it from a saved machine;
-                                                     --ttl 1h stops it after that long
+                                                     --ttl 1h stops it after that long; --egress
+                                                     none|https|internet|private narrows its
+                                                     network (at most its template's) for every
+                                                     job on it
   snowglobe snapshot save <machine> [--name S]       save a machine whole (memory, processes, the
                                                      files it wrote), to start machines from again;
                                                      snapshot ls, snapshot rm S
@@ -296,6 +302,9 @@ Build flags:
                   (SNOWGLOBE_BUILDER sets the default)
   --sandbox       snapshot for running natively (run, bundle) rather than in a page: the guest
                   keeps its file cache, and exercises (optional) run before the snapshot
+  --memory-limits boot the guest with its kernel's memory cgroup controller, so a job may ask
+                  for memory_limit_mb (off: such a job fails, saying so; fork-heavy jobs run
+                  ~5% faster). cpus_limit and pids_limit work either way
   --no-chunks     store every guest file in one blob, however large (default: files of 2 MiB
                   and more are split into content-defined chunks, so a read fetches only what it
                   covers and sites share identical chunks; the page then needs armless 0.3.0)
@@ -498,6 +507,7 @@ func runBuild(args []string) error {
 	fs.BoolVar(&o.AllowPrivate, "allow-private", false, "")
 	fs.IntVar(&o.CPUs, "cpus", 0, "")
 	fs.BoolVar(&o.Sandbox, "sandbox", false, "")
+	fs.BoolVar(&o.MemoryLimits, "memory-limits", false, "")
 	fs.StringVar(&o.Builder, "builder", os.Getenv("SNOWGLOBE_BUILDER"), "")
 	fs.IntVar(&o.BuildCPUs, "build-cpus", 0, "")
 	fs.BoolVar(&o.NoChunks, "no-chunks", false, "")

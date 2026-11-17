@@ -310,23 +310,23 @@ func TestSnapshotRunsTheVMInTheToolsImage(t *testing.T) {
 	log := fakeDocker(t, "exit 0")
 	img := &Image{tag: "snowglobe-tools:x"}
 	tunnels := []tunnel.Tunnel{{Host: "db", Port: 5432, URL: "wss://gw/db"}}
-	if err := img.Snapshot("/site", 256, "$ ", []string{"ls", "env"}, "fetch", tunnels, true, 2, 4, true, nil); err != nil {
+	if err := img.Snapshot("/site", 256, "$ ", []string{"ls", "env"}, "fetch", tunnels, true, 2, 4, true, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	user := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
 	want := "run --rm --user " + user + " -v /site:/out -e SNOWGLOBE_BOOT_STALL_SECS=30 -e ARMLESS_JIT=off " +
 		"-e HTTPS_PROXY=http://localhost:3128 --network host snowglobe-tools:x " + VM + " snapshot /out/system " +
-		"--memory 256 --network fetch --cpus 2 --build-cpus 4 --cols 90 --rows 30 --ready $  --sandbox " +
+		"--memory 256 --network fetch --cpus 2 --build-cpus 4 --cols 90 --rows 30 --ready $  --sandbox --memory-cgroup " +
 		"--exercise ls --exercise env --free-page-reporting --tunnel db:5432=wss://gw/db --allow-private"
 	if got := calls(t, log); len(got) != 1 || got[0] != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 	// Offline: none of the host's network settings
 	log = fakeDocker(t, "exit 0")
-	if err := img.Snapshot("/site", 256, "", nil, "none", nil, false, 1, 4, false, nil); err != nil {
+	if err := img.Snapshot("/site", 256, "", nil, "none", nil, false, 1, 4, false, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := calls(t, log)[0]; strings.Contains(got, "HTTPS_PROXY") || strings.Contains(got, "--ready") || strings.Contains(got, "--sandbox") {
+	if got := calls(t, log)[0]; strings.Contains(got, "HTTPS_PROXY") || strings.Contains(got, "--ready") || strings.Contains(got, "--sandbox") || strings.Contains(got, "--memory-cgroup") {
 		t.Errorf("offline: %s", got)
 	}
 }
