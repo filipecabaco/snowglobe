@@ -176,6 +176,8 @@
         wasm_smp: manifest.armless.wasm_smp ? abs(manifest.armless.wasm_smp) : undefined,
         memory_mb: r.memory_mb, cpus,
         jit: r.jit !== false,
+        // Saved with free page reporting: restored with the same device, or not at all
+        ...(r.free_page_reporting ? { free_page_reporting: true } : {}),
         filesystem: { json: "system/filesystem.json", baseurl: r.baseurl ?? "system/filesystem/" },
         initial_state: "system/state.bin.zst",
         warm: "system/warm.pack",

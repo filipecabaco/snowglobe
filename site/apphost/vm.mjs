@@ -34,6 +34,8 @@ export class AppHostVm {
     const runtimeBase = new URL(runtime.base,location.href);
     const config = {
       name:'apphost', memory_mb:runtime.memory_mb, cpus:runtime.cpus,
+      // Saved with free page reporting: restored with the same device, or not at all
+      ...(runtime.free_page_reporting ? {free_page_reporting:true} : {}),
       wasm:this.manifest.armless.wasm ? absolute(this.manifest.armless.wasm) : undefined,
       wasm_smp:this.manifest.armless.wasm_smp ? absolute(this.manifest.armless.wasm_smp) : undefined,
       filesystem:{json:'system/filesystem.json',baseurl:runtime.baseurl || 'system/filesystem/'},

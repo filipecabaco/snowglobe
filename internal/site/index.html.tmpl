@@ -237,6 +237,10 @@
       memory_mb: {{.MemoryMB}},
       cpus,
       jit: {{.JIT}},
+      {{- if .FreePageReporting}}
+      // Saved with free page reporting (the memory the guest freed left out): the same device here
+      free_page_reporting: true,
+      {{- end}}
       // armless samples its memory only when asked (?debug=memory); see memory-debug.js
       debug: SnowglobeMemoryDebug.enabled(),
       filesystem: { json: versioned("system/filesystem.json"), baseurl: "system/filesystem/" },

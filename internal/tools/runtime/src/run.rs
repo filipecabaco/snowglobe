@@ -227,6 +227,8 @@ pub fn site_spec(site: &Site) -> Result<(serde_json::Value, Spec, String), Strin
         memory_mb: info["memory_mb"].as_u64().unwrap_or(512) as usize,
         cpus: info["cpus"].as_u64().unwrap_or(1) as usize,
         network: info["network"].as_str().unwrap_or("none").to_string(),
+        // Missing: a site built before free page reporting, saved without the device
+        free_page_reporting: info["free_page_reporting"].as_bool().unwrap_or(false),
     };
     let title = info["title"].as_str().unwrap_or("snowglobe").to_string();
     Ok((info, spec, title))

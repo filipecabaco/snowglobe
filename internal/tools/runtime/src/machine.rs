@@ -22,6 +22,10 @@ pub struct Spec {
     pub cpus: usize,
     /// "none" or "fetch"
     pub network: String,
+    /// A virtio-balloon through which the guest's kernel reports the memory it freed, which is
+    /// zeroed so a snapshot leaves it out (run.json's `free_page_reporting`: sites built before
+    /// it have no such device, and their snapshots restore only without one)
+    pub free_page_reporting: bool,
 }
 
 pub fn new_vm(spec: &Spec, site: &Site) -> Result<(Vm<NativePlatform>, Arc<Clock>), String> {
@@ -76,6 +80,7 @@ pub fn new_vm_on(spec: &Spec, site: &Site, jit: bool, ram: Option<armless::Ram>)
             console: true,
             fs_tag: Some("host9p".into()),
             net: spec.network == "fetch",
+            free_page_reporting: spec.free_page_reporting,
             ..Default::default()
         },
     };
@@ -698,7 +703,7 @@ mod tests {
 
     #[test]
     fn a_machine_needs_its_filesystem_and_with_a_network_its_certificates() {
-        let spec = |network: &str| Spec { memory_mb: 16, cpus: 1, network: network.into() };
+        let spec = |network: &str| Spec { memory_mb: 16, cpus: 1, network: network.into(), free_page_reporting: false };
         let (_, bare) = site("machine-bare", &[]);
         assert_eq!(new_vm_jit(&spec("none"), &bare, false).err().unwrap(), "system/filesystem.json: not in the site");
         let (_, s) = site("machine-net", &[("system/filesystem.json", EMPTY_FS)]);

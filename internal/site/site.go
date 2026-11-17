@@ -65,6 +65,9 @@ type Page struct {
 	// User: the site has no kernel (snowglobe build --kernel none): its program runs on its own in
 	// armless's user mode, a process (system/user.bin) restored with the machine's state. One CPU
 	User bool
+	// FreePageReporting: the snapshot was saved with free page reporting (a virtio-balloon the
+	// guest's kernel reports freed memory through), so the page's machine must have it too
+	FreePageReporting bool
 	// SavedAtMs is when the snapshot was saved (ms since the epoch; 0: not known). With User, the
 	// page restores the program's process with its clocks gone on by the time since
 	// (armless's user_asleep_ms), as a machine's clocks go on through a suspend

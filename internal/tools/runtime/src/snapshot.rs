@@ -56,6 +56,9 @@ const PROMPT_QUIET: Duration = Duration::from_millis(300);
 /// The console size the app starts with, unless --cols/--rows say otherwise: fits an embedded
 /// panel or a small window. The page replays the snapshot's screen at this size, then resizes.
 const COLS: u16 = 90;
+/// How long the guest idles before its snapshot with free page reporting: Linux reports freed
+/// memory 2 s after it frees up (PAGE_REPORTING_DELAY), in passes that may take another
+const FREE_PAGES_SETTLE: Duration = Duration::from_secs(5);
 const ROWS: u16 = 30;
 
 pub fn main(args: &Args) -> Result<u8, String> {
@@ -72,6 +75,7 @@ pub fn main(args: &Args) -> Result<u8, String> {
         memory_mb: args.get("memory").unwrap_or("512").parse().map_err(|_| "--memory: not a number")?,
         cpus: build_cpus,
         network: args.get("network").unwrap_or("none").to_string(),
+        free_page_reporting: args.has("free-page-reporting"),
     };
     let ready = args.get("ready").map(str::to_string);
     let exercises = args.all("exercise");
@@ -188,6 +192,13 @@ pub fn main(args: &Args) -> Result<u8, String> {
             return Err(format!("the guest did not take CPUs {cpus}-{} offline", build_cpus - 1));
         }
         eprintln!("Booted on {build_cpus} CPUs, saving {cpus}");
+    }
+
+    // With free page reporting, Linux reports what it freed (the caches just dropped, whatever
+    // the boot or the exercises allocated and gave back) about 2 s after it frees up, and armless
+    // zeroes it. Saved before then, it would still be in the snapshot
+    if spec.free_page_reporting {
+        std::thread::sleep(FREE_PAGES_SETTLE);
     }
 
     let state = runner.save_state_cpus(cpus)?;

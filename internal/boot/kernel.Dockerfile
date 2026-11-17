@@ -94,6 +94,12 @@ CONFIG_NET_9P_VIRTIO=y
 CONFIG_NETWORK_FILESYSTEMS=y
 CONFIG_9P_FS=y
 
+# Free page reporting: a virtio-balloon that never inflates, through which the kernel reports the
+# memory it freed (in 2 MiB blocks, a couple of seconds after). armless zeroes it, so a snapshot
+# leaves out what a build allocated and gave back. Machines without the device ignore it.
+CONFIG_VIRTIO_BALLOON=y
+CONFIG_PAGE_REPORTING=y
+
 # Filesystems the guest's init mounts; devtmpfs mounted by the kernel, as there is no initramfs
 # to give init a /dev/console
 CONFIG_PROC_FS=y

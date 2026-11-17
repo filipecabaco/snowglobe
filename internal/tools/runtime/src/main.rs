@@ -41,6 +41,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage:
   snowglobe-vm snapshot <system dir> [--memory MB] [--cpus N] [--network none|fetch]
+                        [--free-page-reporting]   (the snapshot leaves out memory the guest freed)
                         [--ready TEXT] [--exercise COMMAND ...]
                         [--tunnel [HOST:]PORT=URL ...] [--egress none|internet|private] [--allow-private]
                         [--user PROGRAM --user ARG ... [--user-env NAME=VALUE ...] [--user-cwd DIR] [--user-hostname NAME]]   (no kernel: the program runs on its own)
@@ -197,7 +198,7 @@ mod testing {
     /// The smallest machine, never started.
     pub fn machine(name: &str) -> (Arc<armless::Board>, armless::runner::Runner) {
         let (_, site) = site(name, &[("system/filesystem.json", EMPTY_FS)]);
-        let spec = Spec { memory_mb: 16, cpus: 1, network: "none".into() };
+        let spec = Spec { memory_mb: 16, cpus: 1, network: "none".into(), free_page_reporting: false };
         let (vm, clock) = machine::new_vm_jit(&spec, &site, false).unwrap();
         let board = vm.board.clone();
         (board, armless::runner::Runner::new(vm, clock, false))

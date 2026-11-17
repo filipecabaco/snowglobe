@@ -121,6 +121,8 @@ type Runtime struct {
 	CPUs     int    `json:"cpus"` // more than one: the page must be cross-origin isolated (its sw.js)
 	Network  string `json:"network"`
 	JIT      bool   `json:"jit"` // false: the machine keeps the interpreter
+	// The snapshot was saved with free page reporting: the machine needs the same device
+	FreePageReporting bool `json:"free_page_reporting,omitempty"`
 }
 
 // Manifest is runtimes.json: the machines, and the files they share
@@ -201,13 +203,14 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 			continue
 		}
 		var run struct {
-			Title    string `json:"title"`
-			Source   string `json:"source"`
-			MemoryMB int    `json:"memory_mb"`
-			Network  string `json:"network"`
-			CPUs     int    `json:"cpus"`
-			JIT      *bool  `json:"jit"` // missing: a site built before the setting, on
-			Agent    *struct {
+			Title     string `json:"title"`
+			Source    string `json:"source"`
+			MemoryMB  int    `json:"memory_mb"`
+			Network   string `json:"network"`
+			CPUs      int    `json:"cpus"`
+			JIT       *bool  `json:"jit"`                 // missing: a site built before the setting, on
+			FreePages bool   `json:"free_page_reporting"` // missing: built before it, without the device
+			Agent     *struct {
 				Name      string   `json:"name"`
 				Purpose   string   `json:"purpose"`
 				Sample    string   `json:"sample"`
@@ -273,6 +276,7 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 		all = append(all, found{Runtime: Runtime{
 			Name: name, Title: run.Title, Purpose: run.Agent.Purpose, Sample: run.Agent.Sample, Watch: run.Agent.Watch,
 			Base: "../" + e.Name() + "/", BaseURL: string(m[1]), BuildID: buildID, MemoryMB: run.MemoryMB, CPUs: run.CPUs, Network: run.Network, JIT: run.JIT == nil || *run.JIT,
+			FreePageReporting: run.FreePages,
 		}, dir: dir, source: run.Source, exposedTo: run.Agent.ExposedTo})
 	}
 	if len(all) == 0 {
