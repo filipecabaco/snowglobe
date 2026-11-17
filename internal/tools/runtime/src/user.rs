@@ -272,6 +272,16 @@ struct Running {
     /// When it was told to stop (out of time, or the instance stopping): TERM, then KILL
     stopping: Option<Instant>,
     answer: std::sync::mpsc::Sender<Result<job::Done, String>>,
+    /// What it may use (limits.rs; those of the guest's kernel it can't have: there is none)
+    limits: crate::limits::Limits,
+    /// Stopped for printing more than its output limit
+    output_over: bool,
+    /// Its memory and CPU time, watched (`Guard::from_now` for a machine's job)
+    guard: crate::limits::Guard,
+    /// Set when its client goes: stopped, as when the instance stops
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// What its out/ held before it started (a workdir's), which isn't its result
+    before: job::Stamps,
 }
 
 /// How long a job told to stop gets before it is killed
@@ -458,28 +468,23 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
         env.extend(env_file);
         let timeout = job::timeout_flag(args.get("timeout"))?;
         let dir = PathBuf::from(ws);
-        let req = job::Request { files: job::files(&dir)?, command, env, timeout, home: false };
-        let rx = ask_job(&shared, req);
+        let w = job::Workspace { dir: dir.clone(), command, env, timeout, limits: crate::limits::Limits::from_args(args)? };
+        let rx = ask_job(&shared, w.request()?);
         std::thread::spawn(move || {
             let code = match rx.recv() {
                 Ok(Ok(done)) => {
-                    for (rel, data) in &done.out {
-                        let dest = dir.join("out").join(rel);
-                        let _ = std::fs::create_dir_all(dest.parent().unwrap_or(&dir));
-                        if let Err(e) = std::fs::write(&dest, data) {
-                            eprintln!("snowglobe: {}: {e}", dest.display());
-                        }
-                    }
+                    job::write_out(&dir, &done.out);
                     let mut out = std::io::stdout();
                     let _ = out.write_all(&done.output);
                     let _ = out.flush();
-                    if done.status.is_none() && !done.cancelled {
-                        eprintln!("snowglobe: the job ran out of time ({}s)", timeout.as_secs_f64());
-                    }
-                    job::exit_code(done.status.map(i64::from))
+                    let code = crate::limits::exit_code(&done);
+                    crate::limits::say_why(&done, timeout);
+                    crate::limits::write_status(&done, code);
+                    code
                 },
                 Ok(Err(e)) => {
                     eprintln!("snowglobe: {e}");
+                    crate::limits::write_status_error(&e);
                     1
                 },
                 Err(_) => 1,
@@ -661,16 +666,21 @@ fn stretch(
                         continue;
                     }
                     match start_job(&mut p, board, &a.req) {
-                        Ok(Some((pid, ws, id))) => running.push(Running {
+                        Ok(Some((pid, ws, id, before))) => running.push(Running {
                             id,
                             cancelled: false,
                             pid,
                             ws,
+                            guard: if a.req.instance { crate::limits::Guard::from_now(&a.req.limits) } else { crate::limits::Guard::new(&a.req.limits) },
+                            cancel: a.req.cancel.clone(),
+                            before,
                             begun: Instant::now(),
                             deadline: Instant::now() + a.req.timeout,
                             output: Vec::new(),
                             stopping: None,
                             answer: a.answer,
+                            limits: a.req.limits.clone(),
+                            output_over: false,
                         }),
                         // Its shell's files on their way: asked again next time
                         Ok(None) => shared.io.lock().unwrap().jobs.push(a),
@@ -734,24 +744,39 @@ fn stretch(
 /// script as a machine with a kernel runs it on its serial shell (`job::scripts`): its files in
 /// /sgjob/<id>, the image's environment, its workspace or the home directory. Its pid and
 /// workspace, or None while the shell's files are on their way.
-fn start_job(p: &mut Process, board: &armless::Board, req: &job::Request) -> Result<Option<(i64, String, String)>, String> {
+fn start_job(p: &mut Process, board: &armless::Board, req: &job::Request) -> Result<Option<(i64, String, String, job::Stamps)>, String> {
+    if req.limits.in_guest() {
+        return Err(crate::limits::NO_KERNEL.into());
+    }
+    let given: u64 = req.files.iter().map(|f| f.1.len() as u64).sum();
+    if given > req.limits.copy_bytes() {
+        return Err(format!("the job's files are {} MB, more than its copy limit ({} MB)", given >> 20, req.limits.copy_mb));
+    }
     let id = job::token();
     let ws = format!("/sgjob/{id}");
-    let (_, cmd) = job::scripts(&id, &ws, &req.env, &req.command, req.home)?;
+    let (_, cmd) = job::scripts_limited(&id, &ws, &req.env, &req.command, req.home, &crate::limits::Limits::default(), req.workdir.as_deref())?;
+    // With a workdir, its files go there (no kernel caches what it has seen: written from here,
+    // the program sees them at once) and its in/ and out/ are there
+    let wd = req.workdir.as_deref().map_or(ws.clone(), |w| w.trim_end_matches('/').to_string());
+    let before = if req.workdir.is_some() { job::guest_stamps(board, &format!("{wd}/out")) } else { job::Stamps::new() };
     for (rel, data, mode) in &req.files {
         // However it is spelled (`/out/x`, `./out/x`), nothing goes in the job's own directories
         let first = rel.split('/').find(|c| !c.is_empty() && *c != ".");
         if matches!(first, Some(".sg" | "out")) || rel.split('/').any(|c| c == "..") {
             continue;
         }
-        board.fs_write_file(&format!("{ws}/{rel}"), data, *mode)?;
+        board.fs_write_file(&format!("{wd}/{rel}"), data, *mode)?;
     }
-    board.fs_mkdir(&format!("{ws}/in"))?;
-    board.fs_mkdir(&format!("{ws}/out"))?;
+    board.fs_mkdir(&format!("{wd}/in"))?;
+    board.fs_mkdir(&format!("{wd}/out"))?;
     board.fs_write_file(&format!("{ws}/.sg/cmd"), cmd.as_bytes(), 0o755)?;
+    // The disk limit counts what the job writes, from here (lifted when it ends)
+    if let Some(mb) = req.limits.disk_mb {
+        board.set_fs_write_limit(Some(mb << 20));
+    }
     let argv = ["/bin/sh".to_string(), format!("{ws}/.sg/cmd")];
     let env = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(), "HOME=/root".to_string()];
-    match p.spawn(&argv, &env, &ws, None) {
+    match p.spawn(&argv, &env, &wd, None) {
         Ok(pid) => {
             p.spawn_close_input(pid);
             crate::log::event(
@@ -763,10 +788,12 @@ fn start_job(p: &mut Process, board: &armless::Board, req: &job::Request) -> Res
                     "env": req.env.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
                     "files": req.files.len(),
                     "timeout": req.timeout.as_secs_f64(),
+                    "workdir": req.workdir,
+                    "labels": job::labels_json(&req.labels),
                 }),
             );
             job::begun_beside();
-            Ok(Some((pid, ws, id)))
+            Ok(Some((pid, wd, id, before)))
         },
         Err(ExecError::Need(_)) => Ok(None),
         Err(e) => Err(format!("the job's shell: {e}")),
@@ -788,9 +815,40 @@ fn follow_job(p: &mut Process, board: &armless::Board, j: &mut Running) -> bool 
     j.output.extend(r.stdout);
     j.output.extend(r.stderr);
     let now = Instant::now();
+    // Past its output limit: stopped as one out of time is, what it printed cut there
+    if let Some(max) = j.limits.output {
+        if j.output.len() as u64 > max {
+            j.output.truncate(max as usize);
+            if !j.output_over && j.stopping.is_none() && r.exit.is_none() {
+                p.spawn_kill(j.pid, 15);
+                j.stopping = Some(now);
+                j.output_over = true;
+            }
+        }
+    }
+    // Past this process's memory or CPU time: ended at once (this process ends with it)
+    let aborted = j.guard.check();
+    if let (Some(a), None) = (aborted, r.exit) {
+        p.spawn_kill(j.pid, 9);
+        p.spawn_release(j.pid);
+        let done = job::Done {
+            output: std::mem::take(&mut j.output),
+            ms: j.begun.elapsed().as_millis() as u64,
+            killed: true,
+            oom: a == crate::limits::Abort::Rss,
+            cpu_time_exceeded: a == crate::limits::Abort::CpuTime,
+            output_truncated: j.output_over,
+            ..Default::default()
+        };
+        crate::log::event("job_end", json!({ "job": j.id, "killed": true, "oom": done.oom, "cpu_time_exceeded": done.cpu_time_exceeded }));
+        let _ = j.answer.send(Ok(done));
+        job::ended_beside();
+        return true;
+    }
     // The instance stopping (its max runtime, a stop file, snowglobe stop): the job is stopped
     // as one out of time is, and says it was cancelled
-    if job::stopping() && j.stopping.is_none() && r.exit.is_none() {
+    let cancelled = job::stopping() || j.cancel.load(std::sync::atomic::Ordering::SeqCst);
+    if cancelled && j.stopping.is_none() && r.exit.is_none() {
         p.spawn_kill(j.pid, 15);
         j.stopping = Some(now);
         j.cancelled = true;
@@ -810,19 +868,20 @@ fn follow_job(p: &mut Process, board: &armless::Board, j: &mut Running) -> bool 
                 ..Default::default()
             };
             if stopping.is_some() {
-                done.timed_out = !j.cancelled;
+                done.timed_out = !j.cancelled && !j.output_over;
                 done.cancelled = j.cancelled;
                 done.killed = true;
+                done.output_truncated = j.output_over;
             } else {
                 done.status = Some(status);
-                done.out = board
-                    .fs_read_tree(&format!("{}/out", j.ws))
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|(rel, _)| !rel.split('/').any(|c| c == ".."))
-                    .collect();
+            }
+            // What it wrote to out/, however it ended, up to the copy limit
+            let (out, cut) = job::read_guest_tree_since(board, &format!("{}/out", j.ws), j.limits.copy_bytes(), &j.before).unwrap_or_default();
+            done.out = out;
+            done.out_truncated = cut;
+            done.disk_full = board.fs_write_budget().is_some_and(|b| b.hit);
+            if j.limits.disk_mb.is_some() {
+                board.set_fs_write_limit(None);
             }
             let shown = &done.output[..done.output.len().min(64 << 10)];
             crate::log::event(
@@ -833,6 +892,9 @@ fn follow_job(p: &mut Process, board: &armless::Board, j: &mut Running) -> bool 
                     "timed_out": done.timed_out,
                     "cancelled": done.cancelled,
                     "killed": done.killed,
+                    "output_truncated": done.output_truncated,
+                    "disk_full": done.disk_full,
+                    "out_truncated": done.out_truncated,
                     "ms": done.ms,
                     "output": String::from_utf8_lossy(shown),
                     "output_bytes": done.output.len(),
@@ -953,9 +1015,13 @@ fn serve(shared: &Arc<Shared>, host: &Arc<armless::native::NativeHost>, stream: 
     if mode == "job" {
         // A job: a shell of its own beside the program (`start_job`), answered as a machine with
         // a kernel answers one
-        let answer = match job::from_json(&request) {
+        let answer = match job::from_json(&request).and_then(|r| crate::limits::for_instance(&r.limits, crate::machine::egress()).map(|_| r)) {
             Err(e) => json!({ "error": e }),
-            Ok(req) => {
+            Ok(mut req) => {
+                // A machine's job: killed past its limits (the machine goes on), and when its
+                // client goes
+                req.instance = true;
+                job::watch_cancel(&writer, req.cancel.clone());
                 let wait = req.timeout + JOB_KILL_GRACE + Duration::from_secs(30);
                 let (tx, rx) = std::sync::mpsc::channel();
                 {

@@ -188,6 +188,7 @@ func TestE2E(t *testing.T) {
 	t.Run("shared ram", e.sharedRAM)
 	t.Run("fork machines", e.forkMachines)
 	t.Run("daemon", e.daemonFleet)
+	t.Run("job output isolation", e.jobOutputIsolation)
 	t.Run("scale to zero", e.scaleToZero)
 	t.Run("lifecycle", e.lifecycle)
 	t.Run("fleet", e.fleetApply)

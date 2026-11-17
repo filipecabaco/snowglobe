@@ -13,7 +13,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -133,16 +133,42 @@ impl Logs {
     }
 }
 
-static LOGS: OnceLock<Arc<Logs>> = OnceLock::new();
+static LOGS: RwLock<Option<Arc<Logs>>> = RwLock::new(None);
 
-/// The run's logs, once `install`ed.
-pub fn get() -> Option<&'static Arc<Logs>> {
-    LOGS.get()
+/// The run's logs, once `install`ed (and until `detach`ed).
+pub fn get() -> Option<Arc<Logs>> {
+    LOGS.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-pub fn install(logs: Logs) -> &'static Arc<Logs> {
-    let _ = LOGS.set(Arc::new(logs));
-    LOGS.get().unwrap()
+pub fn install(logs: Logs) -> Arc<Logs> {
+    let logs = Arc::new(logs);
+    *LOGS.write().unwrap_or_else(|e| e.into_inner()) = Some(logs.clone());
+    logs
+}
+
+/// No more logs in this process, and its files closed: what a serving process's fork does before
+/// it runs a job (or a machine), so nothing it runs can write the server's logs, which every
+/// job of every team it serves would share. Its events go nowhere (its server's own still do).
+pub fn detach() {
+    LOGS.write().unwrap_or_else(|e| e.into_inner()).take();
+}
+
+/// `/dev/null`, opened while it still can be (before a fork's sandbox, which may not let it
+/// open), for `detach_stdio`.
+pub fn null() -> Result<std::fs::File, String> {
+    std::fs::OpenOptions::new().read(true).write(true).open("/dev/null").map_err(|e| format!("/dev/null: {e}"))
+}
+
+/// A fork's stdout and stderr off its server's: they are the descriptors its server was started
+/// with (the template's log, under the daemon), which every job and machine it forks, of every
+/// team, would otherwise inherit and write into together. A job's output is what its answer
+/// carries (the guest's stdout and stderr, merged there), and its record is the daemon's
+/// `job.ended` event; what the emulator itself would print about one job goes nowhere.
+pub fn detach_stdio(null: &std::fs::File) -> Result<(), String> {
+    use std::os::fd::AsFd;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    crate::sys::redirect_stdio(null.as_fd()).map_err(|e| format!("stdio to /dev/null: {e}"))
 }
 
 /// An event, if there are logs.
@@ -225,6 +251,22 @@ mod tests {
         Logs::open(&d).unwrap().console(b"one ");
         Logs::open(&d).unwrap().console(b"two");
         assert_eq!(std::fs::read_to_string(d.join("console.log")).unwrap(), "one two");
+    }
+
+    #[test]
+    fn detached_logs_are_closed_and_written_no_more() {
+        let d = tmp("detach");
+        install(Logs::open(&d).unwrap()).event("before", Value::Null);
+        detach();
+        assert!(get().is_none());
+        event("after", Value::Null);
+        let text = std::fs::read_to_string(d.join("events.jsonl")).unwrap();
+        assert!(text.contains("before") && !text.contains("after"), "{text}");
+        // Its files are closed: no descriptor of this process names them
+        #[cfg(target_os = "linux")]
+        let open = std::fs::read_dir("/dev/fd").unwrap().flatten().filter_map(|e| std::fs::read_link(e.path()).ok());
+        #[cfg(target_os = "linux")]
+        assert!(!open.into_iter().any(|p| p.starts_with(&d)), "a log file is still open");
     }
 
     #[test]

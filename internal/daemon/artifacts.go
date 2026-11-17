@@ -54,8 +54,13 @@ func sha256Of(data []byte) string {
 // everything that makes its site another (the options it is built with, the snowglobe building
 // it). The build's name isn't: it names the build, not what it makes.
 func (s *Server) cacheKey(b *Build) string {
-	return sha256Of(fmt.Appendf(nil, "snowglobe %s\nkind %s\ninput %s\nkernel %s\ncpus %d\nmemory %d\nnetwork %s\nbuilder %s\n",
-		s.o.Version, b.Kind, b.Input, b.Kernel, b.CPUs, b.Memory, b.Network, b.Builder))
+	key := fmt.Appendf(nil, "snowglobe %s\nkind %s\ninput %s\nkernel %s\ncpus %d\nmemory %d\nnetwork %s\nbuilder %s\n",
+		s.o.Version, b.Kind, b.Input, b.Kernel, b.CPUs, b.Memory, b.Network, b.Builder)
+	// Only when on, so the keys of what was built before stay as they were
+	if b.MemoryLimits {
+		key = append(key, "memory-limits\n"...)
+	}
+	return sha256Of(key)
 }
 
 // imageDigest is the digest an image reference names now: asked of its registry (as the native

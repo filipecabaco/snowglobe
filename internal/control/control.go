@@ -19,12 +19,46 @@ import (
 // command starts in the workspace (where its files are, and out/ is), or with Home in the home
 // directory, as a command typed into the machine's terminal does: for a person or an agent
 // (snowglobe sh, run_command), the workspace still its own as $EXCLAVE_WORKSPACE.
+//
+// Everything after Home is optional, off unless set; a limit the machine can't enforce fails the
+// job, saying so, rather than running it without (docs/design/exclave-contract.md).
 type JobRequest struct {
 	Files   map[string][]byte `json:"files,omitempty"`
 	Cmd     string            `json:"cmd"`
 	Env     map[string]string `json:"env,omitempty"`
 	Timeout float64           `json:"timeout"`
 	Home    bool              `json:"home,omitempty"`
+	// An absolute guest path to run in instead of the job's own directory: its Files are copied
+	// there, and its out/ is read from there (only what the job wrote). A job forked from a
+	// build's snapshot runs in the workspace the build left (/workspace)
+	Workdir string `json:"workdir,omitempty"`
+	// The command's memory (cgroup v2 memory.max, no swap): past it the guest kills it (OOM,
+	// status 137)
+	MemoryLimitMB int64 `json:"memory_limit_mb,omitempty"`
+	// The command's CPUs (cpu.max quota, may be fractional)
+	CPUsLimit float64 `json:"cpus_limit,omitempty"`
+	// The command's processes and threads (pids.max)
+	PidsLimit int64 `json:"pids_limit,omitempty"`
+	// What the guest's file writes may hold (they are in host memory): past it, ENOSPC (DiskFull)
+	DiskLimitMB int64 `json:"disk_limit_mb,omitempty"`
+	// The job's process's resident memory on the host: past it the job ends (OOM, status 137). On
+	// a machine (a long-lived one) it is the machine's memory, at its most
+	MaxRSSMB int64 `json:"max_rss_mb,omitempty"`
+	// The job's host CPU time (every emulator thread): past it the job ends (CPUTimeExceeded)
+	CPUTimeS float64 `json:"cpu_time_s,omitempty"`
+	// What the command may print, in bytes: past it it is killed, its output cut there
+	// (OutputTruncated)
+	OutputLimit int64 `json:"output_limit,omitempty"`
+	// What is copied in (Files) and back (out/), each (default 2048 MB)
+	CopyLimitMB int64 `json:"copy_limit_mb,omitempty"`
+	// none, https (TCP 443 and DNS, public addresses only), internet or private: at most what
+	// the machine's network allows. A job on a running machine has the machine's (ask for it as
+	// the machine starts: Up's Egress) and may only name that one
+	Egress string `json:"egress,omitempty"`
+	// The working directory's in/ is read-only in the guest
+	ReadOnlyIn bool `json:"read_only_in,omitempty"`
+	// Recorded with the job: in its log and the daemon's events
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // JobResult is what a job left: its exit status (nil: out of time, or the machine stopped), output
@@ -41,7 +75,25 @@ type JobResult struct {
 	// Bytes of the output and of out/'s files dropped as the answer was read (JobLimited)
 	OutputCut int64 `json:"output_cut,omitempty"`
 	OutCut    int64 `json:"out_cut,omitempty"`
+	// Out of memory: the guest killed it (MemoryLimitMB), or its process went past MaxRSSMB.
+	// Status is 137 either way
+	OOM bool `json:"oom"`
+	// A write was refused for DiskLimitMB (ENOSPC)
+	DiskFull bool `json:"disk_full"`
+	// It printed more than OutputLimit: killed, its output cut there
+	OutputTruncated bool `json:"output_truncated"`
+	// Its process went past CPUTimeS, and it ended
+	CPUTimeExceeded bool `json:"cpu_time_exceeded"`
+	// out/ held more than CopyLimitMB: what is past it was left behind
+	OutTruncated bool `json:"out_truncated,omitempty"`
 }
+
+// JobError is a job the machine answered it couldn't run, saying why (a limit it can't enforce, an
+// egress it hasn't, a bad workdir): the job's failure, not the API's. The daemon answers it as a
+// JobResult with Error, with 200.
+type JobError struct{ Msg string }
+
+func (e *JobError) Error() string { return e.Msg }
 
 // DefaultTimeout is a job's when its request gives none, in seconds.
 const DefaultTimeout = 300
@@ -70,11 +122,11 @@ func JobLimited(ctx context.Context, sock, name string, req JobRequest, keep int
 	// Given up: the connection closed, which ends the wait below
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	body := map[string]any{"mode": "job", "cmd": req.Cmd, "env": req.Env, "timeout": req.Timeout, "files": req.Files}
-	if req.Home {
-		body["home"] = true
-	}
-	data, err := json.Marshal(body)
+	// The request as it is, and the mode: what the machine's control socket reads
+	data, err := json.Marshal(struct {
+		Mode string `json:"mode"`
+		JobRequest
+	}{"job", req})
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +134,9 @@ func JobLimited(ctx context.Context, sock, name string, req JobRequest, keep int
 		return nil, err
 	}
 	conn.SetReadDeadline(time.Now().Add(time.Duration(req.Timeout+30) * time.Second))
-	line, cutOutput, cutOut, err := readClipped(bufio.NewReaderSize(conn, 1<<20), keep)
+	// 64 KiB: readClipped takes the line in pieces, so a bigger buffer only costs memory, once
+	// per job in flight (50 at once held 50 MiB of them)
+	line, cutOutput, cutOut, err := readClipped(bufio.NewReaderSize(conn, 64<<10), keep)
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("%s: the job was given up: %w", name, ctx.Err())
 	}
@@ -97,7 +151,7 @@ func JobLimited(ctx context.Context, sock, name string, req JobRequest, keep int
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if res.Error != "" {
-		return nil, errors.New(res.Error)
+		return nil, &JobError{Msg: res.Error}
 	}
 	res.OutputCut, res.OutCut = cutOutput, cutOut
 	return &res, nil
@@ -238,10 +292,32 @@ type Spawned struct {
 // which serves its control socket beside the server's. With state (a machine's Save, under the
 // server's jobs root) the machine starts from that instead of the template.
 func Spawn(server, name, state string) (*Spawned, error) {
+	return SpawnWith(server, name, SpawnOptions{State: state})
+}
+
+// SpawnOptions are what a machine is spawned with besides its name.
+type SpawnOptions struct {
+	// A machine's Save, under the server's jobs root, to start from instead of the template
+	State string
+	// Its network (none, https, internet, private), at most its server's ("": its server's)
+	Egress string
+	// A directory of its own under the jobs root: all it may touch of the root once it has read
+	// State (its Saves go there). "": the server's whole root
+	Dir string
+}
+
+// SpawnWith is Spawn, with its options.
+func SpawnWith(server, name string, o SpawnOptions) (*Spawned, error) {
 	var s Spawned
 	req := map[string]any{"mode": "spawn", "name": name}
-	if state != "" {
-		req["state"] = state
+	if o.State != "" {
+		req["state"] = o.State
+	}
+	if o.Egress != "" {
+		req["egress"] = o.Egress
+	}
+	if o.Dir != "" {
+		req["dir"] = o.Dir
 	}
 	conn, _, err := ask(server, req, &s, 2*time.Minute)
 	if err != nil {

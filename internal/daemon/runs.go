@@ -36,8 +36,15 @@ type Run struct {
 	Output   []byte            `json:"output,omitempty"`
 	Out      map[string][]byte `json:"out,omitempty"`
 	TimedOut bool              `json:"timed_out,omitempty"`
-	Error    string            `json:"error,omitempty"`
-	Ms       int64             `json:"ms,omitempty"`
+	// Stopped before it ended (its machine, or the daemon, stopping)
+	Cancelled bool `json:"cancelled,omitempty"`
+	// What ended it, past a limit of its own
+	OOM             bool   `json:"oom,omitempty"`
+	DiskFull        bool   `json:"disk_full,omitempty"`
+	OutputTruncated bool   `json:"output_truncated,omitempty"`
+	CPUTimeExceeded bool   `json:"cpu_time_exceeded,omitempty"`
+	Error           string `json:"error,omitempty"`
+	Ms              int64  `json:"ms,omitempty"`
 }
 
 // How many runs are kept, the oldest finished ones going first; and how much of their output
@@ -83,6 +90,7 @@ func (s *Server) SubmitRun(req SubmitRun) (*Run, error) {
 			r.Status, r.Error = "failed", err.Error()
 		default:
 			r.Status, r.Exit, r.Output, r.Out, r.TimedOut = "done", res.Status, res.Output, res.Out, res.TimedOut
+			r.Cancelled, r.OOM, r.DiskFull, r.OutputTruncated, r.CPUTimeExceeded = res.Cancelled, res.OOM, res.DiskFull, res.OutputTruncated, res.CPUTimeExceeded
 		}
 		s.pruneRuns()
 		done := *r

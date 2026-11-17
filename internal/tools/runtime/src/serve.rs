@@ -64,8 +64,17 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     // The site's own snapshot restores onto its RAM image, shared with every other machine of it
     // (a machine's saved state has RAM of its own, which the image's must not show through)
     let image = if saved.is_none() { image::open(&site, spec.memory_mb << 20) } else { None };
-    let policy = policy(&site, &root, socket, spec.network == "fetch");
+    let log_dir = args.get("log-dir").map(std::path::absolute).transpose().map_err(|e| format!("--log-dir: {e}"))?;
+    let mut policy = policy(&site, &root, socket, spec.network == "fetch");
+    policy.write.extend(log_dir.clone());
     let sandboxed = sandbox::apply_stage(&policy, sandbox::Stage::Parent)?;
+    // The logs, kept by this process and each job it forks (their events say which: `pid`, `job`)
+    if let Some(dir) = &log_dir {
+        crate::log::install(crate::log::Logs::open(dir)?).event(
+            "start",
+            json!({ "site": site.describe(), "pid": std::process::id(), "sandbox": sandboxed, "serve": socket, "jobs_root": root }),
+        );
+    }
     if std::env::var_os("ARMLESS_JIT_CODE_MB").is_none() {
         std::env::set_var("ARMLESS_JIT_CODE_MB", "64");
     }
@@ -90,7 +99,7 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     }
     drop(saved);
     let restored = started.elapsed();
-    let (compiled, learned) = prewarm(&runner, &site, spec.cpus);
+    let compiled = prewarm(&runner, &site, spec.cpus);
 
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket).map_err(|e| format!("{socket}: {e}"))?;
@@ -179,10 +188,10 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
                 drop(started_by);
                 let runner = runner.take().expect("the restored machine");
                 let code = match &spawn {
-                    Some(s) => machine_child(&board, runner, &site, &policy, &spec, net, s, conn, kids_line).map_err(|e| format!("machine: {e}")),
+                    Some(s) => machine_child(&board, runner, &site, &policy, &root, &spec, net, s, conn, kids_line).map_err(|e| format!("machine: {e}")),
                     None => {
                         let mut runner = runner;
-                        child(&board, &mut runner, &site, &policy, &root, &spec, net, &line, conn, learned.as_ref(), kids_line)
+                        child(&board, &mut runner, &site, &policy, &root, &spec, net, &line, conn, kids_line)
                             .map_err(|e| format!("job: {e}"))
                     },
                 };
@@ -352,7 +361,28 @@ fn user_child(
         Some(_) => None,
         None => Some(ask(line, root).map_err(|e| if is_control_job(line) { refuse(&mut conn, e) } else { e })?),
     };
-    sandbox::apply_stage(policy, sandbox::Stage::Child).map_err(|e| refuse(&mut conn, e))?;
+    // A machine's saved state and its socket, before it is confined to its own
+    let saved = match spawn.and_then(|s| s.state.as_ref()) {
+        Some(state) => Some(crate::user::Saved::read(state).map_err(|e| refuse(&mut conn, e))?),
+        None => None,
+    };
+    let listener = match spawn {
+        Some(s) => {
+            let _ = std::fs::remove_file(&s.sock);
+            Some(UnixListener::bind(&s.sock).map_err(|e| refuse(&mut conn, format!("{}: {e}", s.sock.display())))?)
+        },
+        None => None,
+    };
+    // A job: its limits, its sandbox narrowed to its own workspace, its egress; a machine: its
+    // egress, and its sandbox narrowed to its own directory (`confine_machine`)
+    let net = match (&ask, spawn) {
+        (Some(a), _) => confine(a, site, policy, root, spec, net).map_err(|e| refuse(&mut conn, e))?,
+        (None, Some(s)) => confine_machine(s, site, policy, root, spec, net).map_err(|e| {
+            let _ = std::fs::remove_file(&s.sock);
+            refuse(&mut conn, e)
+        })?,
+        (None, None) => net,
+    };
     let gone = spawn.map(|s| s.sock.clone());
     crate::lifeline::watch(server_line, move || {
         if let Some(s) = &gone {
@@ -360,9 +390,8 @@ fn user_child(
         }
         crate::lifeline::stop("its template's server")
     });
-    if let Some(state) = spawn.and_then(|s| s.state.as_ref()) {
+    if let (Some(state), Some(saved)) = (spawn.and_then(|s| s.state.as_ref()), saved) {
         // A machine saved before, over this copy of the template's
-        let saved = crate::user::Saved::read(state).map_err(|e| refuse(&mut conn, e))?;
         let (v, p, _) = crate::user::restore(site, spec, None, Some(saved), false).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
         (vm, process) = (v, p);
     }
@@ -378,8 +407,7 @@ fn user_child(
     let shared = Arc::new(crate::user::Shared::default());
     match (spawn, ask) {
         (Some(s), _) => {
-            let _ = std::fs::remove_file(&s.sock);
-            let listener = UnixListener::bind(&s.sock).map_err(|e| refuse(&mut conn, format!("{}: {e}", s.sock.display())))?;
+            let listener = listener.ok_or("no socket")?;
             crate::user::listen(shared.clone(), host, listener);
             let _ = conn.write_all(format!("{}\n", json!({ "pid": std::process::id(), "socket": s.sock })).as_bytes());
             drop(conn);
@@ -391,25 +419,18 @@ fn user_child(
             // One job: the answer is written, and this process ends, from a thread of its own while
             // the program runs on this one
             let (req, workspace) = match ask {
-                Ask::Workspace(w) => (
-                    job::Request { files: job::files(&w.dir)?, command: w.command.clone(), env: w.env.clone(), timeout: w.timeout, home: false },
-                    Some(w.dir),
-                ),
+                Ask::Workspace(w) => (w.request()?, Some(w.dir)),
                 Ask::Job(req) => (req, None),
             };
             let rx = crate::user::ask_job(&shared, req);
+            watch_client(&conn);
             std::thread::spawn(move || {
                 let mut w = conn;
                 let r = rx.recv().unwrap_or_else(|_| Err("the program stopped".into()));
                 match (r, workspace) {
                     (Ok(done), Some(dir)) => {
-                        for (rel, data) in &done.out {
-                            let dest = dir.join("out").join(rel);
-                            let _ = std::fs::create_dir_all(dest.parent().unwrap_or(&dir));
-                            let _ = std::fs::write(&dest, data);
-                        }
-                        let header = json!({ "status": done.status, "out": done.out.len(), "timed_out": done.timed_out, "killed": done.killed, "ms": done.ms });
-                        let _ = w.write_all(format!("{header}\n").as_bytes());
+                        let n = job::write_out(&dir, &done.out);
+                        let _ = w.write_all(format!("{}\n", header(&done, n)).as_bytes());
                         let _ = w.write_all(&done.output);
                     },
                     (Ok(done), None) => {
@@ -440,15 +461,21 @@ fn load(runner: &Runner, state: &[u8]) -> Result<(), String> {
 
 /// A machine asked for: its control socket, and the saved state it starts from (else the
 /// template's).
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct Spawn {
     sock: PathBuf,
     state: Option<PathBuf>,
+    /// Its own network, no more than its server's (`"egress"`)
+    egress: Option<crate::limits::Egress>,
+    /// A directory of its own under the jobs root (`"dir"`): all it may touch of the root, once
+    /// it has read its state (its saves go there). Without one it has its server's whole root
+    dir: Option<PathBuf>,
 }
 
-/// A request for a machine (`{"mode": "spawn", "name": N, "state": PATH}`): the control socket it
-/// will have, `N.sock` beside this server's own, and a state saved under the jobs root to start
-/// from. None for any other request.
+/// A request for a machine (`{"mode": "spawn", "name": N, "state": PATH, "egress": E, "dir": D}`):
+/// the control socket it will have, `N.sock` beside this server's own, a state saved under the
+/// jobs root to start from, its egress, and the directory under the jobs root that is its own.
+/// None for any other request.
 fn spawn_request(line: &str, socket: &str, root: &Path) -> Result<Option<Spawn>, String> {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return Ok(None) };
     if v["mode"] != "spawn" {
@@ -458,17 +485,24 @@ fn spawn_request(line: &str, socket: &str, root: &Path) -> Result<Option<Spawn>,
     if name.is_empty() || name.len() > 64 || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(format!("spawn: name {name:?}: 1 to 64 letters, digits, - or _"));
     }
-    let state = match v["state"].as_str() {
-        Some(p) => {
-            let p = Path::new(p).canonicalize().map_err(|e| format!("spawn: state {p}: {e}"))?;
-            if !p.starts_with(root) {
-                return Err(format!("spawn: state {}: not under the jobs root {}", p.display(), root.display()));
-            }
-            Some(p)
-        },
-        None => None,
+    let under_root = |key: &str| -> Result<Option<PathBuf>, String> {
+        let Some(p) = v[key].as_str() else { return Ok(None) };
+        let p = Path::new(p).canonicalize().map_err(|e| format!("spawn: {key} {p}: {e}"))?;
+        if !p.starts_with(root) || p == root {
+            return Err(format!("spawn: {key} {}: not under the jobs root {}", p.display(), root.display()));
+        }
+        Ok(Some(p))
     };
-    Ok(Some(Spawn { sock: Path::new(socket).with_file_name(format!("{name}.sock")), state }))
+    let state = under_root("state")?;
+    let dir = under_root("dir")?;
+    if dir.as_ref().is_some_and(|d| !d.is_dir()) {
+        return Err("spawn: dir: a directory".into());
+    }
+    let egress = match &v["egress"] {
+        Value::Null => None,
+        e => Some(crate::limits::Egress::parse(e.as_str().unwrap_or("")).map_err(|e| format!("spawn: {e}"))?),
+    };
+    Ok(Some(Spawn { sock: Path::new(socket).with_file_name(format!("{name}.sock")), state, egress, dir }))
 }
 
 /// A machine: a fork that, instead of running one job, serves its own control socket (exec,
@@ -480,6 +514,7 @@ fn machine_child(
     mut runner: Runner,
     site: &Site,
     policy: &sandbox::Policy,
+    root: &Path,
     spec: &machine::Spec,
     net: machine::Net,
     spawn: &Spawn,
@@ -491,17 +526,23 @@ fn machine_child(
         let _ = conn.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
         e
     };
-    sandbox::apply_stage(policy, sandbox::Stage::Child).map_err(|e| refuse(&mut conn, e))?;
+    // What it reads of the jobs root (its state) and its socket, before it is confined to its own
+    let data = spawn.state.as_ref().map(|state| std::fs::read(state).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))).transpose()?;
+    let _ = std::fs::remove_file(sock);
+    let listener = UnixListener::bind(sock).map_err(|e| refuse(&mut conn, format!("{}: {e}", sock.display())))?;
+    let net = confine_machine(spawn, site, policy, root, spec, net).map_err(|e| {
+        let _ = std::fs::remove_file(sock);
+        refuse(&mut conn, e)
+    })?;
     // Its first thread, once confined: it ends with its server
     let gone_sock = sock.to_path_buf();
     crate::lifeline::watch(server_line, move || {
         let _ = std::fs::remove_file(&gone_sock);
         crate::lifeline::stop("its template's server")
     });
-    if let Some(state) = &spawn.state {
+    if let (Some(state), Some(data)) = (&spawn.state, data) {
         // A machine saved before, over this copy of the template's: the code compiled from the
         // template's memory doesn't hold for it
-        let data = std::fs::read(state).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
         load(&runner, &data).map_err(|e| refuse(&mut conn, format!("{}: {e}", state.display())))?;
         runner.jit_flush();
     }
@@ -509,8 +550,6 @@ fn machine_child(
     machine::enable_jit(&runner, spec.cpus);
     let activity = Activity::new(false);
     let host = Arc::new(machine::host(board, site, &spec.network, net, &activity));
-    let _ = std::fs::remove_file(sock);
-    let listener = UnixListener::bind(sock).map_err(|e| refuse(&mut conn, format!("{}: {e}", sock.display())))?;
     runner.start();
     let runner = Arc::new(runner);
     crate::run::listen(crate::run::Session::new(board.clone(), runner.clone(), host, activity, site), listener);
@@ -526,33 +565,38 @@ fn machine_child(
 /// fork and with no thread: every job then starts with that code, sharing it, instead of
 /// interpreting what it runs until each page gets hot and compiling it anew in every job. A job
 /// compiles what is new to it on a thread, into a module of its own (`enable_jit`).
-/// ARMLESS_JIT_PREWARM=off (or ARMLESS_JIT=off) skips it. What it did, for the log, and the
-/// profile, for jobs to add what they compile to.
-fn prewarm(runner: &Runner, site: &Site, cpus: usize) -> (String, Option<profile::Learned>) {
+/// ARMLESS_JIT_PREWARM=off (or ARMLESS_JIT=off) skips it. What it did, for the log.
+///
+/// The profile is only read here, never written by a job: every job of a template server shares
+/// its profile (and its jobs are any team's), so what one job compiled must not shape what
+/// another's starts with, nor be anything a job can write. What runs of a site's own compile is
+/// learned by its single-tenant runs (`snowglobe run`, a one-shot job) into the same cache.
+fn prewarm(runner: &Runner, site: &Site, cpus: usize) -> String {
     if !machine::jit_wanted() || std::env::var("ARMLESS_JIT_PREWARM").is_ok_and(|v| v == "off") {
-        return (String::new(), None);
+        return String::new();
     }
     let began = std::time::Instant::now();
     if !(0..cpus).all(|i| runner.with_cpu(i, |c| c.enable_native_jit_here())) {
-        return (String::new(), None);
+        return String::new();
     }
     let learned = profile::Learned::open(site);
     let modules = runner.jit_prewarm(&learned.prewarm());
     let kb = (0..cpus).map(|i| runner.with_cpu(i, |c| c.native_jit_code_bytes())).sum::<usize>() >> 10;
-    (format!(", compiled {modules} modules ({kb} KB) in {:.1}s", began.elapsed().as_secs_f64()), Some(learned))
+    format!(", compiled {modules} modules ({kb} KB) in {:.1}s", began.elapsed().as_secs_f64())
 }
 
 /// What a serving process and its jobs may touch: the site and the jobs root, the JIT profile
-/// cache, and the socket. No ports: a job forwards none.
+/// cache (read only: nothing here writes it, see `prewarm`), and the socket. No ports: a job
+/// forwards none.
 fn policy(site: &Site, root: &Path, socket: &str, network: bool) -> sandbox::Policy {
-    let mut write: Vec<PathBuf> = profile::cache_path(site).and_then(|p| sandbox::parent_of(&p)).into_iter().collect();
-    write.push(root.to_path_buf());
+    let profiles: Vec<PathBuf> = profile::cache_path(site).and_then(|p| sandbox::parent_of(&p)).into_iter().collect();
     sandbox::Policy {
-        read: [site.read_paths(), vec![root.to_path_buf()]].concat(),
-        write,
+        read: [site.read_paths(), vec![root.to_path_buf()], profiles].concat(),
+        write: vec![root.to_path_buf()],
         socket_dir: sandbox::parent_of(Path::new(socket)),
         bind: Vec::new(),
         network,
+        hidden: Vec::new(),
     }
 }
 
@@ -567,25 +611,21 @@ fn child(
     net: machine::Net,
     line: &str,
     conn: UnixStream,
-    learned: Option<&profile::Learned>,
     server_line: OwnedFd,
 ) -> Result<(), String> {
     let mut w = conn;
-    let ask = match ask(line, root) {
-        Ok(a) => a,
-        Err(e) => {
-            // A control-socket job is answered, even when it can't run
-            if is_control_job(line) {
-                let _ = w.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
-            }
-            return Err(e);
-        },
+    let answer_error = |w: &mut UnixStream, e: String| {
+        let _ = w.write_all(format!("{}\n", json!({ "error": e })).as_bytes());
+        e
     };
-
-    // The rest of the sandbox, before any thread
-    sandbox::apply_stage(policy, sandbox::Stage::Child)?;
+    // A job that can't run is answered, saying why
+    let ask = ask(line, root).map_err(|e| answer_error(&mut w, e))?;
+    // Its limits, its sandbox (narrowed to its own workspace) and its network, before any thread
+    let net = confine(&ask, site, policy, root, spec, net).map_err(|e| answer_error(&mut w, e))?;
     // Its first thread, once confined: it ends with its server
     crate::lifeline::watch(server_line, || crate::lifeline::stop("its server"));
+    // The client going (or sending anything more) cancels it
+    watch_client(&w);
     // This copy of the machine gets randomness of its own
     board.seed(&armless::runner::os_entropy());
     // Compiling moves to a thread, and a module, of this job's own; what the parent compiled
@@ -596,11 +636,12 @@ fn child(
     runner.start();
 
     match ask {
-        Ask::Workspace(job) => {
-            let (done, out) = job::run_workspace(board, &activity, &job)?;
-            let header = json!({ "status": done.status, "out": out, "timed_out": done.timed_out, "killed": done.killed, "ms": done.ms });
-            w.write_all(format!("{header}\n").as_bytes()).map_err(|e| e.to_string())?;
-            w.write_all(&done.output).map_err(|e| e.to_string())?;
+        Ask::Workspace(job) => match job::run_workspace(board, &activity, &job) {
+            Ok((done, out)) => {
+                w.write_all(format!("{}\n", header(&done, out)).as_bytes()).map_err(|e| e.to_string())?;
+                w.write_all(&done.output).map_err(|e| e.to_string())?;
+            },
+            Err(e) => return Err(answer_error(&mut w, e)),
         },
         Ask::Job(req) => {
             let answer = match job::run(board, &activity, &req) {
@@ -611,12 +652,115 @@ fn child(
         },
     }
     let _ = w.flush();
-    // What this job compiled joins the profile, for the next serving process (it has answered:
-    // this costs the client nothing)
-    if let Some(l) = learned {
-        l.learn(runner);
-    }
+    // What this job compiled isn't kept (`prewarm`): the next serving process starts from what
+    // this one did
     Ok(())
+}
+
+/// A workspace job's answer: its result (`job::result_fields`) and how many files went to out/.
+fn header(done: &job::Done, out: usize) -> Value {
+    let mut m = job::result_fields(done);
+    m.insert("out".into(), out.into());
+    Value::Object(m)
+}
+
+impl Ask {
+    fn limits(&self) -> &crate::limits::Limits {
+        match self {
+            Ask::Workspace(w) => &w.limits,
+            Ask::Job(r) => &r.limits,
+        }
+    }
+
+    fn workspace(&self) -> Option<&Path> {
+        match self {
+            Ask::Workspace(w) => Some(&w.dir),
+            Ask::Job(_) => None,
+        }
+    }
+}
+
+/// What a forked job takes on before it starts a thread: its process's limits (RLIMIT_CPU), its
+/// sandbox narrowed to its own workspace (`job_policy`), and its egress, no more than its
+/// server's. The network it gets.
+fn confine(ask: &Ask, site: &Site, policy: &sandbox::Policy, root: &Path, spec: &machine::Spec, net: machine::Net) -> Result<machine::Net, String> {
+    let limits = ask.limits();
+    let net = narrowed(net, limits.egress, spec)?;
+    limits.apply_to_process()?;
+    let network = spec.network == "fetch" && net.egress() != crate::limits::Egress::None;
+    let null = crate::log::null()?;
+    let sandboxed = sandbox::apply_stage(&job_policy(policy, site, root, ask.workspace(), network), sandbox::Stage::Job)?;
+    crate::log::event("job_sandbox", json!({ "pid": std::process::id(), "sandbox": sandboxed, "egress": net.egress().name() }));
+    // The server's logs, and the stdout/stderr it shares with every fork, closed before anything
+    // of the job's runs: they are every job's
+    crate::log::detach();
+    crate::log::detach_stdio(&null)?;
+    Ok(net)
+}
+
+/// `net` narrowed to `egress`: refused past its server's, and refused when the site has no network
+/// to give it (a limit that can't be enforced fails, never runs without it).
+fn narrowed(net: machine::Net, egress: Option<crate::limits::Egress>, spec: &machine::Spec) -> Result<machine::Net, String> {
+    if let Some(e) = egress.filter(|e| *e != crate::limits::Egress::None) {
+        if spec.network != "fetch" {
+            return Err(format!("egress {}: this template's site has no network (build it with --network fetch)", e.name()));
+        }
+    }
+    net.narrowed(egress)
+}
+
+/// What a machine takes on before it starts a thread: its egress, and (given a directory of its
+/// own) its sandbox narrowed to that directory of the jobs root, as a job's is to its workspace:
+/// a machine of one team can't read another's saves, or the states machines start from. Without
+/// one, its server's sandbox. The network it gets.
+fn confine_machine(spawn: &Spawn, site: &Site, policy: &sandbox::Policy, root: &Path, spec: &machine::Spec, net: machine::Net) -> Result<machine::Net, String> {
+    let net = narrowed(net, spawn.egress, spec)?;
+    let null = crate::log::null()?;
+    let sandboxed = match &spawn.dir {
+        Some(dir) => {
+            let network = spec.network == "fetch" && net.egress() != crate::limits::Egress::None;
+            sandbox::apply_stage(&job_policy(policy, site, root, Some(dir), network), sandbox::Stage::Job)?
+        },
+        None => sandbox::apply_stage(policy, sandbox::Stage::Child)?,
+    };
+    crate::log::event("machine_sandbox", json!({ "pid": std::process::id(), "sandbox": sandboxed, "egress": net.egress().name(), "dir": spawn.dir }));
+    crate::log::detach();
+    crate::log::detach_stdio(&null)?;
+    Ok(net)
+}
+
+/// What one job may touch: the site, read only, and its own workspace (none for a job that brings
+/// its files in its request), and the network only if its egress has any. Nothing else its
+/// server writes (the JIT profile cache, the logs, the rest of the jobs root): that is shared by
+/// every job it serves, of every team.
+fn job_policy(_server: &sandbox::Policy, site: &Site, root: &Path, workspace: Option<&Path>, network: bool) -> sandbox::Policy {
+    let mut read = site.read_paths();
+    let mut write: Vec<PathBuf> = Vec::new();
+    if let Some(ws) = workspace {
+        read.push(ws.to_path_buf());
+        write.push(ws.to_path_buf());
+    }
+    sandbox::Policy { read, write, socket_dir: None, bind: Vec::new(), network, hidden: vec![root.to_path_buf()] }
+}
+
+/// The job is cancelled (`job::stop_all`: killed, and answered as stopped) when its client goes:
+/// its connection closes, or the client is killed. Sending anything more on it (a line `cancel`)
+/// cancels it too. A client must keep its side open for writing while it waits (no half-close).
+fn watch_client(conn: &UnixStream) {
+    let Ok(mut c) = conn.try_clone() else { return };
+    std::thread::spawn(move || {
+        let mut b = [0u8; 256];
+        let why = loop {
+            match c.read(&mut b) {
+                Ok(0) => break "the client went",
+                Ok(_) => break "the client cancelled it",
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break "the client went",
+            }
+        };
+        crate::log::event("job_cancel", json!({ "pid": std::process::id(), "why": why }));
+        job::stop_all();
+    });
 }
 
 /// The most a request may be: paths, a command and its variables (an env file for big ones)
@@ -667,6 +811,10 @@ fn request(line: &str, root: &Path) -> Result<job::Workspace, String> {
         Ok(Some(p))
     };
     let workspace = under_root("workspace")?.ok_or("request: no workspace")?;
+    // A job's sandbox is its workspace: the root itself would be every job's
+    if workspace == root {
+        return Err(format!("workspace {}: a directory under the jobs root, not the root itself", workspace.display()));
+    }
     let mut env: Vec<(String, String)> = req["env"]
         .as_object()
         .into_iter()
@@ -682,6 +830,7 @@ fn request(line: &str, root: &Path) -> Result<job::Workspace, String> {
         command: req["cmd"].as_str().ok_or("request: no cmd")?.to_string(),
         env,
         timeout: job::timeout(req["timeout"].as_f64())?,
+        limits: crate::limits::Limits::from_json(&req)?,
     })
 }
 
@@ -699,30 +848,52 @@ pub fn client(args: &Args, socket: &str) -> Result<u8, String> {
         .collect::<Option<_>>()
         .ok_or("--env takes NAME=VALUE")?;
     let timeout = job::timeout_flag(args.get("timeout"))?;
-    let req = json!({
+    let limits = crate::limits::Limits::from_args(args)?;
+    let status_file = args.get("status-file").map(|p| crate::limits::StatusFile::create(Path::new(p))).transpose()?;
+    let mut req = json!({
         "workspace": workspace,
         "cmd": args.get("cmd").ok_or("--server needs --cmd COMMAND")?,
         "env": env,
         "env_file": args.get("env-file").map(abs).transpose()?,
         "timeout": timeout.as_secs_f64(),
     });
-    let mut conn = UnixStream::connect(socket).map_err(|e| format!("{socket}: {e}"))?;
-    conn.write_all(format!("{req}\n").as_bytes()).map_err(|e| e.to_string())?;
-    conn.set_read_timeout(Some(timeout.saturating_add(Duration::from_secs(30)))).map_err(|e| e.to_string())?;
-    let mut reader = BufReader::new(conn);
-    let mut header = String::new();
-    reader.read_line(&mut header).map_err(|e| format!("{socket}: {e}"))?;
-    let header: Value = serde_json::from_str(&header).map_err(|_| format!("{socket}: the job ended without an answer"))?;
+    if let Value::Object(m) = &mut req {
+        m.extend(limits.to_json());
+    }
+    let asked = || -> Result<(BufReader<UnixStream>, Value), String> {
+        let mut conn = UnixStream::connect(socket).map_err(|e| format!("{socket}: {e}"))?;
+        conn.write_all(format!("{req}\n").as_bytes()).map_err(|e| e.to_string())?;
+        conn.set_read_timeout(Some(timeout.saturating_add(Duration::from_secs(30)))).map_err(|e| e.to_string())?;
+        let mut reader = BufReader::new(conn);
+        let mut header = String::new();
+        reader.read_line(&mut header).map_err(|e| format!("{socket}: {e}"))?;
+        let header: Value = serde_json::from_str(&header).map_err(|_| format!("{socket}: the job ended without an answer"))?;
+        match header["error"].as_str() {
+            Some(e) => Err(e.to_string()),
+            None => Ok((reader, header)),
+        }
+    };
+    let (mut reader, header) = match asked() {
+        Ok(a) => a,
+        Err(e) => {
+            if let Some(f) = status_file {
+                f.error(&e);
+            }
+            return Err(e);
+        },
+    };
     let mut output = Vec::new();
     let _ = reader.read_to_end(&mut output);
     let mut out = std::io::stdout();
     let _ = out.write_all(&output);
     let _ = out.flush();
-    let status = header["status"].as_i64();
-    if status.is_none() {
-        eprintln!("snowglobe: the job ran out of time ({}s)", timeout.as_secs_f64());
+    let done = job::done_from_fields(&header);
+    let code = crate::limits::exit_code(&done);
+    crate::limits::say_why(&done, timeout);
+    if let Some(f) = status_file {
+        f.done(&done, code);
     }
-    Ok(job::exit_code(status))
+    Ok(code)
 }
 
 #[cfg(test)]
@@ -792,6 +963,53 @@ mod tests {
     }
 
     #[test]
+    fn a_request_carries_its_limits() {
+        let (root, _) = root("serve-limits");
+        let line = json!({
+            "workspace": root.join("ws"), "cmd": "make",
+            "disk_limit_mb": 64, "max_rss_mb": 512, "memory_limit_mb": 128, "cpus_limit": 1.5, "pids_limit": 50,
+            "cpu_time_s": 30, "output_limit": 4096, "copy_limit_mb": 16, "read_only_in": true, "egress": "https",
+        })
+        .to_string();
+        let l = request(&line, &root).unwrap().limits;
+        assert_eq!((l.disk_mb, l.max_rss_mb, l.memory_mb, l.cpus, l.pids), (Some(64), Some(512), Some(128), Some(1.5), Some(50)));
+        assert_eq!((l.cpu_time_s, l.output, l.copy_mb, l.read_only_in), (Some(30), Some(4096), 16, true));
+        assert_eq!(l.egress, Some(crate::limits::Egress::Https));
+        // A bad one is the request's error
+        let bad = json!({ "workspace": root.join("ws"), "cmd": "x", "disk_limit_mb": "big" }).to_string();
+        assert_eq!(request(&bad, &root).err().unwrap(), "disk_limit_mb: a whole number");
+        let Ok(Ask::Job(req)) = ask(r#"{"mode":"job","cmd":"x","output_limit":10}"#, &root) else { panic!() };
+        assert_eq!(req.limits.output, Some(10));
+    }
+
+    #[test]
+    fn a_workspace_is_under_the_jobs_root_not_the_root_itself() {
+        let (root, _) = root("serve-root-itself");
+        let e = request(&json!({ "workspace": root, "cmd": "x" }).to_string(), &root).err().unwrap();
+        assert!(e.contains("not the root itself"), "{e}");
+    }
+
+    #[test]
+    fn a_jobs_sandbox_is_its_own_workspace_not_the_jobs_root() {
+        let (dir, site) = crate::testing::site("serve-job-policy", &[]);
+        let root = dir.join("jobs");
+        let ws = root.join("team-a/job-1");
+        let server = policy(&site, &root, "/run/sg/s.sock", true);
+        let p = job_policy(&server, &site, &root, Some(&ws), true);
+        assert!(p.read.contains(&ws) && !p.read.contains(&root), "{:?}", p.read);
+        assert!(p.write.contains(&ws) && !p.write.contains(&root), "{:?}", p.write);
+        // Nothing else of what the server writes (the JIT profile cache, its logs) is
+        assert_eq!(p.write, std::slice::from_ref(&ws));
+        assert_eq!(p.hidden, std::slice::from_ref(&root));
+        assert_eq!(p.socket_dir, None);
+        assert!(p.network);
+        // A job that brings its files in its request has nothing of the root
+        let p = job_policy(&server, &site, &root, None, false);
+        assert!(!p.read.iter().chain(&p.write).any(|d| d.starts_with(&root)));
+        assert!(!p.network);
+    }
+
+    #[test]
     fn a_request_cant_reach_outside_the_jobs_root() {
         let (root, outside) = root("serve-outside");
         let err = |v: Value| request(&v.to_string(), &root).err().unwrap();
@@ -823,7 +1041,7 @@ mod tests {
     fn a_machine_is_asked_for_by_name_and_gets_its_socket_beside_the_servers() {
         let (root, outside) = root("serve-spawn");
         let spawn = |line: &str, socket: &str| spawn_request(line, socket, &root);
-        let at = |sock: &str| Ok(Some(Spawn { sock: PathBuf::from(sock), state: None }));
+        let at = |sock: &str| Ok(Some(Spawn { sock: PathBuf::from(sock), ..Spawn::default() }));
         assert_eq!(spawn(r#"{"mode":"spawn","name":"m-1_a"}"#, "/run/t/s.sock"), at("/run/t/m-1_a.sock"));
         // A relative server socket: the machine's is relative to the same directory
         assert_eq!(spawn(r#"{"mode":"spawn","name":"web"}"#, "s.sock"), at("web.sock"));
@@ -845,6 +1063,35 @@ mod tests {
             assert!(spawn(&line, "s.sock").unwrap_err().starts_with("spawn: name "), "{name}");
         }
         assert!(spawn(r#"{"mode":"spawn"}"#, "s.sock").is_err());
+    }
+
+    #[test]
+    fn a_machine_is_asked_for_with_its_egress_and_a_directory_of_its_own() {
+        let (root, outside) = root("serve-spawn-own");
+        std::fs::create_dir_all(root.join(".machines/m1")).unwrap();
+        let line = json!({ "mode": "spawn", "name": "m1", "egress": "https", "dir": root.join(".machines/m1") }).to_string();
+        let s = spawn_request(&line, "s.sock", &root).unwrap().unwrap();
+        assert_eq!(s.egress, Some(crate::limits::Egress::Https));
+        assert_eq!(s.dir, Some(root.join(".machines/m1")));
+        let err = |v: Value| spawn_request(&v.to_string(), "s.sock", &root).unwrap_err();
+        assert!(err(json!({ "mode": "spawn", "name": "m", "egress": "lots" })).starts_with("spawn: egress lots"));
+        // Its own: under the root, not the root itself, a directory
+        for dir in [outside.join("ws"), root.clone(), root.join("env.json"), root.join("missing")] {
+            assert!(err(json!({ "mode": "spawn", "name": "m", "dir": dir })).starts_with("spawn: dir"), "{}", dir.display());
+        }
+    }
+
+    #[test]
+    fn a_job_or_machine_gets_no_egress_its_site_has_no_network_for() {
+        let net = || machine::Net::from_args(&args(&[]), None).unwrap();
+        let spec = |network: &str| machine::Spec { memory_mb: 64, cpus: 1, network: network.into(), free_page_reporting: false };
+        let https = Some(crate::limits::Egress::Https);
+        assert_eq!(narrowed(net(), https, &spec("fetch")).unwrap().egress(), crate::limits::Egress::Https);
+        let e = narrowed(net(), https, &spec("none")).err().unwrap();
+        assert!(e.starts_with("egress https: this template's site has no network"), "{e}");
+        // None, or nothing asked, is always what it can have
+        assert!(narrowed(net(), Some(crate::limits::Egress::None), &spec("none")).is_ok());
+        assert!(narrowed(net(), None, &spec("none")).is_ok());
     }
 
     #[test]
@@ -911,6 +1158,28 @@ mod tests {
         assert_eq!(t.join().unwrap()["timeout"], 300.0);
         let (socket, t) = server("serve-client-none", b"");
         assert_eq!(client(&a, &socket).err().unwrap(), format!("{socket}: the job ended without an answer"));
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn the_client_sends_its_limits_and_says_what_ended_the_job() {
+        let ws = tmp("serve-client-limits");
+        let status = ws.join("status.json");
+        let a = args(&[
+            "--workspace", ws.to_str().unwrap(), "--cmd", "x", "--disk-limit", "8", "--output-limit", "100", "--egress", "none",
+            "--status-file", status.to_str().unwrap(),
+        ]);
+        let (socket, t) = server("serve-client-limits-s", b"{\"status\":null,\"killed\":true,\"oom\":true,\"ms\":3}\n");
+        assert_eq!(client(&a, &socket), Ok(137));
+        let req = t.join().unwrap();
+        assert_eq!((req["disk_limit_mb"].as_u64(), req["output_limit"].as_u64(), req["egress"].as_str()), (Some(8), Some(100), Some("none")));
+        assert!(req.get("max_rss_mb").is_none(), "only what is set is sent");
+        let v: Value = serde_json::from_slice(&std::fs::read(&status).unwrap()).unwrap();
+        // Out of memory: 137 as its status too, as a guest OOM kill has it
+        assert_eq!((v["oom"].as_bool(), v["exit"].as_u64(), v["status"].as_u64()), (Some(true), Some(137), Some(137)));
+        // A job that couldn't run: its error
+        let (socket, t) = server("serve-client-error", b"{\"error\":\"egress private: this server allows at most internet (its --egress)\"}\n");
+        assert_eq!(client(&args(&["--workspace", ws.to_str().unwrap(), "--cmd", "x"]), &socket).err().unwrap(), "egress private: this server allows at most internet (its --egress)");
         t.join().unwrap();
     }
 

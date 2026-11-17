@@ -36,6 +36,8 @@ func TestMain(m *testing.M) {
 		fakeBuild()
 	case os.Getenv("SNOWGLOBE_FAKE_MACHINE") != "":
 		fakeMachine(os.Getenv("SNOWGLOBE_FAKE_MACHINE"))
+	case os.Getenv("SNOWGLOBE_FAKE_VM") == "serve" && flagOf("workspace") != "":
+		fakeOneShot()
 	case os.Getenv("SNOWGLOBE_FAKE_VM") == "serve":
 		fakeServer()
 	case os.Getenv("SNOWGLOBE_FAKE_VM") == "fail":
@@ -70,6 +72,20 @@ func fakeBuild() {
 		os.WriteFile(filepath.Join(out, "system", "user.bin"), []byte("user"), 0o644)
 	}
 	fmt.Println("==> done")
+	os.Exit(0)
+}
+
+// fakeOneShot plays a one-shot run (`run SITE --workspace W --cmd C ...`), as a warm-up is: it
+// notes its arguments in $SNOWGLOBE_FAKE_ONESHOT_LOG, and fails if its command says "fail".
+func fakeOneShot() {
+	if f, err := os.OpenFile(os.Getenv("SNOWGLOBE_FAKE_ONESHOT_LOG"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		fmt.Fprintln(f, strings.Join(os.Args[1:], " "))
+		f.Close()
+	}
+	fmt.Println("one-shot", flagOf("cmd"))
+	if strings.Contains(flagOf("cmd"), "fail") {
+		os.Exit(2)
+	}
 	os.Exit(0)
 }
 
@@ -123,6 +139,10 @@ func fakeServer() {
 			return
 		}
 		req := readLine(c)
+		// What it was last asked, beside its socket, for the test to read
+		if data, err := json.Marshal(req); err == nil {
+			os.WriteFile(sock+"."+fmt.Sprint(req["mode"]), data, 0o600)
+		}
 		switch req["mode"] {
 		case "spawn":
 			delay("SNOWGLOBE_FAKE_SPAWN_DELAY")
@@ -148,10 +168,32 @@ func fakeServer() {
 			}
 			send(c, map[string]any{"pid": cmd.Process.Pid, "socket": msock})
 		case "job":
-			// On a fork of its own: others go on meanwhile
+			// On a fork of its own: others go on meanwhile. Its client going (the connection
+			// closed) cancels it, as snowglobe-vm's forks do: said in a file beside the socket
 			go func() {
-				sleepFor(req)
-				send(c, control.JobResult{Status: new(int), Output: []byte("fresh: 1\n")})
+				gone := make(chan struct{})
+				go func() {
+					io.Copy(io.Discard, c)
+					close(gone)
+				}()
+				select {
+				case <-gone:
+					os.WriteFile(sock+".cancelled", []byte(fmt.Sprint(req["cmd"])), 0o600)
+					c.Close()
+					return
+				case <-sleeping(req):
+				}
+				res := control.JobResult{Status: new(int), Output: []byte("fresh: 1\n")}
+				if req["cmd"] == "unenforceable" {
+					send(c, map[string]any{"error": "the guest can't enforce memory_limit_mb: its kernel has no memory cgroup controller"})
+					c.Close()
+					return
+				}
+				if req["cmd"] == "oom" {
+					status := 137
+					res = control.JobResult{Status: &status, OOM: true, Output: []byte("partial")}
+				}
+				send(c, res)
 				c.Close()
 			}()
 			continue
@@ -190,6 +232,7 @@ func fakeMachine(sock string) {
 			c.Close()
 		case "save":
 			path, _ := req["path"].(string)
+			os.WriteFile(sock+".saved", []byte(path), 0o600)
 			if err := os.WriteFile(path, fmt.Append(nil, jobs), 0o600); err != nil {
 				send(c, map[string]any{"error": err.Error()})
 			} else {
@@ -224,6 +267,16 @@ func delay(v string) {
 	if d, err := time.ParseDuration(os.Getenv(v)); err == nil {
 		time.Sleep(d)
 	}
+}
+
+// sleeping is closed once a job "sleep DURATION" has slept (at once for any other).
+func sleeping(req map[string]any) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		sleepFor(req)
+		close(done)
+	}()
+	return done
 }
 
 // sleepFor sleeps for a job "sleep DURATION".
@@ -884,5 +937,68 @@ func TestAJobsOutputIsCut(t *testing.T) {
 	if res.OutputCut < 7<<10 || !strings.HasPrefix(string(res.Output), strings.Repeat("x", 3000)) ||
 		!strings.Contains(string(res.Output), "more bytes of output were cut") || len(res.Output) > 4<<10 {
 		t.Errorf("cut %d, kept %d: %q", res.OutputCut, len(res.Output), res.Output[len(res.Output)-100:])
+	}
+}
+
+// A template warms up before its server starts: each warm command run on the site, one-shot,
+// with no network and in a workspace of its own, as many times as asked; a failing one fails the
+// add, and a snapshot's template (one team's machine) can't be warmed at all.
+func TestATemplateWarmsUpBeforeItServes(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	runs := filepath.Join(t.TempDir(), "oneshots")
+	t.Setenv("SNOWGLOBE_FAKE_ONESHOT_LOG", runs)
+	d := startDaemon(t, shortTemp(t), Options{})
+	defer d.stop(t)
+	c := d.c
+
+	tpl, err := c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "warm", Warm: []string{"jq . a.json", "sqlite3 :memory: 'select 1'"}, WarmRuns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(runs)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("warm-ups: %q", data)
+	}
+	for i, want := range []string{"jq . a.json", "jq . a.json", "sqlite3 :memory: 'select 1'", "sqlite3 :memory: 'select 1'"} {
+		l := lines[i]
+		if !strings.HasPrefix(l, "run "+tpl.Site+" --workspace ") || !strings.Contains(l, "--cmd "+want) || !strings.Contains(l, "--egress none") {
+			t.Errorf("warm-up %d: %q", i, l)
+		}
+	}
+	if len(tpl.Warm) != 2 || !alive(tpl.Pid) {
+		t.Errorf("template: %+v", tpl)
+	}
+	// Their workspaces are gone
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(tpl.Log), "warm-*")); len(left) != 0 {
+		t.Errorf("warm-up workspaces left: %v", left)
+	}
+	log, _ := os.ReadFile(tpl.Log)
+	if !strings.Contains(string(log), "warm-up 2/2 done") {
+		t.Errorf("log: %s", log)
+	}
+
+	// The default is 3 runs
+	os.Remove(runs)
+	if _, err := c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "warm3", Warm: []string{"true"}}); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(runs); strings.Count(string(data), "\n") != 3 {
+		t.Errorf("default runs: %q", data)
+	}
+
+	if _, err := c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "cold", Warm: []string{"fail now"}}); statusOf(err) != 422 || !strings.Contains(err.Error(), "fail now") {
+		t.Errorf("a failing warm-up: %v", err)
+	}
+	if ts, _ := c.Templates(); len(ts) != 2 {
+		t.Errorf("a template whose warm-up failed was added: %+v", ts)
+	}
+	for what, req := range map[string]AddTemplate{
+		"too many runs": {Site: fakeSite(t), Name: "x", Warm: []string{"true"}, WarmRuns: 51},
+		"empty command": {Site: fakeSite(t), Name: "y", Warm: []string{" "}},
+	} {
+		if _, err := c.AddTemplate(req); statusOf(err) != 400 {
+			t.Errorf("%s: %v", what, err)
+		}
 	}
 }

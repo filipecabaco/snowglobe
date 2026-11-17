@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/filipecabaco/snowglobe/internal/control"
 )
 
 // Event is something the daemon did or saw: a template added, asleep or awake; a machine up,
@@ -18,6 +21,37 @@ type Event struct {
 	Kind    string    `json:"kind"`
 	Subject string    `json:"subject"`
 	Message string    `json:"message"`
+	// What a labelled job was labelled with (job.ended)
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// jobEnd says how a job ended, for its event.
+func jobEnd(r *control.JobResult, err error) string {
+	switch {
+	case err != nil:
+		return "failed: " + err.Error()
+	case r.Status == nil && r.Cancelled:
+		return fmt.Sprintf("cancelled after %d ms", r.Ms)
+	case r.Status == nil && r.TimedOut:
+		return fmt.Sprintf("out of time after %d ms", r.Ms)
+	}
+	var why []string
+	for _, w := range []struct {
+		on   bool
+		what string
+	}{{r.OOM, "out of memory"}, {r.DiskFull, "disk full"}, {r.OutputTruncated, "output cut"}, {r.CPUTimeExceeded, "out of CPU time"}} {
+		if w.on {
+			why = append(why, w.what)
+		}
+	}
+	status := "no status"
+	if r.Status != nil {
+		status = fmt.Sprintf("status %d", *r.Status)
+	}
+	if len(why) > 0 {
+		status += " (" + strings.Join(why, ", ") + ")"
+	}
+	return fmt.Sprintf("%s in %d ms", status, r.Ms)
 }
 
 // How many events the daemon keeps, for those who connect later

@@ -53,6 +53,12 @@ type Template struct {
 	Egress  string            `json:"egress,omitempty"`
 	Labels  map[string]string `json:"labels,omitempty"`
 	Started time.Time         `json:"started"`
+	// What it restores from holds on disk: its snapshot's file, or its site's directory (a
+	// template made of a snapshot holds the snapshot's bytes, not more of its own)
+	SizeBytes int64 `json:"size_bytes"`
+	// The trusted commands its site's JIT profile learned from before it started
+	// (AddTemplate.Warm)
+	Warm []string `json:"warm,omitempty"`
 }
 
 // Machine is a machine forked from a template, lasting until it is removed.
@@ -68,6 +74,11 @@ type Machine struct {
 	Created  time.Time `json:"created"`
 	// When it stops, whatever it is doing (up --ttl)
 	Expires *time.Time `json:"expires,omitempty"`
+	// Its network, if it asked for one of its own (Up.Egress; else its template's)
+	Egress string `json:"egress,omitempty"`
+	// Its own directory under its template's jobs root: all of the root its sandbox lets it
+	// touch, where its snapshots are written ("" for a machine from before there was one)
+	Dir string `json:"dir,omitempty"`
 }
 
 // Snapshot is a machine saved whole (RAM, CPUs, devices, the files its guest wrote): machines start
@@ -82,6 +93,9 @@ type Snapshot struct {
 	Ms       int64             `json:"ms"`
 	Labels   map[string]string `json:"labels,omitempty"`
 	Created  time.Time         `json:"created"`
+	// What it holds on disk (its file, and its program's process beside it for a machine with
+	// no kernel): what a storage quota counts
+	SizeBytes int64 `json:"size_bytes"`
 }
 
 // Port is a host port the daemon forwards to a machine's guest port.

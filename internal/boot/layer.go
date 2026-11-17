@@ -27,6 +27,20 @@ import (
 //go:embed kernel.Dockerfile
 var kernelDockerfile []byte
 
+// SerialShell is what getty starts on ttyS0: the root shell jobs are typed into. Its terminal
+// doesn't echo, so BusyBox's ash reads each line as it comes (canonical mode) rather than with
+// its line editor, which at every prompt asks the terminal where its cursor is (ESC[6n) and,
+// with no answer before the next line comes, sleeps 20 ms before running it: every job paid it
+// whenever the snapshot found the shell at its prompt (results-exclave-2026-11.md). Nothing is
+// lost: jobs are typed by the host, not a person, and the nonce a job's launcher is typed isn't
+// echoed back either. No history file: the line editor would append each line to it, a write to
+// the root filesystem before every job.
+const SerialShell = `#!/bin/sh
+stty -echo 2>/dev/null
+export HISTFILE=/dev/null
+exec /bin/sh
+`
+
 // Files is the boot layer's files, for an image whose app runs as console describes.
 // EnvFiles is what a site with no kernel has of the boot layer: the image's environment in
 // /etc/snowglobe/env, which a job sources (a job runs beside the program, in a shell of its own).
@@ -47,6 +61,13 @@ mkdir -p /dev/pts /dev/shm /run
 mount -t devpts -o gid=5,mode=620 devpts /dev/pts
 mount -t tmpfs -o mode=1777 shm /dev/shm
 mount -t tmpfs -o mode=755 run /run
+# cgroup v2, which a job's limits are made of (a kernel built without it has no /sys/fs/cgroup):
+# the controllers handed down and the jobs' cgroup made once, here, so a job asking for limits
+# only writes them (the job launcher reuses sgjob while it is empty)
+if mount -t cgroup2 cgroup2 /sys/fs/cgroup 2>/dev/null; then
+  for c in memory cpu pids; do echo "+$c" >/sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; done
+  mkdir /sys/fs/cgroup/sgjob && echo 1 >/sys/fs/cgroup/sgjob/memory.oom.group 2>/dev/null
+fi
 hostname -F /etc/hostname
 ip link set lo up
 `
@@ -57,9 +78,9 @@ ip link set lo up
 		{Name: "etc/hostname", Data: []byte("snowglobe\n"), Mode: 0o644},
 		{Name: "etc/resolv.conf", Data: nil, Mode: 0o644},
 		// hvc0 (virtio console) is what the browser shows: it runs the app. ttyS0 (serial) gets a
-		// root shell that the snapshot uses for housekeeping
+		// root shell that the snapshot uses for housekeeping, and jobs are typed into
 		{Name: "etc/inittab", Mode: 0o644, Data: []byte(`::sysinit:/usr/local/sbin/snowglobe-init
-ttyS0::respawn:/sbin/getty -n -i -l /bin/sh -L 115200 ttyS0 vt100
+ttyS0::respawn:/sbin/getty -n -i -l /usr/local/sbin/snowglobe-shell -L 115200 ttyS0 vt100
 hvc0::respawn:/sbin/getty -n -i -l /usr/local/bin/snowglobe-login -L 115200 hvc0 xterm-256color
 ::shutdown:/bin/umount -a -r
 `)},
@@ -71,6 +92,7 @@ cd /root 2>/dev/null
 [ -f /etc/profile ] && . /etc/profile
 exec /usr/local/bin/snowglobe-console
 `)},
+		{Name: "usr/local/sbin/snowglobe-shell", Mode: 0o755, Data: []byte(SerialShell)},
 		{Name: "usr/local/bin/snowglobe-console", Mode: 0o755, Data: []byte(Script(console))},
 		{Name: "etc/snowglobe", Dir: true, Mode: 0o755},
 		{Name: "etc/snowglobe/env", Mode: 0o644, Data: []byte(Env(console))},

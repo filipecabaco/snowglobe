@@ -90,7 +90,19 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   one-shot jobs: `--workspace DIR --cmd COMMAND [--env K=V] [--env-file JSON] [--timeout SECS]`
   writes DIR into a fresh machine, runs the command, and returns its output, exit status and
   `out/`. `--serve SOCKET --jobs-root DIR` restores once and forks per job; `--server SOCKET` is
-  its client.
+  its client. A job's limits, each a flag and the same request field (per fork with `--serve`):
+  `--disk-limit MB` (`disk_limit_mb`, ENOSPC past it), `--max-rss MB` (`max_rss_mb`, exit 137),
+  `--memory-limit MB` / `--cpus-limit N` / `--pids-limit N` (`memory_limit_mb`, `cpus_limit`,
+  `pids_limit`: a guest cgroup v2, ending what the job left running; guest OOM is 137; the memory
+  limit needs a site built with `--memory-limits`), `--cpu-time S` (`cpu_time_s`, exit 152),
+  `--output-limit BYTES` (`output_limit`, exit 153), `--copy-limit MB` (`copy_limit_mb`, default
+  2048), `--read-only-in` (`read_only_in`), `--egress none|https|internet|private` (`egress`).
+  `--status-file PATH` writes `{status, exit, timed_out, killed, oom, output_truncated, disk_full,
+  cpu_time_exceeded, out_truncated, ms}`; a server's answer has the same fields. A forked job is
+  confined to its own workspace, connects to no Unix socket, writes nothing its server shares (the
+  JIT profile is read only; the server's `--log-dir` is closed in each job and holds the server's
+  own events, and its stdout/stderr go to /dev/null in each job), and is cancelled when its client disconnects. macOS (Seatbelt) is for development;
+  run other people's jobs on Linux.
 - `snowglobe daemon [--listen ADDR --token-file F] [--detach]` is the orchestrator: it keeps templates (a
   site restored once) and machines forked from them, with an HTTP/JSON API on a Unix socket in the
   user cache (`/v1/templates`, `/v1/machines`, `/v1/machines/{name}/jobs`,
@@ -100,8 +112,22 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   daemon stop`; a second ctrl-c skips the grace), it stops its template servers, machines and builds; killed outright, they stop
   themselves (each holds a lifeline to it). Started again, it restores its templates from their
   sites and starts its services' replicas; machines are not brought back.
+  A job (`POST /v1/templates/{name}/jobs`, `/v1/machines/{name}/jobs`, `/v1/services/{name}/jobs`)
+  is `{"files": {path: base64}, "cmd", "env", "timeout", "workdir", "memory_limit_mb",
+  "cpus_limit", "pids_limit", "disk_limit_mb", "max_rss_mb", "cpu_time_s", "output_limit",
+  "copy_limit_mb", "egress": "none|https|internet|private", "read_only_in", "labels"}` (all but
+  `cmd` optional) and answers `{"status", "output", "out", "timed_out", "cancelled", "killed",
+  "ms", "oom", "disk_full", "output_truncated", "cpu_time_exceeded", "out_truncated"}`. `workdir`
+  runs it in an absolute guest path (its files copied there, out/ read from there: only what it
+  wrote). A limit the machine can't enforce is answered 200 with `"error"` (non-2xx is for the
+  API: 400, 404, 429 when the memory budget refuses it). The client disconnecting cancels the job
+  and frees its fork. A job on a machine has the machine's egress (`POST /v1/machines
+  {"template", "name", "labels", "ttl", "egress"}`); each machine gets a directory of its own under
+  its template's jobs root, all of the root it can touch. `GET /v1/templates?label=k=v` and `GET
+  /v1/snapshots?label=k=v` filter; both report `size_bytes`. Labelled jobs end with a `job.ended`
+  event carrying their labels. The full contract: docs/design/exclave-contract.md in the repo.
   It builds too: `POST /v1/builds {"name","source"|"dockerfile"|"context","network","memory_mb",
-  "cpus","kernel","builder","no_template","artifact"}` runs `snowglobe build` (a directory by its
+  "cpus","kernel","builder","memory_limits","no_template","artifact"}` runs `snowglobe build` (a directory by its
   full path, an image reference, a Dockerfile's text, or a context uploaded with `POST
   /v1/contexts` (a tar, `?format=zst|gz`; answers `{"context","digest","bytes","files"}`); Docker
   when there, else natively for images) and makes the site a template; `"kernel": "linux"|"none"`;
@@ -124,7 +150,10 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   any host or CDN, at any path.
 - `snowglobe template add <site> [--name T] [--max-machines N] [--idle 30m]`, `template ls`,
   `template rm T` (removes its machines too). `--idle` stops the template's server after that long
-  with no machine; the next `up` or job restores it (about a second).
+  with no machine; the next `up` or job restores it (about a second). `--warm CMD` (repeatable,
+  `--warm-runs N`, default 3; `warm`/`warm_runs` in the API and on `/v1/builds`) runs CMD on the
+  site N times as one-shot runs first, so the JIT profile its server compiles before forking (and
+  its jobs only read) has that code: the profile learns from those trusted runs only.
 - `snowglobe daemon --memory 8G [--wait 30s]` caps what templates and machines take together: a
   machine that doesn't fit waits for room, then is refused (429) with the reason. `up --ttl 1h`
   stops a machine after that long.
@@ -226,6 +255,9 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
 - `--allow-private`: let the build's snapshot reach loopback and private addresses.
 - `--builder docker|native`: build with Docker (default) or with none.
 - `--sandbox`: keep the guest's file cache in the snapshot, for bundles and native runs.
+- `--memory-limits`: boot the guest with its kernel's memory cgroup controller, so jobs may ask for
+  `memory_limit_mb` (off by default: it costs fork-heavy jobs ~5%; a job asking for it on a site
+  built without it fails, saying so). `cpus_limit` and `pids_limit` need nothing.
 - `--no-chunks`: don't split large files into content-defined chunks.
 - `--agent` / `snowglobe.agent="true"`: make the machine one of the agent page's, `/agent/` (below). Off by default. With `snowglobe.agent-purpose` (one line: what it is good for) and `snowglobe.agent-sample` (a command to try), the page lists it. `snowglobe.agent-name` names the machine on the page when its site's directory is called something else (the page's `python` is built from `examples/python-agent`, which has a network for `pip install`; `examples/python`, the page at `/python/`, has none).
 - `snowglobe.agent-name`: the machine's name on the agent page, when its site's directory has another (see `python` below).

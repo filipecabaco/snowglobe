@@ -51,6 +51,9 @@ func TestABuildBecomesATemplateWithItsLog(t *testing.T) {
 	if err != nil || !strings.Contains(log, "snowglobe build "+dir+" --out "+b.Site+" --sandbox --builder docker --network fetch --memory 256") || !strings.Contains(log, "==> done") {
 		t.Errorf("log: %q %v", log, err)
 	}
+	if strings.Contains(log, "--memory-limits") {
+		t.Errorf("memory limits unasked: %q", log)
+	}
 	if rest, _ := d.c.BuildLog(b.ID, int64(len(log)-7)); rest != "> done\n" {
 		t.Errorf("from an offset: %q", rest)
 	}
@@ -218,5 +221,25 @@ func TestABuildCancelledAsItsTemplateRestoresLeavesNone(t *testing.T) {
 	}
 	if ts, _ := d.c.Templates(); len(ts) != 0 {
 		t.Errorf("templates: %+v", ts)
+	}
+}
+
+// A template whose jobs may ask for memory_limit_mb is built with the guest's memory controller
+func TestABuildWithMemoryLimitsSaysSo(t *testing.T) {
+	d := buildDaemon(t, true)
+	defer d.stop(t)
+	dir := t.TempDir()
+	b, err := d.c.StartBuild(BuildRequest{Name: "limited", Source: dir, MemoryLimits: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.MemoryLimits {
+		t.Errorf("as started: %+v", b)
+	}
+	b = waitBuild(t, d, b.ID)
+	defer d.c.RemoveTemplate("limited")
+	log, err := d.c.BuildLog(b.ID, 0)
+	if err != nil || !strings.Contains(log, " --sandbox --builder docker --memory-limits") {
+		t.Errorf("log: %q %v", log, err)
 	}
 }

@@ -109,10 +109,15 @@ jobs:
           IMAGE: ${{ matrix.image }}
         run: |
           mkdir -p ~/cargo-cache/registry ~/cargo-cache/git ~/cargo-cache/target
-          docker run --rm -v "$PWD/internal/tools/runtime:/src:ro" \
+          # Privileged, so the job launcher's guest limits (a cgroup of the job's own, a read-only
+          # mount) are tested as the guest's root shell has them: the container's processes move
+          # to a leaf first, as Docker-in-Docker does, so its root cgroup can hand controllers down
+          docker run --rm --privileged -v "$PWD/internal/tools/runtime:/src:ro" \
             -v ~/cargo-cache/registry:/usr/local/cargo/registry -v ~/cargo-cache/git:/usr/local/cargo/git \
             -v ~/cargo-cache/target:/target -e CARGO_TARGET_DIR=/target -e CARGO_NET_GIT_FETCH_WITH_CLI=true \
             -w /src "$IMAGE" sh -c '
+              mkdir -p /sys/fs/cgroup/init
+              for p in $(cat /sys/fs/cgroup/cgroup.procs); do echo "$p" >/sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true; done
               if command -v apk >/dev/null; then apk add -q --no-cache musl-dev git; fi
               cargo test --locked'
           sudo chown -R "$(id -u)" ~/cargo-cache

@@ -22,6 +22,12 @@ RUN curl -fsSL -o /linux.tar.xz "https://cdn.kernel.org/pub/linux/kernel/v6.x/li
     echo "${SHA256}  /linux.tar.xz" | sha256sum -c - && \
     tar -xJf /linux.tar.xz --strip-components=1 && rm /linux.tar.xz
 
+# CONFIG_SCHED_MM_CID (per-mm concurrency ids for rseq, which nothing in a guest reads) comes on with
+# CONFIG_CGROUPS and can't be turned off in Kconfig: it puts work on every context switch, fork and
+# exit, ~7% of a fork-heavy job in the emulator. Off, as it was in kernels without cgroups
+RUN sed -i '/^config SCHED_MM_CID$/{n;s/def_bool y/def_bool n/}' init/Kconfig && \
+    grep -A1 '^config SCHED_MM_CID$' init/Kconfig | grep -q 'def_bool n'
+
 # Merged onto allnoconfig. With EXPERT on, KCONFIG_ALLCONFIG fixes these first, so allnoconfig also
 # turns off what only EXPERT shows (the block layer, kallsyms, ...), not just what's always visible
 COPY <<'CONFIG' /snowglobe.config
@@ -114,11 +120,25 @@ CONFIG_TMPFS=y
 CONFIG_IPV6=y
 CONFIG_IO_URING=y
 CONFIG_PROC_PAGE_MONITOR=y
+
+# cgroup v2 with the memory, CPU (bandwidth) and pids controllers: what a job's limits are made of
+# (--memory-limit, --cpus-limit, --pids-limit: the job launcher puts the command in a cgroup of
+# its own). No swap (there is no block layer), so memory.max is the whole of it. The memory
+# controller is only on in sites built with --memory-limits (otherwise the guest boots with
+# cgroup_disable=memory: accounting every page costs fork-heavy jobs ~5%); CPU and pids cost
+# nothing measurable (results-exclave-2026-11.md, "after fixes")
+CONFIG_CGROUPS=y
+CONFIG_MEMCG=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_CGROUP_SCHED=y
+CONFIG_FAIR_GROUP_SCHED=y
+CONFIG_CFS_BANDWIDTH=y
 CONFIG
 RUN cross=; [ "$(uname -m)" = aarch64 ] || cross=aarch64-linux-gnu-; \
     KCONFIG_ALLCONFIG=/snowglobe.config make ARCH=arm64 CROSS_COMPILE=$cross allnoconfig && \
     for opt in $(grep -o '^CONFIG_[A-Z0-9_]*=y' /snowglobe.config); do \
       grep -qx "$opt" .config || { echo "not in the kernel's config: $opt"; exit 1; }; done && \
+    ! grep -q '^CONFIG_SCHED_MM_CID=y' .config && \
     make ARCH=arm64 CROSS_COMPILE=$cross -j"$(nproc)" Image
 
 # The image the archive is read from (BuildKernel: a tar of boot/vmlinuz-virt)

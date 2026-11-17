@@ -62,8 +62,30 @@
             <li>A run says which parts of the sandbox it got.</li>
             <li><code>SNOWGLOBE_SANDBOX=strict</code> refuses to run without all of them.</li>
             <li><code>snowglobe-vm sandbox-check</code> tries what a run must not be able to do and reports
-              each.</li>
+              each; <code>sandbox-check --job</code> does the same for a job forked by a serving process.</li>
           </ul>
+          <p>A serving process (<code>--serve</code>, and every template of <code>snowglobe daemon</code>) runs the
+            jobs of everyone who sends it one, so each forked job is narrowed further before any of its code
+            runs:</p>
+          <ul>
+            <li>It reads and writes its own workspace and nothing else of the jobs root: not another job's
+              files, environment or output.</li>
+            <li>It writes nothing the server shares between jobs. The JIT profile the server compiled from is
+              read only, and a job's own compiling is never saved into it, so what one job (one team) ran
+              can't shape, or be inferred from, how fast another's starts. The server's logs are closed in
+              the job before it runs and aren't writable to it, and its stdout and stderr (the template's
+              log, under the daemon) point at <code>/dev/null</code>: what a job prints is in its answer
+              only, whatever it writes to the guest's consoles. The profile learns only from the operator's
+              <code>template add --warm</code> runs; the daemon's <code>job.ended</code> event,
+              with the job's labels, is the per-job record.</li>
+            <li>It connects to no Unix socket: not its server's control socket, nor another machine's. On
+              Linux seccomp refuses to make one at all; on macOS Seatbelt refuses to connect one (the system's
+              DNS resolver's excepted, for a job with a network).</li>
+          </ul>
+          <p>macOS is a development platform for snowglobe, not a multi-tenant one: Seatbelt has no
+            equivalent of seccomp's system-call filter or of Landlock's stacking, and what is enforced there
+            is checked by <code>sandbox-check</code> rather than built into the kernel the way Linux's is. Run
+            other people's jobs on Linux.</p>
 
           <h2 class="h3" id="shared-memory-safety">Shared memory stays private</h2>
           <p>Native runs of one site share its snapshot's memory (<a href="../running/#shared-memory">how</a>). The

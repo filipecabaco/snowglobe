@@ -39,8 +39,15 @@ type BuildRequest struct {
 	Kernel string `json:"kernel,omitempty"`
 	// docker or native; empty: Docker when it is there, else native (images only)
 	Builder string `json:"builder,omitempty"`
+	// Boot the guest with its kernel's memory cgroup controller, so its jobs may ask for
+	// memory_limit_mb (snowglobe build --memory-limits); without it such a job fails, saying so
+	MemoryLimits bool `json:"memory_limits,omitempty"`
 	// Don't make it a template once built
 	NoTemplate bool `json:"no_template,omitempty"`
+	// The template's warm-up (AddTemplate.Warm, WarmRuns): trusted commands its site's JIT
+	// profile learns from before its server starts
+	Warm     []string `json:"warm,omitempty"`
+	WarmRuns int      `json:"warm_runs,omitempty"`
 	// Pack the site for the browser into one file to download (GET /v1/builds/{id}/artifact),
 	// making no template. What was built of the same input with the same options is built once:
 	// asked again, the answer is the build that made it (cached) or the one making it
@@ -51,19 +58,21 @@ type BuildRequest struct {
 
 // Build is a build of a site, running or done.
 type Build struct {
-	ID      string     `json:"id"`
-	Name    string     `json:"name"`
-	Kind    string     `json:"kind"` // dir, image, dockerfile or context
-	Source  string     `json:"source,omitempty"`
-	Network string     `json:"network,omitempty"`
-	Memory  int        `json:"memory_mb,omitempty"`
-	CPUs    int        `json:"cpus,omitempty"`
-	Kernel  string     `json:"kernel,omitempty"`
-	Builder string     `json:"builder"`
-	Status  string     `json:"status"` // queued, running, done, failed, cancelled, interrupted
-	Created time.Time  `json:"created"`
-	Started *time.Time `json:"started,omitempty"`
-	Ended   *time.Time `json:"ended,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"` // dir, image, dockerfile or context
+	Source  string `json:"source,omitempty"`
+	Network string `json:"network,omitempty"`
+	Memory  int    `json:"memory_mb,omitempty"`
+	CPUs    int    `json:"cpus,omitempty"`
+	Kernel  string `json:"kernel,omitempty"`
+	// Built with the memory cgroup controller (BuildRequest.MemoryLimits)
+	MemoryLimits bool       `json:"memory_limits,omitempty"`
+	Builder      string     `json:"builder"`
+	Status       string     `json:"status"` // queued, running, done, failed, cancelled, interrupted
+	Created      time.Time  `json:"created"`
+	Started      *time.Time `json:"started,omitempty"`
+	Ended        *time.Time `json:"ended,omitempty"`
 	// The built site, and the template made of it
 	Site     string `json:"site,omitempty"`
 	Template string `json:"template,omitempty"`
@@ -80,6 +89,8 @@ type Build struct {
 	Cached     bool `json:"cached,omitempty"`
 	noTemplate bool
 	pack       bool
+	warm       []string
+	warmRuns   int
 	dir        string
 }
 
@@ -190,7 +201,8 @@ func (s *Server) StartBuild(req BuildRequest) (*Build, error) {
 		req.Network = ""
 	}
 	b := &Build{ID: randomName("build"), Name: req.Name, Network: req.Network, Memory: req.Memory, CPUs: req.CPUs, Kernel: req.Kernel,
-		Builder: req.Builder, Status: "queued", Created: time.Now(), noTemplate: req.NoTemplate, pack: req.Artifact}
+		MemoryLimits: req.MemoryLimits, Builder: req.Builder, Status: "queued", Created: time.Now(), noTemplate: req.NoTemplate, pack: req.Artifact,
+		warm: req.Warm, warmRuns: req.WarmRuns}
 	if b.Name == "" {
 		b.Name = b.ID
 	}
@@ -389,6 +401,9 @@ func (s *Server) runBuild(b *Build) {
 		args = append(args, "--sandbox")
 	}
 	args = append(args, "--builder", b.Builder)
+	if b.MemoryLimits {
+		args = append(args, "--memory-limits")
+	}
 	if b.Kernel != "" {
 		args = append(args, "--kernel", b.Kernel)
 	}
@@ -464,7 +479,7 @@ func (s *Server) runBuild(b *Build) {
 	s.builds.mu.Unlock()
 	added := false
 	if !cancelled && err == nil && !b.noTemplate {
-		if _, terr := s.AddTemplate(AddTemplate{Site: b.Site, Name: b.Name}); terr != nil {
+		if _, terr := s.AddTemplate(AddTemplate{Site: b.Site, Name: b.Name, Warm: b.warm, WarmRuns: b.warmRuns}); terr != nil {
 			err = fmt.Errorf("built, but its template: %w", terr)
 		} else {
 			added = true

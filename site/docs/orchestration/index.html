@@ -353,6 +353,7 @@ snowglobe up py --ttl 1h</pre>
                 <tr><td><code>daemon --wait 30s</code></td><td>how long a machine that doesn't fit waits for room before it is refused, with the reason</td></tr>
                 <tr><td><code>up --ttl 1h</code></td><td>stops a machine after that long, whatever it is doing</td></tr>
                 <tr><td><code>template add --idle 30m</code></td><td>stops a template's server after that long without a machine; the next <code>up</code> (or job) restores it first, in about a second</td></tr>
+                <tr><td><code>template add --warm CMD [--warm-runs 3]</code></td><td>runs CMD on the site that many times first, each a one-shot run of its own with no network, so the JIT profile the server compiles before it forks has what CMD runs: jobs start with that code compiled. Jobs only read the profile; these trusted runs are the only ones it learns from. Not for a <code>--snapshot</code> template</td></tr>
               </tbody>
             </table>
           </div>
@@ -426,6 +427,8 @@ mkdir -p public/app &amp;&amp; tar --zstd -xf app.tar.zst -C public/app    <span
             <li><strong>Builds:</strong> <code>POST /v1/builds</code> takes a directory with a Dockerfile (by its full
               path), an image reference, or a Dockerfile's text. It runs <code>snowglobe build</code> (Docker when
               it's there; an image builds natively without it) and makes the result a template.
+              <code>"memory_limits": true</code> builds it with the guest's memory controller, so its jobs may ask
+              for <code>memory_limit_mb</code>.
               <code>/v1/builds/{id}/log</code> streams its output (<code>?follow=1</code>). With
               <code>"artifact": true</code> it packs the site instead, cached, for
               <code>/v1/builds/{id}/artifact</code> (<code>?format=gz</code> for a .tar.gz); a context is uploaded with
@@ -440,9 +443,9 @@ mkdir -p public/app &amp;&amp; tar --zstd -xf app.tar.zst -C public/app    <span
             <table>
               <thead><tr><th scope="col">Path</th><th scope="col">What it serves</th></tr></thead>
               <tbody>
-                <tr><td><code>/v1/templates</code>, <code>/v1/machines</code></td><td>templates and machines</td></tr>
+                <tr><td><code>/v1/templates</code>, <code>/v1/machines</code></td><td>templates and machines (<code>?label=k=v</code> filters; templates and snapshots report <code>size_bytes</code>; a machine takes <code>egress</code>, <code>ttl</code> and <code>labels</code>)</td></tr>
                 <tr><td><code>/v1/machines/{name}/jobs</code></td><td>a job on a machine</td></tr>
-                <tr><td><code>/v1/templates/{name}/jobs</code></td><td>a job on a fresh fork</td></tr>
+                <tr><td><code>/v1/templates/{name}/jobs</code></td><td>a job on a fresh fork: <code>files</code>, <code>cmd</code>, <code>env</code>, <code>timeout</code>, and optionally <code>workdir</code>, the limits (<code>memory_limit_mb</code>, <code>cpus_limit</code>, <code>pids_limit</code>, <code>disk_limit_mb</code>, <code>max_rss_mb</code>, <code>cpu_time_s</code>, <code>output_limit</code>, <code>copy_limit_mb</code>, <code>read_only_in</code>), <code>egress</code> and <code>labels</code>; a limit it can't enforce (<code>memory_limit_mb</code> on a template built without <code>--memory-limits</code>, say) answers 200 with <code>error</code>, and the client disconnecting cancels it. A job connects to no Unix socket and writes nothing its template server shares with other jobs</td></tr>
                 <tr><td><code>POST /v1/runs</code>, <code>GET /v1/runs/{id}</code></td><td>fire-and-forget runs</td></tr>
                 <tr><td><code>/v1/services</code>, <code>/v1/services/{name}/jobs</code></td><td>services, and a job on a replica</td></tr>
                 <tr><td><code>/v1/links</code>, <code>/v1/graph</code></td><td>links, and the graph of what reaches what</td></tr>

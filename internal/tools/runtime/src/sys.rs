@@ -14,6 +14,13 @@ pub fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/// Whether this process may write `path` (access(2) with W_OK): a read-only mount says no.
+#[cfg(all(test, target_os = "linux"))]
+pub fn writable(path: &std::ffi::CStr) -> bool {
+    // SAFETY: path is a valid NUL-terminated string for the duration of the call
+    unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
+}
+
 // ---------------------------------------------------------------- the terminal
 
 /// The terminal settings of `fd`, if it is a terminal.
@@ -102,6 +109,19 @@ pub fn inherited(fd: libc::c_int) -> Option<std::os::fd::OwnedFd> {
     Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
 }
 
+/// Point this process's stdout and stderr at `to` (both descriptors replaced; `to` stays open).
+pub fn redirect_stdio(to: std::os::fd::BorrowedFd) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    for fd in [libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+        // SAFETY: dup2 onto stdout/stderr replaces those two descriptors with a copy of an open
+        // one (`to` is borrowed, so open); no Rust object owns 1 or 2
+        if unsafe { libc::dup2(to.as_raw_fd(), fd) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// A pipe: (read end, write end), both close-on-exec.
 pub fn pipe() -> io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
     use std::os::fd::FromRawFd;
@@ -133,6 +153,105 @@ pub fn readable(fds: &[BorrowedFd]) -> io::Result<Vec<bool>> {
         }
     }
     Ok(polled.iter().map(|p| p.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0).collect())
+}
+
+// ---------------------------------------------------------------- what this process uses
+
+/// What this process has used: the most memory it has had resident (bytes), and the CPU time of
+/// all its threads.
+pub fn usage() -> (u64, std::time::Duration) {
+    // SAFETY: rusage is plain C data: all zeroes is a valid value
+    let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: getrusage writes one rusage into `u`
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
+    // Linux counts ru_maxrss in KiB, macOS in bytes
+    let rss = u.ru_maxrss.max(0) as u64 * if cfg!(target_os = "macos") { 1 } else { 1024 };
+    let tv = |t: libc::timeval| std::time::Duration::new(t.tv_sec.max(0) as u64, (t.tv_usec.max(0) as u32) * 1000);
+    (rss, tv(u.ru_utime) + tv(u.ru_stime))
+}
+
+/// RLIMIT_CPU: at `soft` seconds of CPU time (all threads) the system sends SIGXCPU, at `hard`
+/// it kills the process. Never raised past what it is.
+pub fn limit_cpu_time(soft: u64, hard: u64) -> io::Result<()> {
+    let mut cur = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: getrlimit writes one rlimit into `cur`
+    if unsafe { libc::getrlimit(libc::RLIMIT_CPU, &mut cur) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let hard = (hard as libc::rlim_t).min(cur.rlim_max);
+    let l = libc::rlimit { rlim_cur: (soft as libc::rlim_t).min(hard), rlim_max: hard };
+    // SAFETY: setrlimit reads one valid rlimit
+    if unsafe { libc::setrlimit(libc::RLIMIT_CPU, &l) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- files, never through a link
+
+fn cstr(name: &std::ffi::OsStr) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(name.as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
+}
+
+fn at(dir: Option<BorrowedFd>) -> libc::c_int {
+    dir.map_or(libc::AT_FDCWD, |d| d.as_raw_fd())
+}
+
+/// The directory `name` in `dir` (relative to the working directory without one), made first
+/// with `create`; never one reached through a symbolic link (ELOOP or ENOTDIR if it is one).
+pub fn open_dir_at(dir: Option<BorrowedFd>, name: &std::ffi::OsStr, create: bool) -> io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    let c = cstr(name)?;
+    if create {
+        // SAFETY: a NUL-terminated name read during the call, and a descriptor borrowed for it
+        if unsafe { libc::mkdirat(at(dir), c.as_ptr(), 0o755) } != 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::AlreadyExists {
+                return Err(e);
+            }
+        }
+    }
+    // SAFETY: as above; openat returns a new descriptor or -1
+    let fd = unsafe { libc::openat(at(dir), c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a new descriptor openat just returned, owned by nothing else
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+/// A new file `name` in `dir`, which must not exist (not even as a link): O_CREAT | O_EXCL.
+pub fn create_new_at(dir: BorrowedFd, name: &std::ffi::OsStr, mode: u32) -> io::Result<std::fs::File> {
+    use std::os::fd::FromRawFd;
+    let c = cstr(name)?;
+    let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // SAFETY: a NUL-terminated name read during the call, and a descriptor borrowed for it
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), c.as_ptr(), flags, mode as libc::c_uint) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a new descriptor openat just returned, owned by nothing else
+    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
+/// Rename `from` to `to`, both in `dir`: whatever `to` was (a file, a link) is replaced, never
+/// followed.
+pub fn rename_at(dir: BorrowedFd, from: &std::ffi::OsStr, to: &std::ffi::OsStr) -> io::Result<()> {
+    let (f, t) = (cstr(from)?, cstr(to)?);
+    // SAFETY: two NUL-terminated names read during the call, and a descriptor borrowed for it
+    if unsafe { libc::renameat(dir.as_raw_fd(), f.as_ptr(), dir.as_raw_fd(), t.as_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Remove the file `name` from `dir` (a link itself, not what it points at).
+pub fn unlink_at(dir: BorrowedFd, name: &std::ffi::OsStr) {
+    if let Ok(c) = cstr(name) {
+        // SAFETY: a NUL-terminated name read during the call, and a descriptor borrowed for it
+        unsafe { libc::unlinkat(dir.as_raw_fd(), c.as_ptr(), 0) };
+    }
 }
 
 // ---------------------------------------------------------------- a mapped file
@@ -376,5 +495,42 @@ pub fn on_terminal(cmd: &mut std::process::Command, tty: BorrowedFd) {
             }
             Ok(())
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_detached_forks_stdout_and_stderr_reach_its_servers_no_more() {
+        use std::os::fd::AsRawFd;
+        let d = std::env::temp_dir().join(format!("sgstdio-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        // The server's stdout and stderr: the template's log, under the daemon
+        let server_log = std::fs::OpenOptions::new().create(true).append(true).open(d.join("log")).unwrap();
+        let null = crate::log::null().unwrap();
+        let (log_fd, before, secret) = (server_log.as_raw_fd(), b"server-line\n", b"job-secret\n");
+        // Only system calls in the child (this test process has other threads)
+        match super::fork().unwrap() {
+            super::Forked::Child => {
+                // SAFETY: dup2 and write on descriptors this process has open, from its one thread
+                unsafe {
+                    libc::dup2(log_fd, 1);
+                    libc::dup2(log_fd, 2);
+                    libc::write(2, before.as_ptr().cast(), before.len());
+                }
+                use std::os::fd::AsFd;
+                let code = if super::redirect_stdio(null.as_fd()).is_ok() { 0 } else { 3 };
+                // SAFETY: as above
+                unsafe {
+                    libc::write(1, secret.as_ptr().cast(), secret.len());
+                    libc::write(2, secret.as_ptr().cast(), secret.len());
+                }
+                super::exit_now(code);
+            },
+            super::Forked::Parent(pid) => assert_eq!(super::wait(pid, true).map(|w| w.1), Some(Some(0))),
+        }
+        let text = std::fs::read_to_string(d.join("log")).unwrap();
+        assert!(text.contains("server-line") && !text.contains("job-secret"), "{text}");
     }
 }

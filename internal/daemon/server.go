@@ -9,14 +9,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -570,6 +573,12 @@ type AddTemplate struct {
 	// (public addresses), "private" (also the host's loopback and private ones); empty: as the
 	// site was built (internet when it has a network), or private with AllowPrivate
 	Egress string `json:"egress,omitempty"`
+	// Commands run on the site before its server starts, each WarmRuns times (default 3), as
+	// one-shot runs of their own: trusted, single-tenant work whose compiled code the site's JIT
+	// profile learns, so the server (which only reads that profile) and every job it forks start
+	// with it compiled. Not with Snapshot: a snapshot is one team's, and the profile is the site's
+	Warm     []string `json:"warm,omitempty"`
+	WarmRuns int      `json:"warm_runs,omitempty"`
 	// From another host (IsRemote): held to the daemon's Policy
 	remote bool
 }
@@ -640,6 +649,12 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	if req.Idle != 0 && req.Idle < Duration(time.Second) {
 		return nil, errStatus(400, "idle %s: 0 (never), or a second or more", time.Duration(req.Idle))
 	}
+	if len(req.Warm) > 0 && snap != nil {
+		return nil, errStatus(400, "warm: only a site's own template warms up (a snapshot is one team's machine, and the JIT profile it would teach is the site's, shared by every template of it)")
+	}
+	if req.WarmRuns < 0 || req.WarmRuns > maxWarmRuns {
+		return nil, errStatus(400, "warm_runs %d: 1 to %d", req.WarmRuns, maxWarmRuns)
+	}
 	s.mu.Lock()
 	_, taken := s.st.Templates[name]
 	s.mu.Unlock()
@@ -658,6 +673,20 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	}
 	if snap != nil {
 		t.Snapshot = snap.Name
+		t.SizeBytes = fileBytes(snap.Path) + fileBytes(snap.Path+userState)
+	} else {
+		t.SizeBytes = dirBytes(site)
+	}
+	if len(req.Warm) > 0 {
+		runs := req.WarmRuns
+		if runs == 0 {
+			runs = defaultWarmRuns
+		}
+		if err := s.warm(t, req.Warm, runs); err != nil {
+			os.RemoveAll(dir)
+			return nil, err
+		}
+		t.Warm = req.Warm
 	}
 	if err := s.startServer(t); err != nil {
 		return nil, err
@@ -673,6 +702,68 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	s.save()
 	s.note("template.added", "template "+name, "%s", t.Ready)
 	return t, nil
+}
+
+const (
+	defaultWarmRuns = 3
+	maxWarmRuns     = 50
+	warmTimeout     = 10 * time.Minute
+)
+
+// warm runs each of cmds on t's site `runs` times, one after another, each a one-shot run of its
+// own in an empty workspace with no network: the site's JIT profile (in the daemon's cache,
+// which its template servers read and never write) learns what they compiled, and the server
+// started next compiles it before it forks a job. These are the operator's commands, run for no
+// team: the only runs a shared profile may learn from. Their output goes to the template's log.
+func (s *Server) warm(t *Template, cmds []string, runs int) error {
+	log, err := os.OpenFile(t.Log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	for i, c := range cmds {
+		if strings.TrimSpace(c) == "" {
+			return errStatus(400, "warm: command %d is empty", i+1)
+		}
+	}
+	for _, c := range cmds {
+		for n := 1; n <= runs; n++ {
+			ws, err := os.MkdirTemp(filepath.Dir(t.Log), "warm-")
+			if err != nil {
+				return err
+			}
+			args := []string{"run", t.Site, "--workspace", ws, "--cmd", c, "--timeout", fmt.Sprint(int(warmTimeout.Seconds())), "--egress", "none"}
+			if _, err := os.Stat(filepath.Join(t.Site, "system", "filesystem")); err != nil {
+				args = append(args, "--blobs", filepath.Join(filepath.Dir(t.Site), "blobs"))
+			}
+			fmt.Fprintf(log, "snowglobe: warm-up %d/%d: %s\n", n, runs, c)
+			cmd := exec.Command(s.o.VM, args...)
+			cmd.Stdout, cmd.Stderr = log, log
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			begun := time.Now()
+			if err := lifeline.Pass(cmd); err != nil {
+				os.RemoveAll(ws)
+				return err
+			}
+			err = runFor(cmd, warmTimeout+time.Minute)
+			os.RemoveAll(ws)
+			if err != nil {
+				return errStatus(422, "template %s: warm-up %q failed (%v): %s", t.Name, c, err, lastLines(t.Log, 3))
+			}
+			fmt.Fprintf(log, "snowglobe: warm-up %d/%d done in %s\n", n, runs, time.Since(begun).Round(time.Millisecond))
+		}
+	}
+	return nil
+}
+
+// runFor runs cmd to its end, killing its process group past `limit`.
+func runFor(cmd *exec.Cmd, limit time.Duration) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	timer := time.AfterFunc(limit, func() { killGroup(cmd.Process.Pid, syscall.SIGKILL) })
+	defer timer.Stop()
+	return cmd.Wait()
 }
 
 // startServer starts a template's fork server and waits for it to have restored: its socket in a
@@ -814,10 +905,26 @@ func (s *Server) RemoveTemplate(name string) error {
 
 // Templates lists the templates, by name.
 func (s *Server) Templates() []Template {
+	return s.TemplatesLabelled(nil)
+}
+
+// TemplatesLabelled lists the templates that have every one of labels, by name.
+func (s *Server) TemplatesLabelled(labels map[string]string) []Template {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]Template, 0, len(s.st.Templates))
 	for _, t := range s.st.Templates {
+		if !hasLabels(t.Labels, labels) {
+			continue
+		}
+		if t.SizeBytes == 0 {
+			// A template from before this was kept
+			if sn, ok := s.st.Snapshots[t.Snapshot]; ok && t.Snapshot != "" {
+				t.SizeBytes = fileBytes(sn.Path) + fileBytes(sn.Path+userState)
+			} else if t.Snapshot == "" {
+				t.SizeBytes = dirBytes(t.Site)
+			}
+		}
 		out = append(out, *t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -890,9 +997,14 @@ type Up struct {
 	Snapshot string `json:"snapshot,omitempty"`
 	// How long it lives, whatever it does (0: until it is removed)
 	TTL Duration `json:"ttl,omitempty"`
+	// Its network, at most its template's: none, https (TCP 443 and DNS, public addresses
+	// only), internet or private ("": its template's). Every job on it has this one
+	Egress string `json:"egress,omitempty"`
 	// Refused at once when it doesn't fit the memory budget, rather than waiting for room (the
 	// scaler's starts: it tries again on its next round)
 	noWait bool
+	// From another host
+	remote bool
 }
 
 // Up forks a machine from a template: it lasts until it is removed, with its ports forwarded.
@@ -911,10 +1023,51 @@ var maxJobOutput int64 = 16 << 20
 
 // runJob runs a job on the control socket sock, counted in the metrics, until it ends or ctx is
 // done (its caller gone).
+// Jobs being answered now, across templates and machines: when the last of a burst ends, the
+// memory its requests and answers took goes back to the system (idleMemory), rather than staying
+// with the daemon at the burst's high-water mark (~120 MB after 500 jobs 50 at once) until the Go
+// runtime gets round to it
+var jobsInFlight atomic.Int64
+
+// idleMemory hands freed heap back to the system once no job has been running for a moment (and
+// not more than every so often): a burst's buffers are garbage by then.
+var idleMemory = struct {
+	mu    sync.Mutex
+	timer *time.Timer
+}{}
+
+const idleMemoryAfter = 2 * time.Second
+
+func jobEnded() {
+	if jobsInFlight.Add(-1) != 0 {
+		return
+	}
+	idleMemory.mu.Lock()
+	defer idleMemory.mu.Unlock()
+	if idleMemory.timer != nil {
+		idleMemory.timer.Reset(idleMemoryAfter)
+		return
+	}
+	idleMemory.timer = time.AfterFunc(idleMemoryAfter, func() {
+		idleMemory.mu.Lock()
+		idleMemory.timer = nil
+		idleMemory.mu.Unlock()
+		if jobsInFlight.Load() == 0 {
+			debug.FreeOSMemory()
+		}
+	})
+}
+
 func (s *Server) runJob(ctx context.Context, sock, name string, req control.JobRequest) (*control.JobResult, error) {
+	jobsInFlight.Add(1)
+	defer jobEnded()
 	begun := time.Now()
 	r, err := control.JobLimited(ctx, sock, name, req, maxJobOutput)
 	s.meter.job(time.Since(begun), err)
+	if len(req.Labels) > 0 {
+		// A job its caller labelled (who it is for): its end, with them
+		s.ev.publish(Event{Time: time.Now(), Kind: "job.ended", Subject: "machine " + name, Message: jobEnd(r, err), Labels: req.Labels})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -946,6 +1099,15 @@ func (s *Server) up(req Up) (*Machine, error) {
 	if req.TTL < 0 {
 		return nil, errStatus(400, "ttl: 0 or more")
 	}
+	switch req.Egress {
+	case "", "none", "https", "internet":
+	case "private":
+		if req.remote && !s.o.Remote.Private {
+			return nil, errStatus(403, "a request from another host can't let a machine reach this host's loopback and private addresses (the daemon allows it with --remote-allow-private)")
+		}
+	default:
+		return nil, errStatus(400, "egress %s: none, https, internet or private", req.Egress)
+	}
 	s.mu.Lock()
 	_, ok := s.st.Templates[req.Template]
 	_, taken := s.st.Machines[name]
@@ -972,7 +1134,7 @@ func (s *Server) up(req Up) (*Machine, error) {
 		return nil, err
 	}
 	defer done()
-	if len(ports) > 0 {
+	if len(ports) > 0 || (req.Egress != "" && req.Egress != "none") {
 		if err := needsNetwork(t); err != nil {
 			return nil, err
 		}
@@ -1002,11 +1164,22 @@ func (s *Server) up(req Up) (*Machine, error) {
 	if closing {
 		return nil, errStatus(503, "the daemon is stopping")
 	}
-	spawned, err := control.Spawn(t.Server, name, state)
+	// A directory of its own under the jobs root, which is all of the root it may touch once it
+	// has read its state: a machine can't read what another machine saves, or starts from
+	dir := filepath.Join(t.JobsRoot, ".machines", name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	spawned, err := control.SpawnWith(t.Server, name, control.SpawnOptions{State: state, Egress: req.Egress, Dir: dir})
 	if err != nil {
+		os.RemoveAll(dir)
+		if strings.HasPrefix(err.Error(), "egress ") || strings.HasPrefix(err.Error(), "spawn: egress ") {
+			return nil, errStatus(400, "%v", err)
+		}
 		return nil, errStatus(409, "%v", err)
 	}
-	m := &Machine{Name: name, Template: t.Name, Pid: spawned.Pid, Socket: spawned.Socket, Ports: ports, Labels: req.Labels, Snapshot: req.Snapshot, Created: time.Now()}
+	m := &Machine{Name: name, Template: t.Name, Pid: spawned.Pid, Socket: spawned.Socket, Ports: ports, Labels: req.Labels, Snapshot: req.Snapshot, Created: time.Now(),
+		Egress: req.Egress, Dir: dir}
 	if req.TTL > 0 {
 		expires := m.Created.Add(time.Duration(req.TTL))
 		m.Expires = &expires
@@ -1016,6 +1189,7 @@ func (s *Server) up(req Up) (*Machine, error) {
 	}
 	if err := s.forward(m); err != nil {
 		stop(m)
+		os.RemoveAll(dir)
 		return nil, errStatus(400, "%v", err)
 	}
 	s.mu.Lock()
@@ -1041,6 +1215,9 @@ func (s *Server) RemoveMachine(name string) error {
 		l.Close()
 	}
 	stop(m)
+	if m.Dir != "" {
+		os.RemoveAll(m.Dir)
+	}
 	s.mu.Lock()
 	delete(s.st.Machines, name)
 	s.save()
@@ -1068,13 +1245,7 @@ func (s *Server) Machines(labels map[string]string) []Machine {
 	defer s.mu.Unlock()
 	out := []Machine{}
 	for _, m := range s.st.Machines {
-		match := true
-		for k, v := range labels {
-			if m.Labels[k] != v {
-				match = false
-			}
-		}
-		if match {
+		if hasLabels(m.Labels, labels) {
 			out = append(out, *m)
 		}
 	}
@@ -1291,7 +1462,12 @@ func (s *Server) SnapshotWith(machine, name string, labels map[string]string) (*
 	if taken {
 		return nil, errStatus(409, "a snapshot called %s exists", name)
 	}
-	staging := filepath.Join(t.JobsRoot, ".snapshots")
+	// Written where the machine may write: its own directory (a machine from before it had one:
+	// the jobs root's)
+	staging := m.Dir
+	if staging == "" {
+		staging = filepath.Join(t.JobsRoot, ".snapshots")
+	}
 	kept := filepath.Join(s.o.Dir, "snapshots")
 	for _, d := range []string{staging, kept} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -1318,6 +1494,7 @@ func (s *Server) SnapshotWith(machine, name string, labels map[string]string) (*
 			return nil, err
 		}
 	}
+	snap.SizeBytes = fileBytes(snap.Path) + fileBytes(snap.Path+userState)
 	s.mu.Lock()
 	s.st.Snapshots[name] = snap
 	s.save()
@@ -1328,11 +1505,22 @@ func (s *Server) SnapshotWith(machine, name string, labels map[string]string) (*
 
 // Snapshots lists the snapshots, by name.
 func (s *Server) Snapshots() []Snapshot {
+	return s.SnapshotsLabelled(nil)
+}
+
+// SnapshotsLabelled lists the snapshots that have every one of labels, by name.
+func (s *Server) SnapshotsLabelled(labels map[string]string) []Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]Snapshot, 0, len(s.st.Snapshots))
 	for _, sn := range s.st.Snapshots {
-		out = append(out, *sn)
+		if !hasLabels(sn.Labels, labels) {
+			continue
+		}
+		c := *sn
+		// What it holds now (a snapshot from before this was kept, too)
+		c.SizeBytes = fileBytes(c.Path) + fileBytes(c.Path+userState)
+		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -1469,7 +1657,7 @@ func (s *Server) coreRoutes(mux Router) {
 func (s *Server) templateRoutes(mux Router) {
 	mux.HandleFunc("POST /v1/sites", s.serveUpload)
 	mux.HandleFunc("GET /v1/templates", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, s.Templates(), nil)
+		reply(w, s.TemplatesLabelled(labelQuery(r)), nil)
 	})
 	mux.HandleFunc("POST /v1/templates", func(w http.ResponseWriter, r *http.Request) {
 		var req AddTemplate
@@ -1489,12 +1677,7 @@ func (s *Server) templateRoutes(mux Router) {
 func (s *Server) machineRoutes(mux Router) {
 	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
 	mux.HandleFunc("GET /v1/machines", func(w http.ResponseWriter, r *http.Request) {
-		labels := map[string]string{}
-		for _, l := range r.URL.Query()["label"] {
-			k, v, _ := strings.Cut(l, "=")
-			labels[k] = v
-		}
-		reply(w, s.Machines(labels), nil)
+		reply(w, s.Machines(labelQuery(r)), nil)
 	})
 	mux.HandleFunc("POST /v1/machines", func(w http.ResponseWriter, r *http.Request) {
 		var req Up
@@ -1502,6 +1685,7 @@ func (s *Server) machineRoutes(mux Router) {
 			reply(w, nil, err)
 			return
 		}
+		req.remote = IsRemote(r)
 		v, err := s.Up(req)
 		reply(w, v, err)
 	})
@@ -1522,7 +1706,7 @@ func (s *Server) jobRoutes(mux Router) {
 			return
 		}
 		v, err := s.TemplateJob(r.Context(), r.PathValue("name"), req)
-		reply(w, v, err)
+		replyJob(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/machines/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
 		var req control.JobRequest
@@ -1531,7 +1715,7 @@ func (s *Server) jobRoutes(mux Router) {
 			return
 		}
 		v, err := s.Job(r.Context(), r.PathValue("name"), req)
-		reply(w, v, err)
+		replyJob(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/services/{name}/jobs", func(w http.ResponseWriter, r *http.Request) {
 		var req control.JobRequest
@@ -1540,7 +1724,7 @@ func (s *Server) jobRoutes(mux Router) {
 			return
 		}
 		v, err := s.ServiceJob(r.Context(), r.PathValue("name"), req)
-		reply(w, v, err)
+		replyJob(w, v, err)
 	})
 }
 
@@ -1558,7 +1742,7 @@ func (s *Server) snapshotRoutes(mux Router) {
 		reply(w, v, err)
 	})
 	mux.HandleFunc("GET /v1/snapshots", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, s.Snapshots(), nil)
+		reply(w, s.SnapshotsLabelled(labelQuery(r)), nil)
 	})
 	mux.HandleFunc("DELETE /v1/snapshots/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveSnapshot(r.PathValue("name")))
@@ -1594,7 +1778,64 @@ func decode(r *http.Request, v any) error {
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(v); err != nil {
 		return errStatus(400, "request: %v", err)
 	}
+	// Read to its end: only then does the server watch the connection, and end the request's
+	// context when its client goes (a job is cancelled when its caller disconnects)
+	io.Copy(io.Discard, io.LimitReader(r.Body, maxBody))
 	return nil
+}
+
+// replyJob answers a job: one its machine couldn't run (a limit it can't enforce, say) is the
+// job's failure, answered 200 with a JobResult whose error says why; anything else as reply.
+func replyJob(w http.ResponseWriter, v *control.JobResult, err error) {
+	var je *control.JobError
+	if errors.As(err, &je) {
+		reply(w, &control.JobResult{Error: je.Msg}, nil)
+		return
+	}
+	reply(w, v, err)
+}
+
+// labelQuery is a request's ?label=k=v (any number of them: all must match).
+func labelQuery(r *http.Request) map[string]string {
+	labels := map[string]string{}
+	for _, l := range r.URL.Query()["label"] {
+		k, v, _ := strings.Cut(l, "=")
+		labels[k] = v
+	}
+	return labels
+}
+
+// hasLabels says whether have has every one of want.
+func hasLabels(have, want map[string]string) bool {
+	for k, v := range want {
+		if got, ok := have[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
+}
+
+// fileBytes is what a file holds on disk (0 if there is none).
+func fileBytes(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// dirBytes is what the regular files under dir hold, not following links.
+func dirBytes(dir string) int64 {
+	var n int64
+	filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if fi, err := d.Info(); err == nil {
+				n += fi.Size()
+			}
+		}
+		return nil
+	})
+	return n
 }
 
 func reply(w http.ResponseWriter, v any, err error) {

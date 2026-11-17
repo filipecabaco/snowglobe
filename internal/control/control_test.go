@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -180,6 +181,50 @@ func TestSaveAsksForAPathAndSaysWhatWasWritten(t *testing.T) {
 	})
 	if _, err := Spawn(sock, "m", "/j/s.zst"); err != nil || got["state"] != "/j/s.zst" {
 		t.Errorf("spawn with a state: %v %v", got, err)
+	}
+	if _, has := got["egress"]; has {
+		t.Errorf("an egress not asked for was sent: %v", got)
+	}
+	// Its egress, and a directory of its own
+	if _, err := SpawnWith(sock, "m", SpawnOptions{Egress: "https", Dir: "/j/.machines/m"}); err != nil || got["egress"] != "https" || got["dir"] != "/j/.machines/m" {
+		t.Errorf("spawn with egress and dir: %v %v", got, err)
+	}
+}
+
+// A job's request carries its workdir, limits and labels as the runtime reads them, only those
+// set; its answer, what ended it
+func TestAJobCarriesItsLimitsAndSaysWhatEndedIt(t *testing.T) {
+	var got map[string]any
+	sock := listen(t, func(req map[string]any, c net.Conn, _ *bufio.Reader) {
+		got = req
+		answer(c, `{"status":137,"output":"aGk=","out":{},"oom":true,"disk_full":true,"output_truncated":true,"cpu_time_exceeded":true,"killed":true,"ms":5}`)
+	})
+	req := JobRequest{Cmd: "make", Timeout: 9, Workdir: "/workspace", MemoryLimitMB: 128, CPUsLimit: 0.5, PidsLimit: 32,
+		DiskLimitMB: 64, MaxRSSMB: 512, CPUTimeS: 10, OutputLimit: 1000, CopyLimitMB: 8, Egress: "https", ReadOnlyIn: true,
+		Labels: map[string]string{"exclave.team": "t1"}}
+	res, err := Job(sock, "m", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"mode": "job", "cmd": "make", "timeout": 9.0, "workdir": "/workspace", "memory_limit_mb": 128.0, "cpus_limit": 0.5,
+		"pids_limit": 32.0, "disk_limit_mb": 64.0, "max_rss_mb": 512.0, "cpu_time_s": 10.0, "output_limit": 1000.0, "copy_limit_mb": 8.0,
+		"egress": "https", "read_only_in": true, "labels": map[string]any{"exclave.team": "t1"}}
+	for k, v := range want {
+		if fmt.Sprint(got[k]) != fmt.Sprint(v) {
+			t.Errorf("%s: %v, want %v", k, got[k], v)
+		}
+	}
+	if *res.Status != 137 || !res.OOM || !res.DiskFull || !res.OutputTruncated || !res.CPUTimeExceeded || !res.Killed || string(res.Output) != "hi" {
+		t.Errorf("result: %+v", res)
+	}
+	// Nothing asked: nothing sent
+	if _, err := Job(sock, "m", JobRequest{Cmd: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"workdir", "memory_limit_mb", "cpus_limit", "egress", "read_only_in", "labels", "output_limit"} {
+		if _, has := got[k]; has {
+			t.Errorf("%s sent unasked: %v", k, got)
+		}
 	}
 }
 
