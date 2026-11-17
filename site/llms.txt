@@ -535,7 +535,9 @@ Every request leaves as the visitor's own browser request; there is no proxy ser
 - In `snowglobe run`, the same requests leave from the host or the container (through
   HTTPS_PROXY/HTTP_PROXY if set); other TCP connections are made directly; private addresses are
   refused unless `--allow-private`.
-- Limits in the browser: CORS applies (servers without it answer 502), no raw TCP or UDP.
+- Limits in the browser: CORS applies (servers without it answer 502), no raw TCP or UDP;
+  loopback, private and link-local addresses are refused (the page's own origin is allowed);
+  requests carry no cookies or referrer; bodies and WebSocket messages are at most 64 MiB.
 
 ## Isolation
 
