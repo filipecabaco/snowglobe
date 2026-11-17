@@ -221,7 +221,7 @@ mod tests {
         let state = snapshot(0x42);
         let image = open_in(&root, &state, MB16).unwrap();
         let (_, site) = crate::testing::site("image-restore-site", &[("system/filesystem.json", crate::testing::EMPTY_FS)]);
-        let spec = crate::machine::Spec { memory_mb: 16, cpus: 1, network: "none".into() };
+        let spec = crate::machine::Spec { memory_mb: 16, cpus: 1, network: "none".into(), free_page_reporting: false };
         let (vm, clock) = crate::machine::new_vm_on(&spec, &site, false, Some(image.ram)).unwrap();
         let board = vm.board.clone();
         let runner = armless::runner::Runner::new(vm, clock, false);

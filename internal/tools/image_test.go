@@ -317,7 +317,7 @@ func TestSnapshotRunsTheVMInTheToolsImage(t *testing.T) {
 	want := "run --rm --user " + user + " -v /site:/out -e SNOWGLOBE_BOOT_STALL_SECS=30 -e ARMLESS_JIT=off " +
 		"-e HTTPS_PROXY=http://localhost:3128 --network host snowglobe-tools:x " + VM + " snapshot /out/system " +
 		"--memory 256 --network fetch --cpus 2 --build-cpus 4 --cols 90 --rows 30 --ready $  --sandbox " +
-		"--exercise ls --exercise env --tunnel db:5432=wss://gw/db --allow-private"
+		"--exercise ls --exercise env --free-page-reporting --tunnel db:5432=wss://gw/db --allow-private"
 	if got := calls(t, log); len(got) != 1 || got[0] != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}

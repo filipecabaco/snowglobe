@@ -373,7 +373,7 @@ func packsBoot(o Options, s *Settings) bool {
 
 // Page is the page a build with these settings renders.
 func Page(s *Settings, version string) site.Page {
-	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, CPUs: s.CPUs, JIT: s.JIT, User: s.Kernel == "none",
+	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, CPUs: s.CPUs, JIT: s.JIT, User: s.Kernel == "none", FreePageReporting: s.Kernel != "none",
 		Tunnels: s.Tunnels, TunnelToken: s.TunnelToken, ConsoleCols: tools.ConsoleCols, ConsoleRows: tools.ConsoleRows,
 		Agent: s.Agent, AgentExposedTo: s.AgentExposedTo, Version: version}
 }
@@ -390,6 +390,7 @@ type RunInfo struct {
 	JIT           bool            `json:"jit"`              // runs compile hot guest code; false: the interpreter
 	Kernel        string          `json:"kernel,omitempty"` // "none": the command runs with no kernel
 	Network       string          `json:"network"`
+	FreePages     bool            `json:"free_page_reporting,omitempty"` // the snapshot leaves out freed memory: restores need its device
 	Tunnels       []tunnel.Tunnel `json:"tunnels,omitempty"`
 	TunnelToken   string          `json:"tunnel_token,omitempty"`
 	Arch          string          `json:"arch"` // always arm64
@@ -438,9 +439,11 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 	info := RunInfo{
 		Title: s.Title, Source: first(o.SourceName, o.Source), Command: s.Command, Ready: s.Ready, Exercise: s.Exercise,
 		MemoryMB: s.Memory, Network: s.Network,
-		JIT:     s.JIT,
-		Kernel:  map[bool]string{true: "none"}[s.Kernel == "none"],
-		Tunnels: s.Tunnels, TunnelToken: s.TunnelToken,
+		JIT:    s.JIT,
+		Kernel: map[bool]string{true: "none"}[s.Kernel == "none"],
+		// The snapshot was saved with the device (tools.SnapshotArgs): every restore needs it too
+		FreePages: s.Kernel != "none",
+		Tunnels:   s.Tunnels, TunnelToken: s.TunnelToken,
 		Arch: "arm64", CPUs: s.CPUs, BuildCPUs: s.BuildCPUs,
 		BootSeconds: meta.BootSeconds, SnapshotBytes: meta.SnapshotBytes, StateBytes: meta.StateBytes, SavedAtMs: meta.SavedAtMs,
 		WarmPackFiles: packFiles, WarmPackBytes: packBytes, Files: len(fs.Files),

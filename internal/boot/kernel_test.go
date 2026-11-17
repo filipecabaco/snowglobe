@@ -31,6 +31,8 @@ func TestTheKernelHasArmlesssMachineBuiltIn(t *testing.T) {
 		"SERIAL_8250_CONSOLE", "ARM_GIC", "RTC_DRV_PL031", "VMGENID", "ARM_PSCI_FW", "HOTPLUG_CPU",
 		"DEVTMPFS_MOUNT", "PROC_FS", "SYSFS", "TMPFS", "UNIX98_PTYS", "UNIX", "INET", "PACKET",
 		"FUTEX", "EPOLL", "SYSVIPC", "IPV6",
+		// Free page reporting: snapshots leave out the memory the guest freed
+		"VIRTIO_BALLOON", "PAGE_REPORTING",
 	} {
 		if config["CONFIG_"+opt] != "y" {
 			t.Errorf("CONFIG_%s is not built in", opt)

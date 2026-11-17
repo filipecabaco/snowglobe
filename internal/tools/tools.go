@@ -282,6 +282,11 @@ func SnapshotArgs(system string, memoryMB int, ready string, exercises []string,
 	for _, e := range exercises {
 		args = append(args, "--exercise", e)
 	}
+	// A machine with a kernel reports the memory it freed, so the snapshot leaves it out (the
+	// site's run.json says so: every restore must have the same device)
+	if user == nil {
+		args = append(args, "--free-page-reporting")
+	}
 	if user != nil {
 		for _, a := range user.Argv {
 			args = append(args, "--user", a)

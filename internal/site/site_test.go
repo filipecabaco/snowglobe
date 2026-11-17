@@ -323,6 +323,17 @@ func TestBuildFilesCarryTheAssetVersion(t *testing.T) {
 	lacks(t, "the page", given, `const assets = "fixed";`, `<script src="sessions.js?v=fixed">`)
 }
 
+// A snapshot saved with free page reporting restores only onto a machine with the same device;
+// one saved before it, only onto one without
+func TestThePagesMachineHasTheDevicesItsSnapshotWasSavedWith(t *testing.T) {
+	page, _ := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none", FreePageReporting: true})
+	lacks(t, "the page", page, `free_page_reporting: true,`)
+	page, _ = render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none"})
+	if strings.Contains(page, "free_page_reporting") {
+		t.Error("a snapshot saved without free page reporting is restored with it")
+	}
+}
+
 func TestASiteWithNoKernelRestoresItsProcessWithItsState(t *testing.T) {
 	page, _ := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none", User: true, SavedAtMs: 1789000000123})
 	lacks(t, "the page", page, `const user = true ;`, `user_state: versioned("system/user.bin")`,

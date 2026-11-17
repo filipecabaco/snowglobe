@@ -25,6 +25,19 @@ func TestTunnelArgs(t *testing.T) {
 	}
 }
 
+// A machine with a kernel is snapshotted with free page reporting; a program with no kernel has
+// no kernel to report anything
+func TestOnlyAKernelsSnapshotReportsFreePages(t *testing.T) {
+	kernel := SnapshotArgs("/s", 256, "", nil, "none", nil, false, 1, 1, false, nil)
+	if !slices.Contains(kernel, "--free-page-reporting") {
+		t.Errorf("with a kernel: %q", kernel)
+	}
+	user := SnapshotArgs("/s", 256, "", nil, "none", nil, false, 1, 1, false, &UserProgram{Argv: []string{"/bin/app"}})
+	if slices.Contains(user, "--free-page-reporting") {
+		t.Errorf("with no kernel: %q", user)
+	}
+}
+
 func TestFetchSiteKnowsWhatTheDockerfileFetches(t *testing.T) {
 	df, err := context.ReadFile("Dockerfile")
 	if err != nil {

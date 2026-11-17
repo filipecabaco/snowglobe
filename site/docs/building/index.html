@@ -66,6 +66,16 @@ LABEL snowglobe.title="Python in the browser" \
           <p><code>--cmd</code> swaps the program without touching the image. It also drops the image's
             <code>ready</code> and <code>exercise</code> labels, which belonged to the image's own command.</p>
 
+          <h2 class="h3" id="freed-memory">Freed memory stays out of the snapshot</h2>
+          <p>Memory the guest freed would still hold what it held: a package manager's caches, a compiler's
+            work, a secret a setup step read. The guest's kernel zeroes each page as it frees it
+            (<code>init_on_free</code>), so none of that reaches the snapshot. A site with a kernel also has free page
+            reporting: the kernel reports the free memory to the machine in 2 MiB blocks, and the machine gives
+            those pages back. The build lets the guest idle a few seconds before saving, so the last of it is
+            reported. The guest keeps all of its memory: it can use those pages again at any time.</p>
+          <p>A snapshot restores only onto the devices it was saved with, so sites built before this have no such
+            device and restore as they are. Rebuild a site to make its snapshot smaller.</p>
+
           <h2 class="h3" id="exercises">Exercises and the warm pack</h2>
           <p>The guest fetches its files on demand. To hide that wait, every site preloads a
             <code>warm.pack</code> in the background. snowglobe fills it by measuring, not guessing, with what a
