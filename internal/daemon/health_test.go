@@ -298,3 +298,116 @@ func TestAServiceThatNeverHealsIsDegraded(t *testing.T) {
 		t.Errorf("replicas: %+v", rs)
 	}
 }
+
+func TestAnUnhealthyReplicaGetsConnectionsOnlyWhenNoneElseCan(t *testing.T) {
+	d, _ := serviceDaemon(t)
+	fastProbes(t)
+	c := d.c
+	// heal none: an unhealthy replica stays, in service
+	if _, err := c.AddService(Service{Name: "web", Template: "t", Min: 2, Max: 3, Health: quick(Health{Cmd: "check", Heal: HealNone})}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return count(t, c, "web", Healthy) == 2 })
+	rs := running(t, c, "web")
+	sick, well := rs[0].Machine, rs[1].Machine
+	os.WriteFile(socketOf(t, c, sick)+".fail", nil, 0o600)
+	waitFor(t, func() bool { return count(t, c, "web", Unhealthy) == 1 })
+	// The one that works takes them all, busier as it gets
+	for i := range 3 {
+		m, err := d.s.pickReplica("web")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.s.touch(m.Name, -1)
+		if m.Name != well {
+			t.Fatalf("connection %d went to %s, not %s", i, m.Name, well)
+		}
+	}
+	// Both unhealthy, with room under max: a new one rather than either
+	os.WriteFile(socketOf(t, c, well)+".fail", nil, 0o600)
+	waitFor(t, func() bool { return count(t, c, "web", Unhealthy) == 2 })
+	m, err := d.s.pickReplica("web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.s.touch(m.Name, -1)
+	if m.Name == sick || m.Name == well {
+		t.Fatalf("connection went to unhealthy %s", m.Name)
+	}
+	// At max: an unhealthy one still beats none
+	os.WriteFile(socketOf(t, c, m.Name)+".fail", nil, 0o600)
+	waitFor(t, func() bool { return count(t, c, "web", Unhealthy) == 3 })
+	again, err := d.s.pickReplica("web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.s.touch(again.Name, -1)
+}
+
+func TestADegradedServiceStartsNoMoreForUnhealthyReplicas(t *testing.T) {
+	d, _ := serviceDaemon(t)
+	fastProbes(t)
+	c := d.c
+	if _, err := c.AddService(Service{Name: "api", Template: "t", Min: 1, Max: 3, Health: quick(Health{Cmd: "false"})}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { h, _ := healthOf(t, c, "api"); return h == ServiceDegraded })
+	waitFor(t, func() bool { return count(t, c, "api", Unhealthy) == 1 })
+	only := running(t, c, "api")[0].Machine
+	m, err := d.s.pickReplica("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.s.touch(m.Name, -1)
+	if m.Name != only {
+		t.Errorf("connection went to %s, not the unhealthy %s it has", m.Name, only)
+	}
+	if rs := running(t, c, "api"); len(rs) != 1 {
+		t.Errorf("replicas: %+v", rs)
+	}
+}
+
+func TestHealingCanBeStartedOver(t *testing.T) {
+	d, _ := serviceDaemon(t)
+	fastProbes(t)
+	c := d.c
+	if _, err := c.AddService(Service{Name: "api", Template: "t", Min: 1, Health: quick(Health{Cmd: "false"})}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddService(Service{Name: "plain", Template: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.HealService("nope"); !NotFound(err) {
+		t.Errorf("no such service: %v", err)
+	}
+	if _, err := c.HealService("plain"); err == nil || !strings.Contains(err.Error(), "no health check") {
+		t.Errorf("no health check: %v", err)
+	}
+	waitFor(t, func() bool { h, _ := healthOf(t, c, "api"); return h == ServiceDegraded })
+	waitFor(t, func() bool { return count(t, c, "api", Unhealthy) == 1 })
+	stuck := running(t, c, "api")[0].Machine
+	s, err := c.HealService("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ServiceHealth == ServiceDegraded {
+		t.Errorf("still degraded: %+v", s)
+	}
+	// Healed again: the stuck replica is replaced
+	waitFor(t, func() bool { _, err := c.Machine(stuck); return NotFound(err) })
+	// And, failing on, it gives up again
+	waitFor(t, func() bool { h, _ := healthOf(t, c, "api"); return h == ServiceDegraded })
+}
+
+// count is how many of a service's replicas are in a state.
+func count(t *testing.T, c *Client, svc, state string) int {
+	t.Helper()
+	_, rs := healthOf(t, c, svc)
+	n := 0
+	for _, r := range rs {
+		if r.Health != nil && r.Health.State == state {
+			n++
+		}
+	}
+	return n
+}

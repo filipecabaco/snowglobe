@@ -230,7 +230,11 @@ Usage:
                 [--wait-ready]                       first, none only says so. Checks never wake
                                                      a service at zero or keep a replica from
                                                      stopping; --wait-ready holds a new replica's
-                                                     first connection until it passes
+                                                     first connection until it passes. A replica
+                                                     that fails its check gets connections only
+                                                     when no other can take them. service heal
+                                                     <name> starts healing over (after five heals
+                                                     in a row with none passing it stops: degraded)
   snowglobe events [--json] [--after SEQ]            the daemon's events: those it kept, then each
                                                      as it happens (machines up and stopped,
                                                      replicas, templates asleep and awake,

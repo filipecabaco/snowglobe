@@ -655,6 +655,41 @@ func (s *Server) heal(svc Service, m Machine, h *replicaHealth) {
 	}
 }
 
+// HealService starts a service's healing over, as a replica passing its check would: it is no
+// longer degraded, its backoff is gone, its replicas' hooks are tried again and a keep service
+// starts from its snapshot again. Its unhealthy replicas are healed on the next tick.
+func (s *Server) HealService(name string) error {
+	s.mu.Lock()
+	svc, ok := s.st.Services[name]
+	s.mu.Unlock()
+	if !ok {
+		return errStatus(404, "no service called %s", name)
+	}
+	if svc.Health == nil {
+		return errStatus(400, "service %s has no health check to heal by", name)
+	}
+	s.svc.mu.Lock()
+	st := s.svc.heals[name]
+	was := st != nil && st.degraded
+	delete(s.svc.heals, name)
+	unhealthy := 0
+	for _, h := range s.svc.health {
+		if h.service == name {
+			h.hooked = false
+			if h.State == Unhealthy {
+				unhealthy++
+			}
+		}
+	}
+	s.svc.mu.Unlock()
+	state := "not degraded"
+	if was {
+		state = "was degraded"
+	}
+	s.note("service.heal_reset", "service "+name, "healing started over (%s), %d unhealthy replicas to heal", state, unhealthy)
+	return nil
+}
+
 func (s *Server) healTopUp(svc Service) {
 	if svc.Min == 0 {
 		// At zero, the next use starts one

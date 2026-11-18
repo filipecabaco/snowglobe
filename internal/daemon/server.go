@@ -1766,6 +1766,14 @@ func (s *Server) serviceRoutes(mux Router) {
 		v, err := s.ServiceStatus(r.PathValue("name"))
 		reply(w, v, err)
 	})
+	mux.HandleFunc("POST /v1/services/{name}/heal", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.HealService(r.PathValue("name")); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.ServiceStatus(r.PathValue("name"))
+		reply(w, v, err)
+	})
 	mux.HandleFunc("DELETE /v1/services/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveService(r.PathValue("name")))
 	})

@@ -364,9 +364,24 @@ func (s *Server) pickReplica(name string) (*Machine, error) {
 			}
 			return 0
 		}
-		sort.SliceStable(rs, func(i, j int) bool { return busy(rs[i]) < busy(rs[j]) })
+		// One that failed its check (and isn't healed yet) goes last: one that works, even a busy
+		// one, comes first
+		sick := func(m Machine) bool {
+			h := s.svc.health[m.Name]
+			return h != nil && h.State == Unhealthy
+		}
+		sort.SliceStable(rs, func(i, j int) bool {
+			if si, sj := sick(rs[i]), sick(rs[j]); si != sj {
+				return sj
+			}
+			return busy(rs[i]) < busy(rs[j])
+		})
 		least := rs[0]
-		if busy(least) >= conc && len(rs) < maxN {
+		// Room for another: when the best is full, or every one is unhealthy (unless the service
+		// gave up healing: another would fail too, so what there is is used)
+		st := s.svc.heals[name]
+		more := busy(least) >= conc || sick(least) && (st == nil || !st.degraded)
+		if more && len(rs) < maxN {
 			return nil, false
 		}
 		a := s.svc.activity[least.Name]
