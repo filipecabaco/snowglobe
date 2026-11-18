@@ -5,8 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const F = require('./fleet.js');
 
-// Live data on one machine, shown by another over a link (the two-machine template)
-const live = fs.readFileSync(path.join(__dirname, '../../examples/fleet/templates/live-data-node.toml'), 'utf8');
+// A page on one machine fetching an API on another, over a link (a template of the page's)
+const live = fs.readFileSync(path.join(__dirname, '../../examples/fleet/templates/api-and-client.toml'), 'utf8');
 // The repository's example fleet: the same live data in one machine, its page the viewer
 const oneMachine = fs.readFileSync(path.join(__dirname, '../../examples/fleet/snowglobe.toml'), 'utf8');
 // A smaller one, without a link: a snapshot, a service on it, and a machine, all of one site
@@ -402,32 +402,6 @@ test('run: steps asked together run one at a time', async () => {
 
 // ---------------------------------------------------------------- links
 
-test('plan: the two-machine template links a viewer to a Supabase database', () => {
-  const p = F.plan(F.parse(live), runtimes);
-  assert.deepEqual(p.problems, []);
-  assert.equal(p.name, 'live-data-node');
-  assert.deepEqual(p.steps.map((s) => s.key), ['snapshot/db', 'snapshot/viewer', 'link/viewer-db', 'machine/db', 'service/viewer']);
-  const byKey = Object.fromEntries(p.steps.map((s) => [s.key, s]));
-  assert.equal(byKey['snapshot/db'].runtime, 'supabase');
-  assert.equal(byKey['snapshot/viewer'].runtime, 'web');
-  assert.deepEqual(p.links, [{ from: 'web', to: 'supabase', port: 54321, as: 'supabase.internal' }]);
-  // The link waits for what both ends run; the viewer's service for its own setup and the link
-  assert.deepEqual(byKey['link/viewer-db'].needs.sort(), ['snapshot/db', 'snapshot/viewer']);
-  assert.deepEqual(byKey['service/viewer'].needs.sort(), ['link/viewer-db', 'snapshot/viewer']);
-  assert.deepEqual(byKey['machine/db'].needs, ['snapshot/db']);
-  assert.equal(byKey['service/viewer'].port, 8080);
-  // The scripts in the file are what the machines run
-  // The database step: wait for Postgres, the table, Realtime, the loop, each a command of its own
-  assert.equal(byKey['snapshot/db'].run.length, 4);
-  assert.deepEqual(byKey['snapshot/db'].runTimeoutsMs, [120000, 90000, 90000, 30000], 'each with a time limit of its own');
-  assert.match(byKey['snapshot/db'].run[0], /until psql/);
-  assert.match(byKey['snapshot/db'].run[1], /create table if not exists public\.ticks/);
-  assert.match(byKey['snapshot/db'].run[2], /alter publication supabase_realtime add table public\.ticks/);
-  assert.match(byKey['snapshot/viewer'].run[0], /createClient\('http:\/\/supabase\.internal:54321'/);
-  assert.match(byKey['snapshot/viewer'].run[0], /postgres_changes/);
-  assert.ok(!p.notes.some((n) => /links\./.test(n)));
-});
-
 test('plan: the repository example is one Supabase machine whose page subscribes to Realtime itself', () => {
   const p = F.plan(F.parse(oneMachine), runtimes);
   assert.deepEqual(p.problems, []);
@@ -439,15 +413,24 @@ test('plan: the repository example is one Supabase machine whose page subscribes
   assert.equal(byKey['service/live'].runtime, 'supabase');
   assert.equal(byKey['service/live'].port, 8080);
   assert.deepEqual(byKey['service/live'].needs, ['snapshot/db']);
-  assert.deepEqual(byKey['snapshot/db'].runTimeoutsMs, [120000, 90000, 90000, 30000, 30000]);
+  assert.deepEqual(byKey['snapshot/db'].runTimeoutsMs, [120000, 90000, 90000, 60000]);
   assert.match(byKey['snapshot/db'].run[2], /alter publication supabase_realtime add table public\.ticks/);
   // The page speaks Realtime itself, to port 54321 beside its own in the frame
-  const page = byKey['snapshot/db'].run[4];
+  const page = byKey['snapshot/db'].run[3];
   assert.match(page, /realtime\/v1\/websocket/);
   assert.match(page, /postgres_changes/);
   assert.match(page, /54321\//);
   assert.doesNotMatch(page, /supabase-js|https?:\/\/cdn/);
-  assert.match(byKey['snapshot/db'].ready, /127\.0\.0\.1:8080/);
+  assert.match(byKey['snapshot/db'].ready, /127\.0\.0\.1:8080\/healthz/);
+  // One Bun process (the Supabase CLI's) inserts the rows and serves the page: no psql loop, no socat
+  assert.match(page, /BUN_BE_BUN=1 nohup supabase run \/root\/live\/server\.ts/);
+  assert.match(page, /Bun\.serve/);
+  assert.doesNotMatch(byKey['snapshot/db'].run.join('\n'), /socat|while true; do psql/);
+  // Its health check: a row in the last 5s, healed by starting the Bun process again
+  assert.deepEqual(byKey['service/live'].health.http, { port: 8080, path: '/healthz', status: '200-399', ranges: [[200, 399]] });
+  assert.equal(byKey['service/live'].health.heal, 'hook');
+  assert.equal(byKey['service/live'].health.healCmd, '/root/live/start.sh');
+
 });
 
 test('run: all of the repository example, in order', async () => {
@@ -490,27 +473,27 @@ test('run: the link step gives the page every link, and says which machines it s
   const seen = [];
   api.setLinks = async (links) => { seen.push(links); return ['web']; };
   const run = F.createRun(api, F.plan(F.parse(live), runtimes), fast);
-  await assert.rejects(run.runStep('link/viewer-db'), /needs snapshot\/(db|viewer) first/);
-  await run.runStep('snapshot/db');
-  await run.runStep('snapshot/viewer');
-  const r = await run.runStep('link/viewer-db');
+  await assert.rejects(run.runStep('link/client-api'), /needs snapshot\/(api|client) first/);
+  await run.runStep('snapshot/api');
+  await run.runStep('snapshot/client');
+  const r = await run.runStep('link/client-api');
   assert.equal(r.status, 'done');
-  assert.deepEqual(seen, [[{ from: 'web', to: 'supabase', port: 54321, as: 'supabase.internal' }]]);
-  assert.match(r.detail, /supabase\.internal → supabase:54321 \(web suspended/);
-  // The viewer's service can't be opened before the link: a machine reads its links when it wakes
+  assert.deepEqual(seen, [[{ from: 'web', to: 'python', port: 9000, as: 'api.internal' }]]);
+  assert.match(r.detail, /api\.internal → python:9000 \(web suspended/);
+  // The client's service can't be opened before the link: a machine reads its links when it wakes
   const fresh = F.createRun(api, F.plan(F.parse(live), runtimes), fast);
-  await fresh.runStep('snapshot/viewer');
-  await assert.rejects(fresh.runStep('service/viewer'), /needs link\/viewer-db first/);
+  await fresh.runStep('snapshot/client');
+  await assert.rejects(fresh.runStep('service/client'), /needs link\/client-api first/);
 });
 
-test('run: all of the live example, in order', async () => {
+test('run: all of the linked template, in order', async () => {
   const api = fakeApi();
   api.setLinks = async () => [];
   const run = F.createRun(api, F.plan(F.parse(live), runtimes), fast);
   assert.equal(await run.runAll(), true);
   const kinds = api.log.map((l) => l.split(' ')[0] + ' ' + l.split(' ')[1]);
-  assert.deepEqual(kinds.slice(-2), ['wake supabase', 'preview web:8080']);
-  assert.equal(run.state('service/viewer').status, 'done');
+  assert.deepEqual(kinds.slice(-2), ['wake python', 'preview web:8080']);
+  assert.equal(run.state('service/client').status, 'done');
 });
 
 // ---------------------------------------------------------------- the native format

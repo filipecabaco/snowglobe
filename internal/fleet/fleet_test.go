@@ -563,22 +563,6 @@ func TestTheExampleFleetLoads(t *testing.T) {
 	}
 }
 
-// Its two-machine version, a template beside it, stays one too
-func TestTheTwoMachineLiveDataTemplateLoads(t *testing.T) {
-	f, err := Load("../../examples/fleet/templates/live-data-node.toml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := f.Plan(newFake())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(steps(p), "|"); !strings.Contains(got, "+ template supabase (build "+filepath.Join(f.Dir, "..", "..", "supabase")) ||
-		!strings.Contains(got, "+ service viewer") || !strings.Contains(got, "+ link viewer-db (viewer reaches db:54321 as supabase.internal:54321") || len(p.Steps) != 9 {
-		t.Errorf("the template's plan: %v", got)
-	}
-}
-
 func TestLinksJoinTheFleetsMachinesAndAStepAppliesOnItsOwn(t *testing.T) {
 	f := load(t, "name = \"todo\"\n[templates.db]\nsite = \"/sites/db\"\n[templates.app]\nsite = \"/sites/app\"\n"+
 		"[services.db]\ntemplate = \"db\"\nports = [\"15432:5432\"]\n[links.app-db]\nfrom = \"app\"\nto = \"db\"\nport = 5432\nas = \"db.internal\"\n")

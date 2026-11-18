@@ -337,7 +337,8 @@
     if (!h) return s.health ? `checked once it runs · ${who}` : `under supervisor ${s.supervisor}`;
     const ago = h.checked != null ? `, ${elapsed(h.checked)} ago` : "";
     const word = { starting: "starting (not yet passed)", checking: "checking again" }[h.state] ?? h.state;
-    const failing = h.failures && h.state !== "healthy" && s.health ? ` (${h.failures} of ${s.health.failures} failed)` : "";
+    // Failures in a row so far, from the first: healthy until they reach the check's failures
+    const failing = h.failures && s.health ? ` (${h.failures} of ${s.health.failures} failed)` : "";
     return [`${word}${failing}`, h.why ?? (h.last ? `${h.last}${ago}` : null), who].filter(Boolean).join(" · ");
   }
 
