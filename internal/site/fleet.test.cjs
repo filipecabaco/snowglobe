@@ -8,7 +8,7 @@ const F = require('./fleet.js');
 // A page on one machine fetching an API on another, over a link (a template of the page's)
 const live = fs.readFileSync(path.join(__dirname, '../../examples/fleet/templates/api-and-client.toml'), 'utf8');
 // The repository's example fleet: the same live data in one machine, its page the viewer
-const oneMachine = fs.readFileSync(path.join(__dirname, '../../examples/fleet/snowglobe.toml'), 'utf8');
+const repoExample = fs.readFileSync(path.join(__dirname, '../../examples/fleet/snowglobe.toml'), 'utf8');
 // A smaller one, without a link: a snapshot, a service on it, and a machine, all of one site
 const example = `name = "python-demo"
 [templates.py]
@@ -39,6 +39,7 @@ const runtimes = [
   { name: 'web', network: 'fetch' },
   { name: 'supabase', network: 'fetch' },
   { name: 'duckdb', network: 'none' },
+  { name: 'bun', network: 'fetch' },
 ];
 
 test('parse: the example fleet file', () => {
@@ -402,41 +403,46 @@ test('run: steps asked together run one at a time', async () => {
 
 // ---------------------------------------------------------------- links
 
-test('plan: the repository example is one Supabase machine whose page subscribes to Realtime itself', () => {
-  const p = F.plan(F.parse(oneMachine), runtimes);
+test('plan: the repository example is Supabase and a small Bun viewer, joined by a link', () => {
+  const p = F.plan(F.parse(repoExample), runtimes);
   assert.deepEqual(p.problems, []);
   assert.equal(p.name, 'live-data');
-  assert.deepEqual(p.steps.map((s) => s.key), ['snapshot/db', 'service/live']);
-  assert.deepEqual(p.links, [], 'no second machine, so nothing to link');
+  assert.deepEqual(p.steps.map((s) => s.key), ['snapshot/db', 'snapshot/viewer', 'link/viewer-db', 'machine/db', 'service/viewer']);
   const byKey = Object.fromEntries(p.steps.map((s) => [s.key, s]));
   assert.equal(byKey['snapshot/db'].runtime, 'supabase');
-  assert.equal(byKey['service/live'].runtime, 'supabase');
-  assert.equal(byKey['service/live'].port, 8080);
-  assert.deepEqual(byKey['service/live'].needs, ['snapshot/db']);
+  // The viewer is the bun machine, not the web one: small, so the tab's memory is Supabase's
+  assert.equal(byKey['snapshot/viewer'].runtime, 'bun');
+  assert.equal(byKey['service/viewer'].runtime, 'bun');
+  assert.equal(byKey['service/viewer'].port, 8080);
+  assert.deepEqual(p.links, [{ from: 'bun', to: 'supabase', port: 54321, as: 'supabase.internal' }]);
   assert.deepEqual(byKey['snapshot/db'].runTimeoutsMs, [120000, 90000, 90000, 60000]);
   assert.match(byKey['snapshot/db'].run[2], /alter publication supabase_realtime add table public\.ticks/);
-  // The page speaks Realtime itself, to port 54321 beside its own in the frame
-  const page = byKey['snapshot/db'].run[3];
-  assert.match(page, /realtime\/v1\/websocket/);
-  assert.match(page, /postgres_changes/);
-  assert.match(page, /54321\//);
-  assert.doesNotMatch(page, /supabase-js|https?:\/\/cdn/);
-  assert.match(byKey['snapshot/db'].ready, /127\.0\.0\.1:8080\/healthz/);
-  // One Bun process (the Supabase CLI's) inserts the rows and serves the page: no psql loop, no socat
-  assert.match(page, /BUN_BE_BUN=1 nohup supabase run \/root\/live\/server\.ts/);
-  assert.match(page, /Bun\.serve/);
+  // One Bun process (the Supabase CLI's) inserts the rows: no psql loop
+  const rows = byKey['snapshot/db'].run[3];
+  assert.match(rows, /BUN_BE_BUN=1 nohup supabase run \/root\/rows\/rows\.ts/);
   assert.doesNotMatch(byKey['snapshot/db'].run.join('\n'), /socat|while true; do psql/);
-  // Its health check: a row in the last 5s, healed by starting the Bun process again
-  assert.deepEqual(byKey['service/live'].health.http, { port: 8080, path: '/healthz', status: '200-399', ranges: [[200, 399]] });
-  assert.equal(byKey['service/live'].health.heal, 'hook');
-  assert.equal(byKey['service/live'].health.healCmd, '/root/live/start.sh');
-
+  assert.match(byKey['snapshot/db'].ready, /127\.0\.0\.1:8080\/healthz/);
+  // The viewer: Preact and htm fetched as three files, Realtime over Bun's own WebSocket through the link
+  const viewer = byKey['snapshot/viewer'].run.join('\n');
+  assert.match(viewer, /preact@11\.2\.0\/dist\/preact\.mjs/);
+  assert.match(viewer, /ws:\/\/\$\{API\}\/realtime\/v1\/websocket/);
+  assert.match(viewer, /const API = "supabase\.internal:54321"/);
+  assert.match(viewer, /Bun\.serve/);
+  assert.doesNotMatch(viewer, /npm install|supabase-js|node viewer/);
+  // Health: the database's while rows come, the viewer's while subscribed, each healed by a hook
+  assert.deepEqual(byKey['machine/db'].health.http, { port: 8080, path: '/healthz', status: '200-399', ranges: [[200, 399]] });
+  assert.equal(byKey['machine/db'].health.healCmd, '/root/rows/start.sh');
+  assert.deepEqual(byKey['service/viewer'].health.http, { port: 8080, path: '/health', status: '200-399', ranges: [[200, 399]] });
+  assert.equal(byKey['service/viewer'].health.heal, 'hook');
+  assert.equal(byKey['service/viewer'].health.healCmd, '/root/viewer/start.sh');
 });
 
 test('run: all of the repository example, in order', async () => {
   const api = fakeApi();
-  const run = F.createRun(api, F.plan(F.parse(oneMachine), runtimes), fast);
+  api.setLinks = async (links) => { api.log.push(`setLinks ${links.map((l) => `${l.from}->${l.to}:${l.port}`).join(' ')}`); return []; };
+  const run = F.createRun(api, F.plan(F.parse(repoExample), runtimes), fast);
   assert.equal(await run.runAll(), true);
+  assert.ok(api.log.includes('setLinks bun->supabase:54321'), api.log.join('\n'));
 });
 
 test('plan: a link needs a name for the guest, a port, a network at both ends and two machines', () => {
@@ -721,6 +727,23 @@ test('run: stop also stops what Run all would do next, and says a machine that w
   assert.ok(!api.log.some((l) => /^(wake|preview)/.test(l)), api.log.join(' | '));
   assert.match(r.problems.join(), /not reset/);
   for (const st of run.steps) assert.equal(run.state(st.key).status, 'pending', st.key);
+});
+
+test('run: starting a command may take startMs (a cold machine waking), its reads only callMs', async () => {
+  // A cold Supabase on a phone: the first command waits for the machine to boot, past callMs
+  const slow = fakeApi();
+  const runCommand = slow.runCommand.bind(slow);
+  slow.runCommand = (req, opts) => new Promise((done) => setTimeout(() => done(runCommand(req, opts)), 30));
+  const run = F.createRun(slow, F.plan(F.parse(example), runtimes), { ...fast, callMs: 5, startMs: 1000 });
+  assert.equal((await run.runStep('snapshot/serving')).status, 'done');
+  // One that never starts fails at startMs, and says so
+  const hung = fakeApi();
+  hung.runCommand = () => new Promise(() => {});
+  let t = 0;
+  const stuck = F.createRun(hung, F.plan(F.parse(example), runtimes), { ...fast, callMs: 5, startMs: 20, now: () => (t += 20000) });
+  const r = await stuck.runStep('snapshot/serving');
+  assert.equal(r.status, 'failed');
+  assert.match(r.error, /did not answer the command within 0s/);
 });
 
 test('run: a machine that stops answering fails the step at its deadline rather than hanging', async () => {
