@@ -1,23 +1,31 @@
-# Live data from Supabase, in one machine. `snowglobe daemon --detach`, then `snowglobe apply` here,
-# and open http://127.0.0.1:8080. `snowglobe diff` says what apply would do, `snowglobe down` removes
-# it all, and `snowglobe top` shows it running. The same file runs in a browser tab at /fleet/ on the
-# demo site, and that one fits a phone: a single machine is awake, not two.
+# Live data from Supabase, shown by a second machine over a link. `snowglobe daemon --detach`, then
+# `snowglobe apply` here, and open http://127.0.0.1:8080. `snowglobe diff` says what apply would do,
+# `snowglobe down` removes it all, and `snowglobe top` shows it running. The same file runs in a
+# browser tab at /fleet/ on the demo site, phones included: the viewer is kept small, so most of what
+# the tab can hold goes to Supabase.
 #
-# db (Supabase) gets a new row in public.ticks every second and serves a small page on 8080, both from
-# one Bun process: the Bun inside the Supabase CLI (BUN_BE_BUN=1), so nothing is installed for it. It
-# inserts over the Data API on one connection (no psql started each second) and serves the page with
-# Bun.serve (no shell started for each request). The page runs in your browser: it reads the last 40
-# rows over the REST API, subscribes to the table over Supabase Realtime (a WebSocket), both on the
-# machine's port 54321, and draws them. The browser is the viewer, so no second machine runs beside
-# the database. /healthz answers 200 only if a row went in within 5s: the service's health check, healed
-# by starting the Bun process again.
+# db (Supabase) gets a new row in public.ticks every second, from one Bun process: the Bun inside the
+# Supabase CLI (BUN_BE_BUN=1), so nothing is installed for it, inserting over the Data API on one
+# connection (no psql started each second). viewer (the web machine) subscribes to that table over
+# Supabase Realtime at supabase.internal:54321, through the link, the only way between the two. It is
+# one small Node server with no dependencies: Node's own WebSocket speaks Realtime, fetch reads the
+# last rows, and the rows go to your browser as a stream (server-sent events). The page is Preact and
+# htm, a few KB, no build step. The web machine's own Vite watcher is stopped: the viewer needs none.
+#
+# Both have a health check: the database's passes while rows keep coming, the viewer's while it is
+# subscribed. Each is healed by starting its process again.
 name = "live-data"
 
 [templates.supabase]
 build = "../supabase"
 network = "fetch"
 
-# The database, set up once: the table, published to Realtime, and the Bun process (rows and the page)
+# Node (the web machine: Node and npm, its React project unused here)
+[templates.node]
+build = "../web"
+network = "fetch"
+
+# The database, set up once: the table, published to Realtime, and the Bun process that adds a row a second
 [snapshots.db]
 template = "supabase"
 # Each command has a time limit of its own (timeout), so a slow one on a phone is cut off and named
@@ -63,79 +71,10 @@ else
 fi
   ''' },
 { timeout = "60s", cmd = '''
-mkdir -p /root/live
-cat > /root/live/index.html <<'EOF'
-<!doctype html>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Live data</title>
-<body style="font:16px/1.5 system-ui;margin:24px">
-<h3>Live data, over Supabase Realtime</h3>
-<p id="v" style="font-size:32px;margin:0">...</p>
-<svg viewBox="0 0 390 60" preserveAspectRatio="none" style="width:100%;max-width:400px;height:60px"><polyline id="line" fill="none" stroke="#d6300c" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
-<p><small><span id="s">connecting</span>: pushed by Supabase over its Realtime WebSocket, straight to this page</small></p>
-<script>
-const KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
-// Where the API is: in the fleet page's frame, port 54321 of this same machine, beside the port
-// this page came from (preview/<machine>/54321/); natively, port 54321 of this host
-const at = location.pathname.match(/^(.*\/preview\/[^/]+\/)\d+\//);
-const api = at ? new URL(at[1] + '54321/', location.href) : new URL(location.protocol + '//' + location.hostname + ':54321/');
-const $ = (id) => document.getElementById(id);
-let ticks = [];
-function draw() {
-  const ys = ticks.map((t) => Number(t.v));
-  const lo = Math.min(...ys), hi = Math.max(...ys);
-  $('v').textContent = ys.length ? ys.at(-1) : '...';
-  $('line').setAttribute('points', ys.map((y, i) => `${i * 10},${58 - ((y - lo) / (hi - lo || 1)) * 56}`).join(' '));
-}
-function keep(row) {
-  if (!row || row.id == null) return;
-  ticks = [...ticks.filter((t) => t.id !== row.id), row].sort((a, b) => a.id - b.id).slice(-40);
-  draw();
-}
-async function load() {
-  const r = await fetch(new URL('rest/v1/ticks?select=id,v&order=id.desc&limit=40', api), { headers: { apikey: KEY, authorization: 'Bearer ' + KEY } });
-  if (r.ok) for (const row of await r.json()) keep(row);
-}
-// Supabase Realtime's protocol (Phoenix channels, JSON) by hand: join a channel for the table's
-// inserts, a heartbeat every 25s, and again from the start if the socket closes (a phone that put
-// the tab away, say). Each join reloads the last rows, so nothing missed meanwhile is a gap
-function connect() {
-  const u = new URL('realtime/v1/websocket?apikey=' + KEY + '&vsn=1.0.0', api);
-  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(u);
-  let ref = 0, beat = null;
-  const send = (topic, event, payload) => ws.send(JSON.stringify({ topic, event, payload, ref: String(++ref), join_ref: topic === 'phoenix' ? null : '1' }));
-  ws.onopen = () => {
-    $('s').textContent = 'joining';
-    send('realtime:ticks', 'phx_join', { config: { broadcast: { self: false }, presence: { key: '' }, postgres_changes: [{ event: 'INSERT', schema: 'public', table: 'ticks' }] }, access_token: KEY });
-    beat = setInterval(() => send('phoenix', 'heartbeat', {}), 25000);
-  };
-  ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
-    if (m.event === 'phx_reply' && m.ref === '1') {
-      const ok = m.payload?.status === 'ok';
-      $('s').textContent = ok ? 'SUBSCRIBED' : 'refused: ' + JSON.stringify(m.payload?.response ?? m.payload);
-      if (ok) load().catch(() => {});
-    } else if (m.event === 'postgres_changes') {
-      keep(m.payload?.data?.record ?? m.payload?.record);
-    }
-  };
-  ws.onclose = () => {
-    clearInterval(beat);
-    $('s').textContent = 'reconnecting';
-    setTimeout(connect, 2000);
-  };
-}
-connect();
-</script>
-EOF
-# One Bun process does the rest: a row a second over the Data API (one connection, kept open), the
-# page on 8080 for every path, and /healthz, 200 only if a row went in within 5s. The Bun is the one
-# inside the Supabase CLI (BUN_BE_BUN=1), already in the machine and read in by its first start
-cat > /root/live/server.ts <<'EOF'
+mkdir -p /root/rows
+# A row a second over the Data API, and /healthz on 8080: 200 only if a row went in within 5s
+cat > /root/rows/rows.ts <<'EOF'
 const { API_URL, SERVICE_ROLE_KEY } = process.env;
-const page = Bun.file("/root/live/index.html");
 const headers = { apikey: SERVICE_ROLE_KEY!, authorization: `Bearer ${SERVICE_ROLE_KEY}`, "content-type": "application/json", prefer: "return=minimal" };
 let lastRow = 0;
 let lastError = "no row yet";
@@ -154,50 +93,223 @@ tick();
 Bun.serve({
   port: 8080,
   hostname: "0.0.0.0",
-  fetch(req) {
-    if (new URL(req.url).pathname.endsWith("/healthz")) {
-      const ok = Date.now() - lastRow < 5000;
-      return new Response(ok ? "ok\n" : `no row in 5s: ${lastError}\n`, { status: ok ? 200 : 503 });
-    }
-    return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+  fetch() {
+    const ok = Date.now() - lastRow < 5000;
+    return new Response(ok ? "ok\n" : `no row in 5s: ${lastError}\n`, { status: ok ? 200 : 503 });
   },
 });
-console.log("serving on 8080");
 EOF
-# Started here, and again by the health check's heal (it ends one already running first)
-cat > /root/live/start.sh <<'EOF'
+# Started here, and again by the health check's heal: the one running is ended by its pid (a pattern
+# would match the shell that wrote this file too)
+cat > /root/rows/start.sh <<'EOF'
 #!/bin/sh
 . /home/supa/.stack-env
-# By its pid: a pattern would match the shell that wrote this file too
-[ -f /tmp/live.pid ] && kill "$(cat /tmp/live.pid)" 2>/dev/null
-cd /root/live && (BUN_BE_BUN=1 nohup supabase run /root/live/server.ts >/tmp/live.log 2>&1 & echo $! > /tmp/live.pid)
+[ -f /tmp/rows.pid ] && kill "$(cat /tmp/rows.pid)" 2>/dev/null
+cd /root/rows && (BUN_BE_BUN=1 nohup supabase run /root/rows/rows.ts >/tmp/rows.log 2>&1 & echo $! > /tmp/rows.pid)
 EOF
-chmod +x /root/live/start.sh
-/root/live/start.sh
-echo "the rows and the page: one Bun process, on 8080"
+chmod +x /root/rows/start.sh
+/root/rows/start.sh
+echo "a row a second, from one Bun process"
   ''' },
 ]
 ready = "curl -sf -o /dev/null http://127.0.0.1:8080/healthz"
 timeout = "4m"
 
+# The viewer, set up once: Preact and htm fetched, the web machine's Vite watcher stopped, and the
+# server written and started. It isn't subscribed yet (the link comes after): it keeps trying, and
+# its health check waits for it
+[snapshots.viewer]
+template = "node"
+run = [
+# Through the web machine's npm relay (its serve process), before that is stopped: pinned, two small
+# packages with no dependencies of their own
+{ timeout = "3m", cmd = '''
+mkdir -p /root/viewer && cd /root/viewer &&
+  printf '{ "name": "viewer", "private": true, "type": "module" }\n' > package.json &&
+  npm install --no-audit --no-fund --save-exact preact@11.2.0 htm@3.1.1 >/tmp/npm.log 2>&1 &&
+  echo "preact and htm installed" || { tail -n 20 /tmp/npm.log; exit 1; }
+  ''' },
+# The web machine builds its React project at boot and watches it (serve --watch: Vite, in Node). The
+# viewer needs none of it: stopped, its memory is Supabase's. [h]: not this shell's own command line
+{ timeout = "30s", cmd = '''
+pkill -f 'serve --watc[h]' && echo "the Vite watcher is stopped" || echo "no Vite watcher was running"
+  ''' },
+{ timeout = "30s", cmd = '''
+cat > /root/viewer/index.html <<'EOF'
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live data</title>
+<body style="font:16px/1.5 system-ui;margin:24px">
+<script type="importmap">{ "imports": { "preact": "./preact.js", "preact/hooks": "./hooks.js", "htm": "./htm.js" } }</script>
+<script type="module">
+import { h, render } from "preact";
+import { useEffect, useState } from "preact/hooks";
+import htm from "htm";
+const html = htm.bind(h);
+// What the viewer has heard, pushed to this page as it hears it (server-sent events, relative to the
+// page: under the fleet page's frame too)
+function Live() {
+  const [s, set] = useState({ ticks: [], status: "connecting" });
+  useEffect(() => {
+    const events = new EventSource("events");
+    events.onmessage = (e) => set(JSON.parse(e.data));
+    return () => events.close();
+  }, []);
+  const ys = s.ticks.map((t) => t.v);
+  const lo = Math.min(...ys), hi = Math.max(...ys);
+  const points = ys.map((y, i) => `${i * 10},${58 - ((y - lo) / (hi - lo || 1)) * 56}`).join(" ");
+  return html`
+    <h3>Live data, over Supabase Realtime</h3>
+    <p style="font-size:32px;margin:0">${ys.length ? ys.at(-1) : "..."}</p>
+    <svg viewBox="0 0 390 60" preserveAspectRatio="none" style="width:100%;max-width:400px;height:60px">
+      <polyline points=${points} fill="none" stroke="#d6300c" stroke-width="2" vector-effect="non-scaling-stroke" />
+    </svg>
+    <p><small>${s.status}: heard by the viewer from supabase.internal:54321, a machine of its own</small></p>`;
+}
+render(html`<${Live} />`, document.body);
+</script>
+EOF
+cat > /root/viewer/viewer.mjs <<'EOF'
+// The viewer: Supabase Realtime's protocol (Phoenix channels, JSON) over Node's own WebSocket, the
+// last rows over the Data API, and the page with what it has heard, pushed as server-sent events
+import http from "node:http";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+const API = "supabase.internal:54321";
+const KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+let ticks = [];
+let status = "connecting";
+const listeners = new Set();
+const say = () => {
+  const msg = `data: ${JSON.stringify({ ticks, status })}\n\n`;
+  for (const res of listeners) res.write(msg);
+};
+const keep = (row) => {
+  if (!row || row.id == null) return;
+  ticks = [...ticks.filter((t) => t.id !== row.id), { id: row.id, v: Number(row.v) }].sort((a, b) => a.id - b.id).slice(-40);
+  say();
+};
+async function load() {
+  const r = await fetch(`http://${API}/rest/v1/ticks?select=id,v&order=id.desc&limit=40`, { headers: { apikey: KEY, authorization: `Bearer ${KEY}` } });
+  if (r.ok) for (const row of await r.json()) keep(row);
+}
+// Joined again from the start whenever the socket closes; each join reloads the last rows
+function connect() {
+  const ws = new WebSocket(`ws://${API}/realtime/v1/websocket?apikey=${KEY}&vsn=1.0.0`);
+  let ref = 0;
+  let beat = null;
+  const send = (topic, event, payload) => ws.send(JSON.stringify({ topic, event, payload, ref: String(++ref), join_ref: topic === "phoenix" ? null : "1" }));
+  ws.onopen = () => {
+    send("realtime:ticks", "phx_join", { config: { broadcast: { self: false }, presence: { key: "" }, postgres_changes: [{ event: "INSERT", schema: "public", table: "ticks" }] }, access_token: KEY });
+    beat = setInterval(() => send("phoenix", "heartbeat", {}), 25000);
+  };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.event === "phx_reply" && m.ref === "1") {
+      status = m.payload?.status === "ok" ? "SUBSCRIBED" : `refused: ${JSON.stringify(m.payload?.response ?? m.payload)}`;
+      say();
+      if (status === "SUBSCRIBED") load().catch(() => {});
+    } else if (m.event === "postgres_changes") {
+      keep(m.payload?.data?.record ?? m.payload?.record);
+    }
+  };
+  ws.onerror = () => {};
+  ws.onclose = () => {
+    clearInterval(beat);
+    if (status === "SUBSCRIBED") { status = "reconnecting"; say(); }
+    setTimeout(connect, 2000);
+  };
+}
+connect();
+// The page and its three modules, read once
+const file = (spec) => readFileSync(fileURLToPath(import.meta.resolve(spec)));
+const files = {
+  "/": ["text/html; charset=utf-8", readFileSync("/root/viewer/index.html")],
+  "/preact.js": ["text/javascript", file("preact")],
+  "/hooks.js": ["text/javascript", file("preact/hooks")],
+  "/htm.js": ["text/javascript", file("htm")],
+};
+http.createServer((req, res) => {
+  const path = new URL(req.url, "http://viewer").pathname;
+  // Healthy once subscribed; /up says only that it listens
+  if (path === "/health") return res.writeHead(status === "SUBSCRIBED" ? 200 : 503).end(`${status}\n`);
+  if (path === "/up") return res.end("up\n");
+  if (path === "/events") {
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+    listeners.add(res);
+    res.write(`data: ${JSON.stringify({ ticks, status })}\n\n`);
+    return req.on("close", () => listeners.delete(res));
+  }
+  const [type, body] = files[path] ?? files["/"];
+  res.writeHead(200, { "content-type": type, "cache-control": "no-store" }).end(body);
+}).listen(8080, "0.0.0.0");
+EOF
+cat > /root/viewer/start.sh <<'EOF'
+#!/bin/sh
+[ -f /tmp/viewer.pid ] && kill "$(cat /tmp/viewer.pid)" 2>/dev/null
+cd /root/viewer && (nohup node viewer.mjs >/tmp/viewer.log 2>&1 & echo $! > /tmp/viewer.pid)
+EOF
+chmod +x /root/viewer/start.sh
+/root/viewer/start.sh
+# Until it listens, up to 50s, and if it never does, what Node printed
+n=0
+until wget -q -T 2 -O /dev/null http://127.0.0.1:8080/up 2>/dev/null; do
+  n=$((n + 1))
+  if [ "$n" -ge 50 ]; then echo "the viewer did not listen in 50s; what Node printed:"; tail -n 20 /tmp/viewer.log; exit 1; fi
+  sleep 1
+done
+echo "the viewer listens on 8080"
+  ''' },
+]
+ready = "wget -q -O /dev/null http://127.0.0.1:8080/up"
+timeout = "30s"
+
 [templates.db]
 snapshot = "db"
 
-# The page on 8080, and the API it calls on 54321. On the fleet page only the first port is framed,
-# and the page reaches 54321 through the frame (preview/<machine>/54321/), so that is enough there
-[services.live]
-template = "db"
-ports = ["8080:8080", "54321:54321"]
+[templates.viewer]
+snapshot = "viewer"
 
-# Checked every 10s: a row in the last 5s, and the page answering. Failing 3 in a row, its heal command
-# starts the Bun process again; failing again after that, natively the replica is replaced, and on the
-# fleet page the machine starts from its image and runs its steps again
-[services.live.health]
+# The database: one machine, up. Its check passes while rows keep coming; failing, the Bun process is
+# started again (a machine heals by a hook or not at all)
+[machines.db]
+template = "db"
+
+[machines.db.health]
 interval = "10s"
 grace = "60s"
 heal = "hook"
-heal_cmd = "/root/live/start.sh"
+heal_cmd = "/root/rows/start.sh"
 
-[services.live.health.http]
+[machines.db.health.http]
 port = 8080
 path = "/healthz"
+
+# The viewer, behind localhost:8080, scaled to zero: its first request wakes it
+[services.viewer]
+template = "viewer"
+ports = ["8080:8080"]
+min = 0
+max = 1
+idle = "5m"
+
+# Healthy once subscribed (the link and the database up); failing, the viewer is started again, then
+# (still failing) replaced
+[services.viewer.health]
+interval = "10s"
+grace = "90s"
+heal = "hook"
+heal_cmd = "/root/viewer/start.sh"
+
+[services.viewer.health.http]
+port = 8080
+path = "/health"
+
+# The viewer reaches the database's API gateway (REST and Realtime) as supabase.internal:54321: a
+# port other than 80 and 443, which a page turns into HTTP; anything else is a plain TCP stream
+[links.viewer-db]
+from = "viewer"
+to = "db"
+port = 54321
+as = "supabase.internal"
