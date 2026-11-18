@@ -768,3 +768,24 @@ test('run: a machine that stops answering fails the step at its deadline rather 
   assert.equal(s.status, 'failed');
   assert.match(s.error, /not ready after 120s/);
 });
+
+test('format: a service health check is read and said, not applied: a page has no daemon to heal with', () => {
+  const file = F.parse(`[templates.a]
+site = "python"
+[services.s]
+template = "a"
+ports = ["80:80"]
+[services.s.health]
+interval = "10s"
+heal = "replace"
+[services.s.health.http]
+port = 8080
+path = "/healthz"
+status = "200-299"
+`);
+  assert.deepEqual({ ...file.services.s.health.http }, { port: 8080, path: '/healthz', status: '200-299' });
+  const p = F.plan(file, runtimes);
+  assert.deepEqual(p.problems, []);
+  assert.ok(p.notes.includes("services.s: health isn't applied"), p.notes.join('\n'));
+  assert.equal(p.steps.filter((s) => s.kind === 'service').length, 1);
+});

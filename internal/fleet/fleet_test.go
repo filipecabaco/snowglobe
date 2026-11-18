@@ -623,3 +623,66 @@ func TestABadCommandTableIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// withHealth is the example with a health check on its service.
+func withHealth(health string) string {
+	return strings.Replace(example, "idle = \"5m\"\n", "idle = \"5m\"\n\n"+health, 1)
+}
+
+func TestAServiceHealthCheckIsCheckedAndApplied(t *testing.T) {
+	f := load(t, withHealth(`[services.web.health]
+interval = "15s"
+failures = 2
+heal = "hook"
+heal_cmd = "pkill -HUP python3"
+wait_ready = true
+
+[services.web.health.http]
+port = 8000
+path = "/healthz"
+status = "200,204"
+`))
+	api := newFake()
+	p, err := f.Plan(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Apply(api, (&builds{}).build, quiet); err != nil {
+		t.Fatal(err)
+	}
+	h := api.services["web"].Health
+	if h == nil || h.HTTP == nil || h.HTTP.Port != 8000 || h.HTTP.Path != "/healthz" || h.HTTP.Status != "200,204" ||
+		h.Interval != daemon.Duration(15*time.Second) || h.Failures != 2 || h.Heal != daemon.HealHook || h.HealCmd != "pkill -HUP python3" || !h.WaitReady {
+		t.Fatalf("health: %+v", h)
+	}
+	// A change to the check replaces the service
+	changed := load(t, withHealth("[services.web.health]\ncmd = \"curl -sf localhost:8000/\"\n"))
+	p, err = changed.Plan(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(steps(p), "\n"); !strings.Contains(got, "~ service web") {
+		t.Errorf("steps: %s", got)
+	}
+	// Without one, a service hashes as it did before health checks
+	got, _ := json.Marshal(ServiceSpec{Template: "t"})
+	if want := `{"template":"t","min":0}`; string(got) != want {
+		t.Errorf("json = %s, want %s", got, want)
+	}
+}
+
+func TestABadHealthCheckIsRefused(t *testing.T) {
+	for bad, want := range map[string]string{
+		"[services.web.health]\nheal = \"replace\"\n":                                        "one of http or cmd",
+		"[services.web.health]\ncmd = \"true\"\ninterval = \"often\"\n":                      `health: interval: "often" is not a duration`,
+		"[services.web.health]\ncmd = \"true\"\nheal = \"hook\"\n":                           "needs heal_cmd",
+		"[services.web.health]\ncmd = \"true\"\nheal = \"reboot\"\n":                         `heal "reboot"`,
+		"[services.web.health]\ncmd = \"true\"\nretries = 3\n":                               "unknown keys",
+		"[services.web.health]\n[services.web.health.http]\nport = 8000\nstatus = \"2xx\"\n": "http status",
+	} {
+		_, err := Load(write(t, withHealth(bad)))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", bad, err, want)
+		}
+	}
+}

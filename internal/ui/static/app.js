@@ -331,7 +331,7 @@ function renderAxis() {
 }
 
 // Which events count as marks on the axis, and which are quiet ones
-const loud = /^(machine\.up|template\.(added|awake|asleep)|build\.(done|failed)|service\.replica_up|snapshot\.saved|admission\.refused)$/;
+const loud = /^(machine\.up|template\.(added|awake|asleep)|build\.(done|failed)|service\.(replica_up|replica_unhealthy|replica_replaced|degraded)|snapshot\.saved|admission\.refused)$/;
 function renderEvents() {
   const cut = Date.now() - span();
   const ticks = state.events.filter((e) => new Date(e.time).getTime() >= cut);
@@ -466,10 +466,10 @@ function renderTables() {
   ], state.selected?.kind === "machine" && state.selected.name === m.name)) : [none(6, "No machines running.")]));
 
   $("services-table").tBodies[0].replaceChildren(...(state.services.length ? state.services.map((s) => row([
-    el("td", { class: "name" }, el("span", { class: "dot " + (s.replicas?.length ? "live" : "idle") }), s.name),
+    el("td", { class: "name" }, el("span", { class: "dot " + (["unhealthy", "degraded"].includes(s.service_health) ? "failed" : s.replicas?.length ? "live" : "idle") }), s.name),
     el("td", {}, s.template),
     el("td", { class: "mono" }, (s.ports || []).map((p) => `${p.host}→${p.guest}`).join(" ")),
-    el("td", {}, `${s.replicas?.length || 0} of ${s.min}–${s.max}${!s.replicas?.length && s.min === 0 ? " · at zero" : ""}`),
+    el("td", {}, `${s.replicas?.length || 0} of ${s.min}–${s.max}${!s.replicas?.length && s.min === 0 ? " · at zero" : ""}${s.service_health && s.service_health !== "idle" ? " · " + s.service_health : ""}`),
     el("td", {}, dur(s.idle)),
     el("td", {}, s.state),
   ], [

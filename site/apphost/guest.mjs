@@ -349,8 +349,9 @@ export async function buildProject(config, {base='/var/lib/snowglobe-apphost', r
   else await reclaim();
   log('APPHOST_STAGE deploy');
   const output = path.resolve(root,relativePath(settings.output));
-  const real = await fs.realpath(output);
-  if (real !== root && !real.startsWith(root+path.sep)) throw Error('Build output must stay inside the shared app.');
+  // Both sides with their symlinks resolved: a root under one (macOS's /var is /private/var) is still the root
+  const real = await fs.realpath(output), realRoot = await fs.realpath(root);
+  if (real !== realRoot && !real.startsWith(realRoot+path.sep)) throw Error('Build output must stay inside the shared app.');
   const index = await fs.lstat(path.join(real,'index.html'));
   if (!index.isFile() || index.isSymbolicLink() || !index.size) throw Error('The output folder needs a nonempty index.html.');
   // Publish only after a complete build. Failed installs/builds leave the previous app live.

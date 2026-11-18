@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -351,7 +352,10 @@ func runSnapshot(args []string) error {
 }
 
 // runService: service add <name> --template T [-p PORT]... [--min N] [--max N] [--idle D]
-// [--concurrency N] [--state discard|keep] | ls | rm <name>
+// [--concurrency N] [--state discard|keep] [--health-http PORT[/PATH] [--health-status 200-399] |
+// --health-cmd CMD] [--health-interval D] [--health-timeout D] [--health-failures N]
+// [--health-grace D] [--heal none|drain|hook|replace] [--heal-cmd CMD] [--drain D] [--wait-ready]
+// | ls | rm <name>
 func runService(args []string) error {
 	if len(args) == 0 {
 		return errors.New("service takes add, ls or rm")
@@ -375,6 +379,21 @@ func runService(args []string) error {
 		fs.DurationVar(&idle, "idle", 5*time.Minute, "")
 		fs.IntVar(&req.Concurrency, "concurrency", 0, "")
 		fs.StringVar(&req.State, "state", "discard", "")
+		// A health check: --health-http PORT[/PATH] or --health-cmd CMD, and how it heals
+		var hc daemon.Health
+		var hHTTP, hStatus string
+		var hInterval, hTimeout, hGrace, hDrain time.Duration
+		fs.StringVar(&hHTTP, "health-http", "", "")
+		fs.StringVar(&hStatus, "health-status", "", "")
+		fs.StringVar(&hc.Cmd, "health-cmd", "", "")
+		fs.DurationVar(&hInterval, "health-interval", 0, "")
+		fs.DurationVar(&hTimeout, "health-timeout", 0, "")
+		fs.IntVar(&hc.Failures, "health-failures", 0, "")
+		fs.DurationVar(&hGrace, "health-grace", 0, "")
+		fs.StringVar(&hc.Heal, "heal", "", "")
+		fs.StringVar(&hc.HealCmd, "heal-cmd", "", "")
+		fs.DurationVar(&hDrain, "drain", 0, "")
+		fs.BoolVar(&hc.WaitReady, "wait-ready", false, "")
 		fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 		positional, err := parse(fs, args[1:])
 		if err != nil {
@@ -385,6 +404,20 @@ func runService(args []string) error {
 		}
 		req.Name = positional[0]
 		req.Idle = daemon.Duration(idle)
+		if hHTTP != "" || hc.Cmd != "" || hc.Heal != "" || hc.HealCmd != "" || hStatus != "" || hc.WaitReady {
+			if hHTTP != "" {
+				portS, path, _ := strings.Cut(hHTTP, "/")
+				p, err := strconv.Atoi(portS)
+				if err != nil {
+					return fmt.Errorf("--health-http %q: PORT or PORT/PATH, like 8000/healthz", hHTTP)
+				}
+				hc.HTTP = &daemon.HTTPCheck{Port: p, Path: "/" + path, Status: hStatus}
+			} else if hStatus != "" {
+				return errors.New("--health-status is for --health-http")
+			}
+			hc.Interval, hc.Timeout, hc.Grace, hc.Drain = daemon.Duration(hInterval), daemon.Duration(hTimeout), daemon.Duration(hGrace), daemon.Duration(hDrain)
+			req.Health = &hc
+		}
 		for _, spec := range ports {
 			p, err := daemon.ParsePort(spec)
 			if err != nil {
@@ -397,6 +430,13 @@ func runService(args []string) error {
 			return err
 		}
 		fmt.Printf("%s: %d to %d replicas of %s, idle %s, state %s\n", s.Name, s.Min, s.Max, s.Template, time.Duration(s.Idle), s.State)
+		if h := s.Health; h != nil {
+			what := "cmd " + h.Cmd
+			if h.HTTP != nil {
+				what = fmt.Sprintf("GET :%d%s (%s)", h.HTTP.Port, h.HTTP.Path, h.HTTP.Status)
+			}
+			fmt.Printf("  health %s every %s, %d failures, heal %s\n", what, time.Duration(h.Interval), h.Failures, h.Heal)
+		}
 		for _, p := range s.Ports {
 			fmt.Printf("  port %s\n", p)
 		}
@@ -409,7 +449,7 @@ func runService(args []string) error {
 			fmt.Println("no services")
 			return nil
 		}
-		fmt.Println("NAME\tTEMPLATE\tRUNNING\tREPLICAS\tIDLE\tSTATE\tPORTS")
+		fmt.Println("NAME\tTEMPLATE\tRUNNING\tREPLICAS\tIDLE\tSTATE\tHEALTH\tPORTS")
 		for _, s := range ss {
 			ports := ""
 			for i, p := range s.Ports {
@@ -418,7 +458,11 @@ func runService(args []string) error {
 				}
 				ports += p.String()
 			}
-			fmt.Printf("%s\t%s\t%d\t%d-%d\t%s\t%s\t%s\n", s.Name, s.Template, len(s.Replicas), s.Min, s.Max, time.Duration(s.Idle), s.State, ports)
+			health := s.ServiceHealth
+			if health == "" {
+				health = "-"
+			}
+			fmt.Printf("%s\t%s\t%d\t%d-%d\t%s\t%s\t%s\t%s\n", s.Name, s.Template, len(s.Replicas), s.Min, s.Max, time.Duration(s.Idle), s.State, health, ports)
 		}
 	case "rm":
 		if len(args) != 2 {

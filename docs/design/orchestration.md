@@ -94,6 +94,25 @@ to an answer when the template is a snapshot with its server listening). `--stat
 replica) saves the replica before it stops and starts the next one from that save; `discard`
 starts each from the template.
 
+A health check (`[services.N.health]`) catches replicas that are running but broken: the reaper
+already drops a machine whose process died. It is an HTTP GET to a guest port whose status must be
+in a range (a port that only accepts connections doesn't pass, so TCP isn't offered), or a command
+in the guest that must exit 0. Checks go straight to the machine (`control.Connect`,
+`control.JobLimited`) rather than through `pickReplica`/`runJob`, so they don't count as use, don't
+add to job metrics and don't keep a template awake. Nothing is checked at zero, and replicas being
+stopped or within one interval of their idle deadline are left alone. After `failures` in a row (once
+`grace` is over), a replica is unhealthy and `heal` applies: `replace` takes it out of service
+(skipped by `pickReplica`, not counted towards `max` or `min`), lets connections drain and stops it;
+`drain` keeps it out of service until idle; `hook` runs `heal_cmd` and checks it again, then
+replaces it; `none` only reports. A replacement starts at once only below `min`; above it, the next
+use starts one, so healing never keeps a service from zero. An unhealthy replica is never saved
+(`state keep` would carry a broken state on); after a second heal in a row the next replica starts
+from the template. Heals of one service are serial with exponential backoff from `interval` (capped
+at 5 minutes), so a shared dependency's outage doesn't replace every replica at once; after 5 in a
+row with no replica passing, the service is `degraded` and healing stops until one passes.
+`wait_ready` holds a new replica's first connection until it passes (up to `grace`); it is off by
+default because it adds a check to every start from zero.
+
 ### Limits and lifecycle
 
 - **Memory budget** (`daemon --memory`, none by default): template servers' and machines' memory

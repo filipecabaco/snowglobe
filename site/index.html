@@ -372,7 +372,8 @@ $ claude mcp add sandbox -- snowglobe mcp dist/python</pre>
               <div>
                 <p>Many machines from one site, still without KVM or root. The daemon restores a site once as a template
                   and forks machines from it in tens of milliseconds, each sharing the memory it doesn't write. Services
-                  start machines on a connection and scale to zero when idle, and a fleet file says what should run.
+                  start machines on a connection, scale to zero when idle and replace the ones that fail a health check, and a
+                  fleet file says what should run.
                   Machines reach each other only through links, and have no way out unless their template says so
                   (<a href="docs/orchestration/#links">links</a>). Instances outside the daemon share their snapshot's memory
                   too, mapped from one read-only image. <a href="docs/orchestration/">Orchestration in the docs</a>
@@ -384,7 +385,7 @@ $ snowglobe up api --name worker
 $ snowglobe sh worker 'uname -m'
 aarch64
 <span class="dim"># behind a port, at zero when idle (the site needs a network)</span>
-$ snowglobe service add web --template api -p 8080:8000 --min 0 --idle 5m
+$ snowglobe service add web --template api -p 8080:8000 --min 0 --idle 5m --health-http 8000/healthz
 <span class="dim"># or all of it from a snowglobe.toml</span>
 $ snowglobe apply</pre>
               </div>

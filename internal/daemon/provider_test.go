@@ -241,8 +241,11 @@ func TestTheCacheLetsGoOfWhatWasAskedForLongestAgo(t *testing.T) {
 		return waitBuild(t, d, b.ID)
 	}
 	a := build("example.com/a:1")
-	// Room for two (the fake's sites are all the same size)
+	// Room for two (the fake's sites are all the same size). Set under the lock evictArtifacts reads
+	// it under: a's build may still be ending (waitBuild returns once it is done, before it evicts)
+	d.s.builds.mu.Lock()
 	d.s.o.CacheSize = 2*a.Artifact.Bytes + 1
+	d.s.builds.mu.Unlock()
 	b := build("example.com/b:1")
 	// a asked for again: b is the one asked for longest ago
 	time.Sleep(10 * time.Millisecond)

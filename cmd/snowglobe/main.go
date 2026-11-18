@@ -219,6 +219,18 @@ Usage:
                                                      milliseconds; --state keep saves the replica
                                                      first and the next one carries on from it
                                                      (one replica). service ls, service rm <name>
+                [--health-http PORT[/PATH]]          a health check on each running replica: an
+                [--health-status 200-399]            HTTP GET answered with a status in range, or
+                [--health-cmd CMD]                   a command in the guest that exits 0; every
+                [--health-interval 10s]              --health-interval, unhealthy after
+                [--health-failures 3]                --health-failures in a row (after
+                [--health-grace 30s]                 --health-grace). --heal replace (default)
+                [--heal none|drain|hook|replace]     swaps it for a fresh one, drain takes it out
+                [--heal-cmd CMD] [--drain 30s]       of service to look at, hook runs --heal-cmd
+                [--wait-ready]                       first, none only says so. Checks never wake
+                                                     a service at zero or keep a replica from
+                                                     stopping; --wait-ready holds a new replica's
+                                                     first connection until it passes
   snowglobe events [--json] [--after SEQ]            the daemon's events: those it kept, then each
                                                      as it happens (machines up and stopped,
                                                      replicas, templates asleep and awake,
