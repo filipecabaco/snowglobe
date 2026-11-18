@@ -222,7 +222,11 @@ func TestAHookHealsAReplicaInPlace(t *testing.T) {
 	d, _ := serviceDaemon(t)
 	fastProbes(t)
 	c := d.c
-	if _, err := c.AddService(Service{Name: "api", Template: "t", Min: 1, Health: quick(Health{Cmd: "check", Heal: HealHook, HealCmd: "heal"})}); err != nil {
+	// A check that answers late isn't the fault under test: on a loaded runner a 100 ms limit
+	// failed the checks after the heal too, and the replica was replaced. The limit is at most the interval
+	h := quick(Health{Cmd: "check", Heal: HealHook, HealCmd: "heal"})
+	h.Interval, h.Timeout = Duration(time.Second), Duration(time.Second)
+	if _, err := c.AddService(Service{Name: "api", Template: "t", Min: 1, Health: h}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return onlyReplica(t, c, "api", Healthy) })

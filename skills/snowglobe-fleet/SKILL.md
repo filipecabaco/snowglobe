@@ -69,7 +69,7 @@ port = 9100
 as = "feed.internal"
 ```
 
-Full examples: `examples/fleet/snowglobe.toml` (one Supabase machine where one Bun process, the Supabase CLI's, inserts a row a second and serves a page that subscribes to it with Supabase Realtime from the browser, with a `/healthz` health check healed by a hook; also runs at /fleet/, phones included) and `examples/todo-fleet/snowglobe.toml` (Elixir app and Postgres as `db.internal:5432`, egress none).
+Full examples: `examples/fleet/snowglobe.toml` (Supabase, where one Bun process, the Supabase CLI's, inserts a row a second, and a viewer on the small bun machine that subscribes to it with Supabase Realtime through a link as `supabase.internal:54321` and streams it to a Preact page; each with a health check healed by a hook; also runs at /fleet/, phones included) and `examples/todo-fleet/snowglobe.toml` (Elixir app and Postgres as `db.internal:5432`, egress none).
 
 ## Instances
 

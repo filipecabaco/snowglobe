@@ -874,7 +874,7 @@
    */
   function createRun(api, thePlan, {
     onchange, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), pollMs = 500,
-    callMs = 30000, graceMs = 30000, timer = setTimeout, tickMs = 1000, fresh = (runtime) => api.startFresh(runtime),
+    callMs = 30000, startMs = 180000, graceMs = 30000, timer = setTimeout, tickMs = 1000, fresh = (runtime) => api.startFresh(runtime),
   } = {}) {
     const states = new Map(thePlan.steps.map((s) => [s.key, { status: "pending", detail: null, output: "", error: null }]));
     // How each checked step's health goes (once it is done), and each supervisor's
@@ -890,14 +890,14 @@
 
     /** `p`, or a TimeoutError after `callMs`: a machine whose worker stopped answering (a phone's,
      *  frozen or ended without a word) leaves its calls pending for ever. */
-    function answer(p, what) {
+    function answer(p, what, ms = callMs) {
       let t = null;
       const late = new Promise((_, reject) => {
         t = timer(() => {
-          const e = new Error(`the machine did not answer ${what} within ${Math.round(callMs / 1000)}s`);
+          const e = new Error(`the machine did not answer ${what} within ${Math.round(ms / 1000)}s`);
           e.name = "TimeoutError";
           reject(e);
-        }, callMs);
+        }, ms);
       });
       return Promise.race([p, late]).finally(() => clearTimeout(t));
     }
@@ -907,7 +907,9 @@
      *  check goes on to its next try and a step to its own deadline. */
     async function exec(runtime, command, timeoutSeconds) {
       const began = now();
-      const { jobId } = await answer(api.runCommand({ runtime, command, timeoutSeconds }, { source: "fleet" }), "the command");
+      // Starting a command wakes its machine first when it is asleep: a cold Supabase on a phone takes
+      // longer than callMs to boot, so this call has startMs; the reads after it have callMs
+      const { jobId } = await answer(api.runCommand({ runtime, command, timeoutSeconds }, { source: "fleet" }), "the command", startMs);
       const giveUpAt = began + timeoutSeconds * 1000 + graceMs;
       let silent = null;
       for (;;) {

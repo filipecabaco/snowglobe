@@ -1,7 +1,8 @@
 # Bun: a JavaScript prompt (repl.js) with a web server in the same process (Bun.serve on port 3000),
-# and the network on. Bun is one program and repl.js needs no shell, so it can run with no guest
-# kernel: CI builds it both ways (mise.toml's EXAMPLES: bun, and bun-nokernel with --kernel none) to
-# see whether Bun, on JavaScriptCore, runs in armless at all and in its user mode. Not on the site yet.
+# and the network on. On the site as the agent and fleet pages' small machine (bun, with a kernel: the
+# pages run shell commands in it), the fleet example's viewer among them. Bun is one program and
+# repl.js needs no shell, so it can also run with no guest kernel: CI builds that too (bun-nokernel,
+# with --kernel none, in mise.toml's EXAMPLES) to see Bun run in armless's user mode.
 #
 #   snowglobe build examples/bun --out dist/bun [--kernel none]
 #   snowglobe run dist/bun
@@ -28,14 +29,19 @@ COPY repl.js ./
 ENV LANG=C.UTF-8
 CMD ["bun", "/app/repl.js"]
 
-# memory: with a kernel, 384 MB as the web image has. With none there is no kernel or init, and Bun is
+# memory: with a kernel, 160 MB: the kernel, a shell, and Bun's 38 MB with room for a program beside
+# it; small, so that on a phone the tab's memory goes to the machine beside it (Supabase). With none there is no kernel or init, and Bun is
 # one process: it held 38 MB (rss-mb, the last exercise, with a kernel; armless's user mode reports its
 # resident memory too, from armless 0.23.0: it prints 16 here: the pages the process touched), so 128 MB, which matters on a phone.
 # The exercises run its server, its file API and a fetch through the network, so the files they read
 # are in the snapshot's warm pack
 LABEL snowglobe.title="Bun in the browser" \
       snowglobe.network="fetch" \
-      snowglobe.memory="384" \
+      snowglobe.memory="160" \
       snowglobe.nokernel-memory="128" \
       snowglobe.ready="Type JavaScript, or .help" \
+      snowglobe.agent="true" \
+      snowglobe.agent-purpose="Bun on a little memory: JavaScript and TypeScript run as they are, a web server (Bun.serve), fetch and WebSocket, no build step" \
+      snowglobe.agent-sample="bun -e 'console.log(6 * 7)'" \
+      snowglobe.agent-exposed-to='["https://chatgpt.com"]' \
       snowglobe.exercise='["Bun.version", "console.log(\"snowglobe-\" + 6 * 7)", "const r = await fetch(\"http://127.0.0.1:3000/hello\")", "await r.json()", "await Bun.write(\"/tmp/hello.txt\", \"hello from Bun\")", "await Bun.file(\"/tmp/hello.txt\").text()", "Bun.hash(\"snowglobe\")", "(await fetch(\"https://api.github.com/zen\")).status", "console.log(\"rss-mb\", Math.round(process.memoryUsage().rss / 1048576))"]'

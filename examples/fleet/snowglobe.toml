@@ -1,16 +1,16 @@
 # Live data from Supabase, shown by a second machine over a link. `snowglobe daemon --detach`, then
 # `snowglobe apply` here, and open http://127.0.0.1:8080. `snowglobe diff` says what apply would do,
 # `snowglobe down` removes it all, and `snowglobe top` shows it running. The same file runs in a
-# browser tab at /fleet/ on the demo site, phones included: the viewer is kept small, so most of what
-# the tab can hold goes to Supabase.
+# browser tab at /fleet/ on the demo site, phones included: the viewer is a small Bun machine, so
+# most of what the tab can hold goes to Supabase.
 #
 # db (Supabase) gets a new row in public.ticks every second, from one Bun process: the Bun inside the
 # Supabase CLI (BUN_BE_BUN=1), so nothing is installed for it, inserting over the Data API on one
-# connection (no psql started each second). viewer (the web machine) subscribes to that table over
+# connection (no psql started each second). viewer (the bun machine) subscribes to that table over
 # Supabase Realtime at supabase.internal:54321, through the link, the only way between the two. It is
-# one small Node server with no dependencies: Node's own WebSocket speaks Realtime, fetch reads the
-# last rows, and the rows go to your browser as a stream (server-sent events). The page is Preact and
-# htm, a few KB, no build step. The web machine's own Vite watcher is stopped: the viewer needs none.
+# one Bun process with no dependencies: Bun's own WebSocket speaks Realtime, fetch reads the last
+# rows, and the rows go to your browser as a stream (server-sent events). The page is Preact and htm,
+# a few KB, no build step.
 #
 # Both have a health check: the database's passes while rows keep coming, the viewer's while it is
 # subscribed. Each is healed by starting its process again.
@@ -20,10 +20,12 @@ name = "live-data"
 build = "../supabase"
 network = "fetch"
 
-# Node (the web machine: Node and npm, its React project unused here)
-[templates.node]
-build = "../web"
+# Bun (the bun machine: Bun and a shell, on a little memory). egress: natively, its setup fetches
+# Preact and htm from the internet (a page's machine always can, as the visitor's own requests)
+[templates.bun]
+build = "../bun"
 network = "fetch"
+egress = "internet"
 
 # The database, set up once: the table, published to Realtime, and the Bun process that adds a row a second
 [snapshots.db]
@@ -119,20 +121,24 @@ timeout = "4m"
 # server written and started. It isn't subscribed yet (the link comes after): it keeps trying, and
 # its health check waits for it
 [snapshots.viewer]
-template = "node"
+template = "bun"
 run = [
-# Through the web machine's npm relay (its serve process), before that is stopped: pinned, two small
-# packages with no dependencies of their own
-{ timeout = "3m", cmd = '''
-mkdir -p /root/viewer && cd /root/viewer &&
-  printf '{ "name": "viewer", "private": true, "type": "module" }\n' > package.json &&
-  npm install --no-audit --no-fund --save-exact preact@11.2.0 htm@3.1.1 >/tmp/npm.log 2>&1 &&
-  echo "preact and htm installed" || { tail -n 20 /tmp/npm.log; exit 1; }
-  ''' },
-# The web machine builds its React project at boot and watches it (serve --watch: Vite, in Node). The
-# viewer needs none of it: stopped, its memory is Supabase's. [h]: not this shell's own command line
-{ timeout = "30s", cmd = '''
-pkill -f 'serve --watc[h]' && echo "the Vite watcher is stopped" || echo "no Vite watcher was running"
+# Preact and htm, pinned, as the three ES modules the page imports: fetched once by Bun (its fetch is
+# the network the machine has), so nothing is installed and nothing is built
+{ timeout = "2m", cmd = '''
+mkdir -p /root/viewer && cd /root/viewer && bun -e '
+const files = {
+  "preact.js": "https://cdn.jsdelivr.net/npm/preact@11.2.0/dist/preact.mjs",
+  "hooks.js": "https://cdn.jsdelivr.net/npm/preact@11.2.0/hooks/dist/hooks.mjs",
+  "htm.js": "https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.module.js",
+};
+for (const [name, url] of Object.entries(files)) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  await Bun.write(name, r);
+}
+console.log("preact and htm fetched");
+'
   ''' },
 { timeout = "30s", cmd = '''
 cat > /root/viewer/index.html <<'EOF'
@@ -170,22 +176,23 @@ function Live() {
 render(html`<${Live} />`, document.body);
 </script>
 EOF
-cat > /root/viewer/viewer.mjs <<'EOF'
-// The viewer: Supabase Realtime's protocol (Phoenix channels, JSON) over Node's own WebSocket, the
+cat > /root/viewer/viewer.ts <<'EOF'
+// The viewer: Supabase Realtime's protocol (Phoenix channels, JSON) over Bun's own WebSocket, the
 // last rows over the Data API, and the page with what it has heard, pushed as server-sent events
-import http from "node:http";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 const API = "supabase.internal:54321";
 const KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
-let ticks = [];
+let ticks: { id: number; v: number }[] = [];
 let status = "connecting";
-const listeners = new Set();
+const listeners = new Set<ReadableStreamDefaultController>();
+const enc = new TextEncoder();
+const message = () => enc.encode(`data: ${JSON.stringify({ ticks, status })}\n\n`);
 const say = () => {
-  const msg = `data: ${JSON.stringify({ ticks, status })}\n\n`;
-  for (const res of listeners) res.write(msg);
+  const msg = message();
+  for (const c of listeners) {
+    try { c.enqueue(msg); } catch { listeners.delete(c); }
+  }
 };
-const keep = (row) => {
+const keep = (row: any) => {
   if (!row || row.id == null) return;
   ticks = [...ticks.filter((t) => t.id !== row.id), { id: row.id, v: Number(row.v) }].sort((a, b) => a.id - b.id).slice(-40);
   say();
@@ -198,14 +205,14 @@ async function load() {
 function connect() {
   const ws = new WebSocket(`ws://${API}/realtime/v1/websocket?apikey=${KEY}&vsn=1.0.0`);
   let ref = 0;
-  let beat = null;
-  const send = (topic, event, payload) => ws.send(JSON.stringify({ topic, event, payload, ref: String(++ref), join_ref: topic === "phoenix" ? null : "1" }));
+  let beat: ReturnType<typeof setInterval> | undefined;
+  const send = (topic: string, event: string, payload: object) => ws.send(JSON.stringify({ topic, event, payload, ref: String(++ref), join_ref: topic === "phoenix" ? null : "1" }));
   ws.onopen = () => {
     send("realtime:ticks", "phx_join", { config: { broadcast: { self: false }, presence: { key: "" }, postgres_changes: [{ event: "INSERT", schema: "public", table: "ticks" }] }, access_token: KEY });
     beat = setInterval(() => send("phoenix", "heartbeat", {}), 25000);
   };
   ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
+    const m = JSON.parse(String(e.data));
     if (m.event === "phx_reply" && m.ref === "1") {
       status = m.payload?.status === "ok" ? "SUBSCRIBED" : `refused: ${JSON.stringify(m.payload?.response ?? m.payload)}`;
       say();
@@ -222,41 +229,49 @@ function connect() {
   };
 }
 connect();
-// The page and its three modules, read once
-const file = (spec) => readFileSync(fileURLToPath(import.meta.resolve(spec)));
-const files = {
-  "/": ["text/html; charset=utf-8", readFileSync("/root/viewer/index.html")],
-  "/preact.js": ["text/javascript", file("preact")],
-  "/hooks.js": ["text/javascript", file("preact/hooks")],
-  "/htm.js": ["text/javascript", file("htm")],
+// The page and its three modules
+const files: Record<string, [string, string]> = {
+  "/preact.js": ["text/javascript", "/root/viewer/preact.js"],
+  "/hooks.js": ["text/javascript", "/root/viewer/hooks.js"],
+  "/htm.js": ["text/javascript", "/root/viewer/htm.js"],
 };
-http.createServer((req, res) => {
-  const path = new URL(req.url, "http://viewer").pathname;
-  // Healthy once subscribed; /up says only that it listens
-  if (path === "/health") return res.writeHead(status === "SUBSCRIBED" ? 200 : 503).end(`${status}\n`);
-  if (path === "/up") return res.end("up\n");
-  if (path === "/events") {
-    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
-    listeners.add(res);
-    res.write(`data: ${JSON.stringify({ ticks, status })}\n\n`);
-    return req.on("close", () => listeners.delete(res));
-  }
-  const [type, body] = files[path] ?? files["/"];
-  res.writeHead(200, { "content-type": type, "cache-control": "no-store" }).end(body);
-}).listen(8080, "0.0.0.0");
+Bun.serve({
+  port: 8080,
+  hostname: "0.0.0.0",
+  idleTimeout: 0, // the event stream stays open
+  fetch(req) {
+    // The last part of the path: under the fleet page's frame the page is at preview/<machine>/8080/
+    const path = "/" + (new URL(req.url).pathname.split("/").pop() ?? "");
+    // Healthy once subscribed; /up says only that it listens
+    if (path === "/health") return new Response(`${status}\n`, { status: status === "SUBSCRIBED" ? 200 : 503 });
+    if (path === "/up") return new Response("up\n");
+    if (path === "/events") {
+      let me: ReadableStreamDefaultController;
+      const body = new ReadableStream({
+        start(c) { me = c; listeners.add(c); c.enqueue(message()); },
+        cancel() { listeners.delete(me); },
+      });
+      return new Response(body, { headers: { "content-type": "text/event-stream", "cache-control": "no-store" } });
+    }
+    const [type, file] = files[path] ?? ["text/html; charset=utf-8", "/root/viewer/index.html"];
+    return new Response(Bun.file(file), { headers: { "content-type": type, "cache-control": "no-store" } });
+  },
+});
+console.log("the viewer listens on 8080");
 EOF
 cat > /root/viewer/start.sh <<'EOF'
 #!/bin/sh
+# By its pid: a pattern would match the shell that wrote this file too
 [ -f /tmp/viewer.pid ] && kill "$(cat /tmp/viewer.pid)" 2>/dev/null
-cd /root/viewer && (nohup node viewer.mjs >/tmp/viewer.log 2>&1 & echo $! > /tmp/viewer.pid)
+cd /root/viewer && (nohup bun viewer.ts >/tmp/viewer.log 2>&1 & echo $! > /tmp/viewer.pid)
 EOF
 chmod +x /root/viewer/start.sh
 /root/viewer/start.sh
-# Until it listens, up to 50s, and if it never does, what Node printed
+# Until it listens, up to 50s, and if it never does, what Bun printed
 n=0
 until wget -q -T 2 -O /dev/null http://127.0.0.1:8080/up 2>/dev/null; do
   n=$((n + 1))
-  if [ "$n" -ge 50 ]; then echo "the viewer did not listen in 50s; what Node printed:"; tail -n 20 /tmp/viewer.log; exit 1; fi
+  if [ "$n" -ge 50 ]; then echo "the viewer did not listen in 50s; what Bun printed:"; tail -n 20 /tmp/viewer.log; exit 1; fi
   sleep 1
 done
 echo "the viewer listens on 8080"

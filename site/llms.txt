@@ -558,6 +558,7 @@ it there with Bun (`BUN_BE_BUN=1 supabase run serve.ts`, `Bun.serve({hostname: "
 - runtime `web`: build web apps: a blank React project on Supabase, rebuilt and served on port 4173 as it changes (Vite, Tailwind, TypeScript, npm) (the app in `/root/app`, watched: each command's changes are reported; try `cd /root/app && sed -i 's/Nothing here yet/Hello/' src/App.jsx`)
 - runtime `python`: run Python: scripts, numpy and pandas for data work; pip install adds packages from PyPI (try `python3 -c 'import numpy, pandas; print(numpy.__version__, pandas.__version__)'`)
 - runtime `duckdb`: DuckDB for analytics: SQL over CSV, Parquet and JSON files (try `duckdb -c 'select 6 * 7'`)
+- runtime `bun`: Bun on a little memory: JavaScript and TypeScript run as they are, a web server (Bun.serve), fetch and WebSocket, no build step (160 MB: the fleet example's viewer; try `bun -e 'console.log(6 * 7)'`)
 - runtime `postgres`: PostgreSQL for database work: load CSV files and query them with psql (try `psql -h /run/postgresql -U postgres -tAc 'select version()'`)
 
 `python` can `pip install <package>`: wheels from PyPI, fetched through the visitor's browser (numpy and pandas are already in
@@ -601,10 +602,12 @@ reports (one machine, nothing to take out of service). After 5 heals in a row wi
 one is degraded until its Restart button). A child is restarted by starting its machine from its image and running that
 machine's steps again, so children of one site restart together. A supervised machine that stops by itself has ended.
 Scale (`min`, `max`, `idle`), `ttl`, `egress`, labels and `network.mode` are read, not applied. The page's example is
-`examples/fleet/snowglobe.toml`, which `snowglobe apply` runs for real too: one Supabase machine, where one Bun process (the Supabase
-CLI's, `BUN_BE_BUN=1`) inserts a row a second over the Data API and serves a page on 8080. The page subscribes to the table over
-Supabase Realtime (a WebSocket, on the machine's port 54321) from the browser and draws what it hears. `/healthz` answers 200 only
-if a row went in within 5s; it is the service's health check, healed by a hook that starts the Bun process again.
+`examples/fleet/snowglobe.toml`, which `snowglobe apply` runs for real too: Supabase (machine `db`) and a viewer on the bun machine
+(160 MB, so on a phone most of the tab's memory is Supabase's), joined by a link (`supabase.internal:54321`). In `db`, one Bun
+process (the Supabase CLI's, `BUN_BE_BUN=1`) inserts a row a second over the Data API; its `/healthz` answers 200 only if a row went
+in within 5s. The viewer (service `viewer`, on 8080) is one Bun process: Bun's WebSocket subscribes to the table over Supabase
+Realtime through the link, and the rows reach a Preact + htm page as server-sent events; its `/health` answers 200 while subscribed.
+Both health checks are healed by a hook that starts the process again.
 
 ## Networking (`--network fetch`)
 
