@@ -601,8 +601,10 @@ reports (one machine, nothing to take out of service). After 5 heals in a row wi
 one is degraded until its Restart button). A child is restarted by starting its machine from its image and running that
 machine's steps again, so children of one site restart together. A supervised machine that stops by itself has ended.
 Scale (`min`, `max`, `idle`), `ttl`, `egress`, labels and `network.mode` are read, not applied. The page's example is
-`examples/fleet/snowglobe.toml`, which `snowglobe apply` runs for real too: a Supabase machine gets a row a second, and a node machine
-subscribes to the table with supabase-js over Supabase Realtime (a WebSocket, at `supabase.internal:54321`) and draws what it hears.
+`examples/fleet/snowglobe.toml`, which `snowglobe apply` runs for real too: one Supabase machine, where one Bun process (the Supabase
+CLI's, `BUN_BE_BUN=1`) inserts a row a second over the Data API and serves a page on 8080. The page subscribes to the table over
+Supabase Realtime (a WebSocket, on the machine's port 54321) from the browser and draws what it hears. `/healthz` answers 200 only
+if a row went in within 5s; it is the service's health check, healed by a hook that starts the Bun process again.
 
 ## Networking (`--network fetch`)
 

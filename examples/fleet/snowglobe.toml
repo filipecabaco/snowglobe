@@ -3,18 +3,21 @@
 # it all, and `snowglobe top` shows it running. The same file runs in a browser tab at /fleet/ on the
 # demo site, and that one fits a phone: a single machine is awake, not two.
 #
-# db (Supabase) gets a new row in public.ticks every second and serves a small page on 8080. The page
-# runs in your browser: it reads the last 40 rows over the REST API, subscribes to the table over
-# Supabase Realtime (a WebSocket), both on the machine's port 54321, and draws them. The browser is
-# the viewer, so no second machine runs beside the database (templates/live-data-node.toml does the
-# same with a Node viewer in a machine of its own, over a link: two machines, too much for a phone).
+# db (Supabase) gets a new row in public.ticks every second and serves a small page on 8080, both from
+# one Bun process: the Bun inside the Supabase CLI (BUN_BE_BUN=1), so nothing is installed for it. It
+# inserts over the Data API on one connection (no psql started each second) and serves the page with
+# Bun.serve (no shell started for each request). The page runs in your browser: it reads the last 40
+# rows over the REST API, subscribes to the table over Supabase Realtime (a WebSocket), both on the
+# machine's port 54321, and draws them. The browser is the viewer, so no second machine runs beside
+# the database. /healthz answers 200 only if a row went in within 5s: the service's health check, healed
+# by starting the Bun process again.
 name = "live-data"
 
 [templates.supabase]
 build = "../supabase"
 network = "fetch"
 
-# The database, set up once: the table, published to Realtime, a row a second from a loop, and the page
+# The database, set up once: the table, published to Realtime, and the Bun process (rows and the page)
 [snapshots.db]
 template = "supabase"
 # Each command has a time limit of its own (timeout), so a slow one on a phone is cut off and named
@@ -59,10 +62,7 @@ else
     echo "published to Realtime"
 fi
   ''' },
-{ timeout = "30s", cmd = '''
-. /home/supa/.stack-env; (while true; do psql -q "$DB_URL" -c "insert into public.ticks (v) values (round((random() * 10 + 100)::numeric, 2))"; sleep 1; done >/dev/null 2>&1 &)
-  ''' },
-{ timeout = "30s", cmd = '''
+{ timeout = "60s", cmd = '''
 mkdir -p /root/live
 cat > /root/live/index.html <<'EOF'
 <!doctype html>
@@ -130,20 +130,54 @@ function connect() {
 connect();
 </script>
 EOF
-# A tiny web server: socat runs this for each connection, and every path is the page
-cat > /root/live/serve.sh <<'EOF'
-#!/bin/bash
-read -r request
-while IFS= read -r h; do h=${h%$'\r'}; [ -z "$h" ] && break; done
-printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %s\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n' "$(wc -c < /root/live/index.html)"
-cat /root/live/index.html
+# One Bun process does the rest: a row a second over the Data API (one connection, kept open), the
+# page on 8080 for every path, and /healthz, 200 only if a row went in within 5s. The Bun is the one
+# inside the Supabase CLI (BUN_BE_BUN=1), already in the machine and read in by its first start
+cat > /root/live/server.ts <<'EOF'
+const { API_URL, SERVICE_ROLE_KEY } = process.env;
+const page = Bun.file("/root/live/index.html");
+const headers = { apikey: SERVICE_ROLE_KEY!, authorization: `Bearer ${SERVICE_ROLE_KEY}`, "content-type": "application/json", prefer: "return=minimal" };
+let lastRow = 0;
+let lastError = "no row yet";
+async function tick() {
+  try {
+    const v = Math.round((Math.random() * 10 + 100) * 100) / 100;
+    const r = await fetch(`${API_URL}/rest/v1/ticks`, { method: "POST", headers, body: JSON.stringify({ v }) });
+    if (r.ok) lastRow = Date.now();
+    else lastError = `HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`;
+  } catch (e) {
+    lastError = String(e);
+  }
+}
+setInterval(tick, 1000);
+tick();
+Bun.serve({
+  port: 8080,
+  hostname: "0.0.0.0",
+  fetch(req) {
+    if (new URL(req.url).pathname.endsWith("/healthz")) {
+      const ok = Date.now() - lastRow < 5000;
+      return new Response(ok ? "ok\n" : `no row in 5s: ${lastError}\n`, { status: ok ? 200 : 503 });
+    }
+    return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+  },
+});
+console.log("serving on 8080");
 EOF
-chmod +x /root/live/serve.sh
-(socat TCP-LISTEN:8080,reuseaddr,fork EXEC:/root/live/serve.sh >/tmp/live.log 2>&1 &)
-echo "the page is served on 8080"
+# Started here, and again by the health check's heal (it ends one already running first)
+cat > /root/live/start.sh <<'EOF'
+#!/bin/sh
+. /home/supa/.stack-env
+# By its pid: a pattern would match the shell that wrote this file too
+[ -f /tmp/live.pid ] && kill "$(cat /tmp/live.pid)" 2>/dev/null
+cd /root/live && (BUN_BE_BUN=1 nohup supabase run /root/live/server.ts >/tmp/live.log 2>&1 & echo $! > /tmp/live.pid)
+EOF
+chmod +x /root/live/start.sh
+/root/live/start.sh
+echo "the rows and the page: one Bun process, on 8080"
   ''' },
 ]
-ready = ". /home/supa/.stack-env; psql -tA \"$DB_URL\" -c 'select count(*) from public.ticks' | grep -q '^[1-9]' && curl -sf -o /dev/null http://127.0.0.1:8080/"
+ready = "curl -sf -o /dev/null http://127.0.0.1:8080/healthz"
 timeout = "4m"
 
 [templates.db]
@@ -154,3 +188,16 @@ snapshot = "db"
 [services.live]
 template = "db"
 ports = ["8080:8080", "54321:54321"]
+
+# Checked every 10s: a row in the last 5s, and the page answering. Failing 3 in a row, its heal command
+# starts the Bun process again; failing again after that, natively the replica is replaced, and on the
+# fleet page the machine starts from its image and runs its steps again
+[services.live.health]
+interval = "10s"
+grace = "60s"
+heal = "hook"
+heal_cmd = "/root/live/start.sh"
+
+[services.live.health.http]
+port = 8080
+path = "/healthz"

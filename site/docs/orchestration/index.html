@@ -288,9 +288,10 @@ ttl = "24h"</pre>
           <ul>
             <li><code>examples/todo-fleet/</code>: an Elixir app and Postgres, each a machine of its own, joined by a
               link. It is the fleet in the figure below.</li>
-            <li><code>examples/fleet/</code>: a Supabase machine that gets a row every second, and a node viewer that
-              follows it over Supabase Realtime, joined by a link. It
-              <a href="#fleet-page">runs in a browser tab</a> too.</li>
+            <li><code>examples/fleet/</code>: one Supabase machine. A single Bun process (the one inside the Supabase
+              CLI) inserts a row every second and serves a page, and the page follows the table over Supabase Realtime
+              from your browser. Its health check passes only while rows keep coming. It
+              <a href="#fleet-page">runs in a browser tab</a> too, phones included.</li>
           </ul>
           <p>Run one, see it, and give it to an agent:</p>
           <pre>snowglobe daemon --detach
