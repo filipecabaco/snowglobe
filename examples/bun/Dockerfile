@@ -29,8 +29,8 @@ ENV LANG=C.UTF-8
 CMD ["bun", "/app/repl.js"]
 
 # memory: with a kernel, 384 MB as the web image has. With none there is no kernel or init, and Bun is
-# one process: it held 38 MB (rss-mb, the last exercise, with a kernel; armless's user mode reports no
-# resident memory yet), so 128 MB, which matters on a phone.
+# one process: it held 38 MB (rss-mb, the last exercise, with a kernel; armless's user mode reports its
+# resident memory too, from armless 0.23.0: it prints 16 here: the pages the process touched), so 128 MB, which matters on a phone.
 # The exercises run its server, its file API and a fetch through the network, so the files they read
 # are in the snapshot's warm pack
 LABEL snowglobe.title="Bun in the browser" \
