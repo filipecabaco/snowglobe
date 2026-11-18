@@ -29,12 +29,13 @@ ENV LANG=C.UTF-8
 CMD ["bun", "/app/repl.js"]
 
 # memory: with a kernel, 384 MB as the web image has. With none there is no kernel or init, and Bun is
-# one process, so less: what it really holds is printed by the last exercise (rss-mb), to size it by.
+# one process: it held 38 MB (rss-mb, the last exercise, with a kernel; armless's user mode reports no
+# resident memory yet), so 128 MB, which matters on a phone.
 # The exercises run its server, its file API and a fetch through the network, so the files they read
 # are in the snapshot's warm pack
 LABEL snowglobe.title="Bun in the browser" \
       snowglobe.network="fetch" \
       snowglobe.memory="384" \
-      snowglobe.nokernel-memory="256" \
+      snowglobe.nokernel-memory="128" \
       snowglobe.ready="Type JavaScript, or .help" \
       snowglobe.exercise='["Bun.version", "console.log(\"snowglobe-\" + 6 * 7)", "const r = await fetch(\"http://127.0.0.1:3000/hello\")", "await r.json()", "await Bun.write(\"/tmp/hello.txt\", \"hello from Bun\")", "await Bun.file(\"/tmp/hello.txt\").text()", "Bun.hash(\"snowglobe\")", "(await fetch(\"https://api.github.com/zen\")).status", "console.log(\"rss-mb\", Math.round(process.memoryUsage().rss / 1048576))"]'

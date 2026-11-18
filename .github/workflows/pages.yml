@@ -54,14 +54,30 @@ jobs:
         with:
           install: false
 
+      # A pull request builds only the sites its changes reach, by the rule the site cache's key
+      # follows: examples/<site>/ for that site; internal/, cmd/, go.mod and go.sum (tests aside,
+      # which the test job runs), bench/, mise.toml and this workflow for every site. One that
+      # reaches none (docs, the static pages, the fleet files) builds none. Pushes to main,
+      # releases and runs by hand build every site; so does a pull request whose files can't be listed
       - id: sites
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          echo "sites=$(mise env --json | jq -c '(.KERNEL | split(" ")) as $kernel
-                                                | [(.DEMOS | split(" ") | .[] | {name: ., deploy: true}),
-                                                   (.EXAMPLES | split(" ") | .[] | {name: ., deploy: false})]
-                                                | map(. + {src: (.name | sub("-[0-9]+cpu$|-nokernel$"; "")),
-                                                           cpus: (.name | capture("-(?<n>[0-9]+)cpu$").n // ""),
-                                                           kernel: (if (.name | endswith("-nokernel")) or (.deploy and (.name | IN($kernel[]) | not)) then "none" else "" end)})')" >> "$GITHUB_OUTPUT"
+          sites=$(mise env --json | jq -c '(.KERNEL | split(" ")) as $kernel
+                                           | [(.DEMOS | split(" ") | .[] | {name: ., deploy: true}),
+                                              (.EXAMPLES | split(" ") | .[] | {name: ., deploy: false})]
+                                           | map(. + {src: (.name | sub("-[0-9]+cpu$|-nokernel$"; "")),
+                                                      cpus: (.name | capture("-(?<n>[0-9]+)cpu$").n // ""),
+                                                      kernel: (if (.name | endswith("-nokernel")) or (.deploy and (.name | IN($kernel[]) | not)) then "none" else "" end)})')
+          if [ -n "$PR" ] && files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename'); then
+            sites=$(jq -c --argjson changed "$(jq -Rsc 'split("\n") | map(select(length > 0))' <<< "$files")" '
+              ($changed | map(select(test("_test\\.go$|\\.test\\.(cjs|mjs)$") | not))) as $c
+              | ($c | any(test("^(internal|cmd|bench)/|^go\\.(mod|sum)$|^mise\\.toml$|^\\.github/workflows/pages\\.yml$"))) as $every
+              | map(select($every or (.src as $s | $c | any(startswith("examples/" + $s + "/")))))' <<< "$sites")
+          fi
+          echo "sites=$sites" >> "$GITHUB_OUTPUT"
+          echo "Sites to build: $(jq -r 'map(.name) | join(" ") | if . == "" then "none" else . end' <<< "$sites")" | tee -a "$GITHUB_STEP_SUMMARY"
 
   test:
     runs-on: ubuntu-24.04
@@ -184,6 +200,8 @@ jobs:
   # tests aside), then run headlessly and checked. Guests are arm64: arm64 runners build them natively.
   site:
     needs: [setup, tools]
+    # A pull request that reaches no site has none to build (an empty matrix is an error)
+    if: needs.setup.outputs.sites != '[]'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     strategy:
