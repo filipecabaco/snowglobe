@@ -434,16 +434,38 @@
       say(`${what} could not be loaded (${e.message}).`);
     }
   }
-  $("fleet-example").addEventListener("click", () => load("snowglobe.toml", "The example"));
+  // A link to one of them: #<template> (#tcp-echo, #live-data for the example), the name of a file
+  // the template menu lists, without .toml. Picking one puts its name there, so the address is a
+  // link to what is loaded; only the menu's own files can be named, so a link can't load anything else
+  const templateFiles = [...$("fleet-template").options].map((o) => o.value).filter(Boolean);
+  const slug = (file) => file.replace(/^.*\//, "").replace(/\.toml$/, "");
+  const EXAMPLE = "live-data";
+  const fileOf = (name) => templateFiles.find((f) => slug(f) === name && f !== "../snowglobe.toml");
+  const showName = (name) => { try { history.replaceState(null, "", name ? `#${name}` : location.pathname + location.search); } catch {} };
+  const fromHash = () => { try { return decodeURIComponent(location.hash.slice(1)); } catch { return ""; } };
+  const loadExample = () => load("snowglobe.toml", "The example");
+  const loadNamed = (name) => {
+    const file = fileOf(name);
+    if (file) return load(`templates/${file}`, "The template");
+    return loadExample();
+  };
+  $("fleet-example").addEventListener("click", () => { showName(EXAMPLE); loadExample(); });
   $("fleet-template").addEventListener("change", async (e) => {
     const file = e.target.value;
     e.target.value = "";
-    if (file) await load(`templates/${file}`, "The template");
+    if (!file) return;
+    showName(file === "../snowglobe.toml" ? EXAMPLE : slug(file));
+    await load(`templates/${file}`, "The template");
   });
+  // A link followed, or the address's #name changed by hand, once the page is open
+  addEventListener("hashchange", () => { const name = fromHash(); if (name) loadNamed(name); });
 
   if (!isolation.isolated) say(`Machines on several CPUs are off: ${isolation.reason ?? "this page isn't cross-origin isolated"}.`);
   else say("");
-  // The example, to begin with: the file beside the page (the repo's examples/fleet/snowglobe.toml)
+  // To begin with: the template the address names (#tcp-echo), or else the example, the file beside
+  // the page (the repo's examples/fleet/snowglobe.toml). An unknown name loads the example
   read();
-  $("fleet-example").click();
+  const named = fromHash();
+  if (named && fileOf(named)) loadNamed(named);
+  else loadExample();
 })();
