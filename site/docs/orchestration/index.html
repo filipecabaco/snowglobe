@@ -6,7 +6,7 @@
   <title>Orchestration and fleets · snowglobe docs</title>
   <link rel="canonical" href="https://filipecabaco.github.io/snowglobe/docs/orchestration/">
   <link rel="alternate" type="text/plain" href="../../llms.txt" title="snowglobe for agents">
-  <meta name="description" content="Run many snowglobe machines: the daemon, templates, snapshots, services that scale to zero, fleets from one file, links, fleet instances and network modes, snowglobe ui and the API.">
+  <meta name="description" content="Run many snowglobe machines: the daemon, templates, snapshots, services that scale to zero and heal themselves, fleets from one file, links, fleet instances and network modes, snowglobe ui and the API.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="snowglobe docs">
@@ -42,7 +42,7 @@
           <h1 class="page-title" id="orchestration-title">Orchestration and fleets</h1>
           <p class="intro">Read this when one machine is not enough. <code>snowglobe daemon</code> runs many machines
             from one site, without KVM, root or Docker. It forks them in milliseconds, keeps snapshots of running
-            ones, puts services behind ports that scale to zero, holds them all to a memory budget, and applies whole
+            ones, puts services behind ports that scale to zero and checks their health, holds them all to a memory budget, and applies whole
             fleets from a file.</p>
           <p>The words this page uses:</p>
           <div class="table-wrap">
@@ -52,7 +52,7 @@
                 <tr><td>template</td><td>a site restored once, for machines to fork from</td></tr>
                 <tr><td>machine</td><td>forked from a template in tens of milliseconds; shares the template's memory and keeps what it writes</td></tr>
                 <tr><td>snapshot</td><td>a running machine saved whole, to start machines and templates from</td></tr>
-                <tr><td>service</td><td>a template's machines behind host ports, started on demand and scaled to zero</td></tr>
+                <tr><td>service</td><td>a template's machines behind host ports, started on demand, scaled to zero, and optionally health-checked and healed</td></tr>
                 <tr><td>link</td><td>a name one machine reaches another by; nothing else joins them</td></tr>
                 <tr><td>fleet</td><td>a <code>snowglobe.toml</code> naming all of the above, applied in one go</td></tr>
                 <tr><td>fleet instance</td><td>one copy of a fleet's services, machines and links, like <code>docker compose -p</code></td></tr>
@@ -177,7 +177,7 @@ status = "200-399"   <span class="dim"># or a list: "200,204"</span></pre>
             <li>templates: a built site, a URL, or a Dockerfile directory built first;</li>
             <li>snapshots: a machine of a template set up by commands, saved once a readiness command succeeds. A command is a string, or <code>{ cmd = "...", timeout = "90s" }</code> for one with a time limit of its own; one without gets the snapshot's <code>timeout</code>, or 10 minutes;</li>
             <li>templates of those snapshots;</li>
-            <li>services and machines;</li>
+            <li>services, each with an optional health check (<a href="#health">below</a>), and machines;</li>
             <li>links, a network mode, and each template's egress (<a href="#links">below</a>).</li>
           </ul>
           <p>A small one:</p>
@@ -201,6 +201,10 @@ template = "serving"
 ports = ["8080:8000"]
 min = 0                            <span class="dim"># scaled to zero, woken by a request</span>
 idle = "5m"
+
+[services.web.health.http]          <span class="dim"># swapped for a fresh one if it stops answering 2xx/3xx</span>
+port = 8000
+path = "/"
 
 [machines.scratch]
 template = "py"
@@ -338,7 +342,7 @@ as = "db.internal"</pre>
               WebSocket traffic alike. A guest's <code>ws://name/</code> on 80 or 443, and a page in the frame, can
               open WebSockets too. A machine reads its links when it wakes.</li>
             <li><b>Read, not applied:</b> <code>min</code>, <code>max</code>, <code>idle</code>, <code>concurrency</code>,
-              <code>ttl</code>, <code>egress</code>, <code>network.mode</code> and host ports. The page lists them.</li>
+              a service's <code>health</code>, <code>ttl</code>, <code>egress</code>, <code>network.mode</code> and host ports. The page lists them.</li>
           </ul>
 
           <h2 class="h3" id="ui">In a browser: snowglobe ui</h2>
@@ -414,11 +418,12 @@ snowglobe up py --ttl 1h</pre>
               asleep), services with their replicas and open connections, machines with what each takes and when it
               stops, and the latest events.</li>
             <li><code>snowglobe events</code> streams those events, the last 200 first: machines up and stopped,
-              replicas started and stopped, templates asleep and awake, snapshots, admissions refused.
+              replicas started and stopped, replicas unhealthy, healed and replaced, services degraded, templates asleep and awake, snapshots, admissions refused.
               <code>--json</code> is for programs.</li>
           </ul>
           <pre>snowglobe top
-snowglobe events --json | jq 'select(.kind == "admission.refused")'</pre>
+snowglobe events --json | jq 'select(.kind == "admission.refused")'
+snowglobe events --json | jq 'select(.kind == "service.replica_unhealthy" or .kind == "service.degraded")'</pre>
 
           <h2 class="h3" id="provider">A template provider: snowglobe provide</h2>
           <p><code>snowglobe daemon --mode provider</code> only builds. Push an image to a registry (or keep a
@@ -495,7 +500,7 @@ mkdir -p public/app &amp;&amp; tar --zstd -xf app.tar.zst -C public/app    <span
                 <tr><td><code>/v1/machines/{name}/jobs</code></td><td>a job on a machine</td></tr>
                 <tr><td><code>/v1/templates/{name}/jobs</code></td><td>a job on a fresh fork: <code>files</code>, <code>cmd</code>, <code>env</code>, <code>timeout</code>, and optionally <code>workdir</code>, the limits (<code>memory_limit_mb</code>, <code>cpus_limit</code>, <code>pids_limit</code>, <code>disk_limit_mb</code>, <code>max_rss_mb</code>, <code>cpu_time_s</code>, <code>output_limit</code>, <code>copy_limit_mb</code>, <code>read_only_in</code>), <code>egress</code> and <code>labels</code>; a limit it can't enforce (<code>memory_limit_mb</code> on a template built without <code>--memory-limits</code>, say) answers 200 with <code>error</code>, and the client disconnecting cancels it. A job connects to no Unix socket and writes nothing its template server shares with other jobs</td></tr>
                 <tr><td><code>POST /v1/runs</code>, <code>GET /v1/runs/{id}</code></td><td>fire-and-forget runs</td></tr>
-                <tr><td><code>/v1/services</code>, <code>/v1/services/{name}/jobs</code></td><td>services, and a job on a replica</td></tr>
+                <tr><td><code>/v1/services</code>, <code>/v1/services/{name}/jobs</code></td><td>services, and a job on a replica. Each replica has <code>health</code> (state, failures, last result) and each service <code>service_health</code> when it has a health check</td></tr>
                 <tr><td><code>/v1/links</code>, <code>/v1/graph</code></td><td>links, and the graph of what reaches what</td></tr>
                 <tr><td><code>/v1/fleets</code></td><td>fleets and their instances</td></tr>
                 <tr><td><code>/v1/ports</code>, <code>/v1/ports/check?port=N&amp;ip=IP</code></td><td>host ports</td></tr>

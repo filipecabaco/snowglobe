@@ -25,9 +25,12 @@ Changed entries are replaced along with everything made from them; entries gone 
 | `[templates.N]` | exactly one source: `site` (a site or URL), `build` (a Dockerfile directory, built first), or `snapshot` (a `[snapshots.*]` name); also `network` (`fetch`), `idle`, `max_machines`, `egress` (`none` default, `internet`, `private`), `allow_private` (same as `egress = "private"`; a conflicting `egress` is an error), `expose` (guest ports others reach under mode `all`) |
 | `[snapshots.N]` | `template`, `run` (commands that must succeed), `ready` (command retried until it succeeds), `timeout` (default 2m). Saved once ready. |
 | `[services.N]` | `template`, `ports` (`"HOST:GUEST"`), `min`, `max`, `idle`, `concurrency`, `state` (`discard` or `keep`), `labels` |
+| `[services.N.health]` | one of `cmd` (exit 0 passes) or a `[services.N.health.http]` table (`port`, `path` default `/`, `status` default `"200-399"` or a list `"200,204"`); `interval` (10s), `timeout` (2s), `failures` (3 in a row), `grace` (30s after start), `heal` (`replace` default, `drain`, `hook` with `heal_cmd`, `none`), `drain` (30s), `wait_ready` (false). Write `http` as a sub-table, not inline: the /fleet/ page reads no inline tables |
 | `[machines.N]` | `template`, `count`, `ports`, `ttl`, `labels` (named N, or N-1 to N-count) |
 | `[links.N]` | `from`, `to` (a template, service or machine of the file), `port`, `as`, `as_port` |
 | `[network]` | `mode` = `exclusive` (default), `inclusive`, `all` |
+
+Health: checks run only on replicas that exist, never wake a service at zero and do not count as use, so scale to zero is unaffected. An unhealthy replica is never saved (`state = "keep"` restarts from the last good save). `replace` starts a replacement at once only below `min`; above it, the next connection starts one. Heals back off, and after 5 in a row with no replica passing the service is `degraded` and healing stops. Check a route that answers without the service's dependencies (`/`, not one that queries the database), or a database outage replaces every replica. See health in `snowglobe service ls`, `/v1/services` (`health`, `service_health`) and events (`service.replica_unhealthy`, `service.replica_replaced`, `service.degraded`).
 
 Network modes: `exclusive` keeps each instance to itself (app#2 reaches db#2); `inclusive` lets every machine of a template reach any machine of the target's template across instances; `all` is inclusive plus every template reaching every other's `expose`d ports by its name.
 
@@ -77,11 +80,11 @@ https://filipecabaco.github.io/snowglobe/fleet/ reads the file in the page and t
 | one site | ONE machine: every entry on that site shares its files and processes |
 | `[links.*]` | real; both ends need a network; a machine reads its links when it wakes |
 | `[services.*]` ports | first guest port only, shown in a frame; the host port is not opened |
-| `min`, `max`, `idle`, `concurrency`; `ttl`; `egress`; `network.mode` | read, not applied (one instance; a machine's network is what its site was built with) |
+| `min`, `max`, `idle`, `concurrency`, `health`; `ttl`; `egress`; `network.mode` | read, not applied (one instance; a machine's network is what its site was built with) |
 
 - A link from a machine to itself, or between two entries on the same site, is refused.
 - The page prints a note for each key it reads but does not apply; read them before trusting a result.
 - Link transport in the tab (HTTP on 80/443, raw TCP and WebSockets elsewhere): snowglobe-networking.
-- Natively, none of those limits apply: scale, ttl, egress and modes are enforced by the daemon.
+- Natively, none of those limits apply: scale, health checks, ttl, egress and modes are enforced by the daemon.
 
 More: https://filipecabaco.github.io/snowglobe/docs/orchestration/ and the "Fleets" and "The fleet page" sections of https://filipecabaco.github.io/snowglobe/llms.txt

@@ -48,7 +48,7 @@ The docs live on the site, written for people using snowglobe:
 - [Networking](https://filipecabaco.github.io/snowglobe/docs/networking/): HTTP(S) and WebSockets through the browser, tunnels for other TCP, credentials
 - [Running outside a browser](https://filipecabaco.github.io/snowglobe/docs/running/): sessions, instances, shared memory, sites from a URL, one executable
 - [For agents and programs](https://filipecabaco.github.io/snowglobe/docs/agents/): `sh`, `cp`, forks, MCP, limits and logs
-- [Orchestration](https://filipecabaco.github.io/snowglobe/docs/orchestration/): `snowglobe ui`, the daemon, fire-and-forget runs, templates and machines, snapshots, services and scale to zero, ports, limits, events and top, fleets
+- [Orchestration](https://filipecabaco.github.io/snowglobe/docs/orchestration/): `snowglobe ui`, the daemon, fire-and-forget runs, templates and machines, snapshots, services and scale to zero, health checks and healing, ports, limits, events and top, fleets
 - [Isolation](https://filipecabaco.github.io/snowglobe/docs/isolation/): what each of the browser, native and Docker guards against, and how shared memory stays private
 - [CLI reference](https://filipecabaco.github.io/snowglobe/docs/reference/): every command, flag, label and environment variable
 
@@ -173,7 +173,8 @@ internal/tools/       build container: snowglobe-vm (runtime/, Rust on armless) 
 internal/native/      finding snowglobe-vm for running natively
 internal/instance/    run, exec, attach, ps, stop, sh, cp: in a container or natively
 internal/daemon/      the orchestrator: templates, machines forked from them, snapshots, services
-                      that scale to zero, and its HTTP/JSON API (snowglobe daemon)
+                      that scale to zero and heal their replicas, and its HTTP/JSON API
+                      (snowglobe daemon)
 internal/control/     snowglobe-vm's control sockets: jobs, spawn, save, connect
 internal/fleet/       fleet files (snowglobe.toml): the plan apply, diff and down carry out
 internal/ui/          snowglobe ui: the daemon in a browser (static files embedded; ghostty-web
