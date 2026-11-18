@@ -255,6 +255,10 @@ jobs:
             # pip install of a wheel from PyPI, through the guest's network (the agent page's python)
             python-agent) commands=$'import subprocess; subprocess.run(["pip", "install", "-q", "click"], check=True)\nimport click; print(f"pip-{6 * 7}-{click.__name__}")'; expect=pip-42-click ;;
             typescript) commands='console.log("snowglobe-" + 6 * 7)'; expect=snowglobe-42 ;;
+            # Bun (with a kernel, and with none as bun-nokernel): the prompt, then its own server
+            # (Bun.serve, in the same process) through a fetch, and what it holds in memory (in the log, to size it by)
+            bun)        commands=$'console.log("snowglobe-" + 6 * 7)\nconsole.log("served-" + (await (await fetch("http://127.0.0.1:3000/health")).text()))\nconsole.log("rss-mb", Math.round(process.memoryUsage().rss / 1048576))'
+                        expect=$'snowglobe-42\nserved-ok' ;;
             duckdb)     commands='select '"'"'snowglobe-'"'"' || 6 * 7;'; expect=snowglobe-42 ;;
             # The blank React project built with Vite in the machine, offline (its packages are in the image);
             # served from boot on the machine's network address by serve --watch, which builds it

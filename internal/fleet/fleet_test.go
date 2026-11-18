@@ -470,8 +470,24 @@ func TestTheExampleFleetLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := strings.Join(steps(p), "|"); !strings.Contains(got, "+ template supabase (build "+filepath.Join(f.Dir, "..", "supabase")) ||
-		!strings.Contains(got, "+ service viewer") || !strings.Contains(got, "+ link viewer-db (viewer reaches db:54321 as supabase.internal:54321") || len(p.Steps) != 9 {
+		!strings.Contains(got, "+ service live (db, 8080:8080 54321:54321") || strings.Contains(got, "link") || len(p.Steps) != 4 {
 		t.Errorf("the example's plan: %v", got)
+	}
+}
+
+// Its two-machine version, a template beside it, stays one too
+func TestTheTwoMachineLiveDataTemplateLoads(t *testing.T) {
+	f, err := Load("../../examples/fleet/templates/live-data-node.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.Plan(newFake())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(steps(p), "|"); !strings.Contains(got, "+ template supabase (build "+filepath.Join(f.Dir, "..", "..", "supabase")) ||
+		!strings.Contains(got, "+ service viewer") || !strings.Contains(got, "+ link viewer-db (viewer reaches db:54321 as supabase.internal:54321") || len(p.Steps) != 9 {
+		t.Errorf("the template's plan: %v", got)
 	}
 }
 

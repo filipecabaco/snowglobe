@@ -61,7 +61,7 @@ port = 9100
 as = "feed.internal"
 ```
 
-Full examples: `examples/fleet/snowglobe.toml` (a Supabase database that inserts a row a second, and a node viewer that subscribes to it with Supabase Realtime over a link; also runs at /fleet/) and `examples/todo-fleet/snowglobe.toml` (Elixir app and Postgres as `db.internal:5432`, egress none).
+Full examples: `examples/fleet/snowglobe.toml` (one Supabase machine that inserts a row a second and serves a page that subscribes to it with Supabase Realtime from the browser; also runs at /fleet/, phones included), `examples/fleet/templates/live-data-node.toml` (the same with a node viewer in a second machine, over a link) and `examples/todo-fleet/snowglobe.toml` (Elixir app and Postgres as `db.internal:5432`, egress none).
 
 ## Instances
 
@@ -69,7 +69,7 @@ A fleet runs as instances, like `docker compose -p`: templates and snapshots are
 
 ## The same file at /fleet/ (a browser tab)
 
-https://filipecabaco.github.io/snowglobe/fleet/ reads the file in the page and turns it into steps, each with its own Run, or Run all: a snapshot's `run` and `ready`, a link, a machine wake, a service opened in a frame. Stop ends the run and sends the machines back to their image; a graph shows the machines and links. A `run` command can be a multi-line string (three single quotes; heredoc terminators at column 0). Small fleets to try: `examples/fleet/templates/`.
+https://filipecabaco.github.io/snowglobe/fleet/ reads the file in the page and turns it into steps, each with its own Run, or Run all: a snapshot's `run` and `ready`, a link, a machine wake, a service opened in a frame. Stop ends the run and sends the machines back to their image; a graph shows the machines and links. A `run` command can be a multi-line string (three single quotes; heredoc terminators at column 0). Small fleets to try: `examples/fleet/templates/`. A link can load one: `/fleet/#tcp-echo` (a template's file name without `.toml`; `#live-data` is the example).
 
 | File | In the tab |
 |---|---|

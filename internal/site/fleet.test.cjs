@@ -5,8 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const F = require('./fleet.js');
 
-// The repository's example fleet: live data on one machine, shown by another over a link
-const live = fs.readFileSync(path.join(__dirname, '../../examples/fleet/snowglobe.toml'), 'utf8');
+// Live data on one machine, shown by another over a link (the two-machine template)
+const live = fs.readFileSync(path.join(__dirname, '../../examples/fleet/templates/live-data-node.toml'), 'utf8');
+// The repository's example fleet: the same live data in one machine, its page the viewer
+const oneMachine = fs.readFileSync(path.join(__dirname, '../../examples/fleet/snowglobe.toml'), 'utf8');
 // A smaller one, without a link: a snapshot, a service on it, and a machine, all of one site
 const example = `name = "python-demo"
 [templates.py]
@@ -400,10 +402,10 @@ test('run: steps asked together run one at a time', async () => {
 
 // ---------------------------------------------------------------- links
 
-test('plan: the repository example links a viewer to a Supabase database over two machines', () => {
+test('plan: the two-machine template links a viewer to a Supabase database', () => {
   const p = F.plan(F.parse(live), runtimes);
   assert.deepEqual(p.problems, []);
-  assert.equal(p.name, 'live-data');
+  assert.equal(p.name, 'live-data-node');
   assert.deepEqual(p.steps.map((s) => s.key), ['snapshot/db', 'snapshot/viewer', 'link/viewer-db', 'machine/db', 'service/viewer']);
   const byKey = Object.fromEntries(p.steps.map((s) => [s.key, s]));
   assert.equal(byKey['snapshot/db'].runtime, 'supabase');
@@ -424,6 +426,34 @@ test('plan: the repository example links a viewer to a Supabase database over tw
   assert.match(byKey['snapshot/viewer'].run[0], /createClient\('http:\/\/supabase\.internal:54321'/);
   assert.match(byKey['snapshot/viewer'].run[0], /postgres_changes/);
   assert.ok(!p.notes.some((n) => /links\./.test(n)));
+});
+
+test('plan: the repository example is one Supabase machine whose page subscribes to Realtime itself', () => {
+  const p = F.plan(F.parse(oneMachine), runtimes);
+  assert.deepEqual(p.problems, []);
+  assert.equal(p.name, 'live-data');
+  assert.deepEqual(p.steps.map((s) => s.key), ['snapshot/db', 'service/live']);
+  assert.deepEqual(p.links, [], 'no second machine, so nothing to link');
+  const byKey = Object.fromEntries(p.steps.map((s) => [s.key, s]));
+  assert.equal(byKey['snapshot/db'].runtime, 'supabase');
+  assert.equal(byKey['service/live'].runtime, 'supabase');
+  assert.equal(byKey['service/live'].port, 8080);
+  assert.deepEqual(byKey['service/live'].needs, ['snapshot/db']);
+  assert.deepEqual(byKey['snapshot/db'].runTimeoutsMs, [120000, 90000, 90000, 30000, 30000]);
+  assert.match(byKey['snapshot/db'].run[2], /alter publication supabase_realtime add table public\.ticks/);
+  // The page speaks Realtime itself, to port 54321 beside its own in the frame
+  const page = byKey['snapshot/db'].run[4];
+  assert.match(page, /realtime\/v1\/websocket/);
+  assert.match(page, /postgres_changes/);
+  assert.match(page, /54321\//);
+  assert.doesNotMatch(page, /supabase-js|https?:\/\/cdn/);
+  assert.match(byKey['snapshot/db'].ready, /127\.0\.0\.1:8080/);
+});
+
+test('run: all of the repository example, in order', async () => {
+  const api = fakeApi();
+  const run = F.createRun(api, F.plan(F.parse(oneMachine), runtimes), fast);
+  assert.equal(await run.runAll(), true);
 });
 
 test('plan: a link needs a name for the guest, a port, a network at both ends and two machines', () => {

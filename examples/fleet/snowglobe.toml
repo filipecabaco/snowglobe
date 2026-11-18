@@ -1,24 +1,20 @@
-# Live data on one machine, shown by another over the network. `snowglobe daemon --detach`, then
-# `snowglobe apply` here, and open http://127.0.0.1:8080. `snowglobe diff` says what apply would do,
-# `snowglobe down` removes it all, and `snowglobe top` shows it running. The same file runs in a
-# browser tab at /fleet/ on the demo site.
+# Live data from Supabase, in one machine. `snowglobe daemon --detach`, then `snowglobe apply` here,
+# and open http://127.0.0.1:8080. `snowglobe diff` says what apply would do, `snowglobe down` removes
+# it all, and `snowglobe top` shows it running. The same file runs in a browser tab at /fleet/ on the
+# demo site, and that one fits a phone: a single machine is awake, not two.
 #
-# db (Supabase) gets a new row in public.ticks every second. viewer (node) subscribes to that table
-# with supabase-js over Supabase Realtime (a WebSocket) at supabase.internal:54321, keeps the last 40
-# rows and draws them on a page of its own. The link is the only way between them: neither can reach
-# anything else.
+# db (Supabase) gets a new row in public.ticks every second and serves a small page on 8080. The page
+# runs in your browser: it reads the last 40 rows over the REST API, subscribes to the table over
+# Supabase Realtime (a WebSocket), both on the machine's port 54321, and draws them. The browser is
+# the viewer, so no second machine runs beside the database (templates/live-data-node.toml does the
+# same with a Node viewer in a machine of its own, over a link: two machines, too much for a phone).
 name = "live-data"
 
 [templates.supabase]
 build = "../supabase"
 network = "fetch"
 
-# Node, with supabase-js in /root/app
-[templates.node]
-build = "../web"
-network = "fetch"
-
-# The database, set up once: the table, published to Realtime, and a row a second from a loop
+# The database, set up once: the table, published to Realtime, a row a second from a loop, and the page
 [snapshots.db]
 template = "supabase"
 # Each command has a time limit of its own (timeout), so a slow one on a phone is cut off and named
@@ -66,88 +62,95 @@ fi
 { timeout = "30s", cmd = '''
 . /home/supa/.stack-env; (while true; do psql -q "$DB_URL" -c "insert into public.ticks (v) values (round((random() * 10 + 100)::numeric, 2))"; sleep 1; done >/dev/null 2>&1 &)
   ''' },
-]
-ready = ". /home/supa/.stack-env; psql -tA \"$DB_URL\" -c 'select count(*) from public.ticks' | grep -q '^[1-9]'"
-timeout = "4m"
-
-# The viewer, set up once: it loads the last rows, subscribes, and serves what it has heard. Three
-# commands with a time limit each: writing it, starting it, and waiting in the machine until it
-# listens (Node loading supabase-js takes a while on a phone), so a slow start is waited for there,
-# in one command, and one that never comes says what Node printed
-[snapshots.viewer]
-template = "node"
-run = [
 { timeout = "30s", cmd = '''
-cat > /root/app/viewer.mjs <<'EOF'
-import http from 'node:http';
-import { createClient } from '@supabase/supabase-js';
-const sb = createClient('http://supabase.internal:54321', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0');
+mkdir -p /root/live
+cat > /root/live/index.html <<'EOF'
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live data</title>
+<body style="font:16px/1.5 system-ui;margin:24px">
+<h3>Live data, over Supabase Realtime</h3>
+<p id="v" style="font-size:32px;margin:0">...</p>
+<svg viewBox="0 0 390 60" preserveAspectRatio="none" style="width:100%;max-width:400px;height:60px"><polyline id="line" fill="none" stroke="#d6300c" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+<p><small><span id="s">connecting</span>: pushed by Supabase over its Realtime WebSocket, straight to this page</small></p>
+<script>
+const KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
+// Where the API is: in the fleet page's frame, port 54321 of this same machine, beside the port
+// this page came from (preview/<machine>/54321/); natively, port 54321 of this host
+const at = location.pathname.match(/^(.*\/preview\/[^/]+\/)\d+\//);
+const api = at ? new URL(at[1] + '54321/', location.href) : new URL(location.protocol + '//' + location.hostname + ':54321/');
+const $ = (id) => document.getElementById(id);
 let ticks = [];
-let status = 'connecting';
-const keep = (row) => { ticks = [...ticks.filter((t) => t.id !== row.id), row].sort((a, b) => a.id - b.id).slice(-40); };
-async function load() {
-  const { data } = await sb.from('ticks').select('id,v').order('id', { ascending: false }).limit(40);
-  for (const row of data ?? []) keep(row);
-}
-sb.channel('ticks')
-  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ticks' }, (p) => keep(p.new))
-  .subscribe((s) => { status = s; if (s === 'SUBSCRIBED') load().catch(() => {}); });
-http.createServer((req, res) => {
-  if (req.url === '/health') return res.end('ok');
+function draw() {
   const ys = ticks.map((t) => Number(t.v));
   const lo = Math.min(...ys), hi = Math.max(...ys);
-  const pts = ys.map((y, i) => `${i * 10},${58 - ((y - lo) / (hi - lo || 1)) * 56}`).join(' ');
-  res.setHeader('content-type', 'text/html');
-  res.end(`<meta http-equiv='refresh' content='1'><body style='font:16px/1.5 system-ui;margin:24px'><h3>Live data, over Supabase Realtime</h3><p style='font-size:32px;margin:0'>${ys.at(-1) ?? '...'}</p><svg width='400' height='60'><polyline fill='none' stroke='#d6300c' stroke-width='2' points='${pts}'/></svg><p><small>${status}: pushed by Supabase at supabase.internal:54321, a machine of its own</small></p>`);
-}).listen(8080, '0.0.0.0');
+  $('v').textContent = ys.length ? ys.at(-1) : '...';
+  $('line').setAttribute('points', ys.map((y, i) => `${i * 10},${58 - ((y - lo) / (hi - lo || 1)) * 56}`).join(' '));
+}
+function keep(row) {
+  if (!row || row.id == null) return;
+  ticks = [...ticks.filter((t) => t.id !== row.id), row].sort((a, b) => a.id - b.id).slice(-40);
+  draw();
+}
+async function load() {
+  const r = await fetch(new URL('rest/v1/ticks?select=id,v&order=id.desc&limit=40', api), { headers: { apikey: KEY, authorization: 'Bearer ' + KEY } });
+  if (r.ok) for (const row of await r.json()) keep(row);
+}
+// Supabase Realtime's protocol (Phoenix channels, JSON) by hand: join a channel for the table's
+// inserts, a heartbeat every 25s, and again from the start if the socket closes (a phone that put
+// the tab away, say). Each join reloads the last rows, so nothing missed meanwhile is a gap
+function connect() {
+  const u = new URL('realtime/v1/websocket?apikey=' + KEY + '&vsn=1.0.0', api);
+  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(u);
+  let ref = 0, beat = null;
+  const send = (topic, event, payload) => ws.send(JSON.stringify({ topic, event, payload, ref: String(++ref), join_ref: topic === 'phoenix' ? null : '1' }));
+  ws.onopen = () => {
+    $('s').textContent = 'joining';
+    send('realtime:ticks', 'phx_join', { config: { broadcast: { self: false }, presence: { key: '' }, postgres_changes: [{ event: 'INSERT', schema: 'public', table: 'ticks' }] }, access_token: KEY });
+    beat = setInterval(() => send('phoenix', 'heartbeat', {}), 25000);
+  };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.event === 'phx_reply' && m.ref === '1') {
+      const ok = m.payload?.status === 'ok';
+      $('s').textContent = ok ? 'SUBSCRIBED' : 'refused: ' + JSON.stringify(m.payload?.response ?? m.payload);
+      if (ok) load().catch(() => {});
+    } else if (m.event === 'postgres_changes') {
+      keep(m.payload?.data?.record ?? m.payload?.record);
+    }
+  };
+  ws.onclose = () => {
+    clearInterval(beat);
+    $('s').textContent = 'reconnecting';
+    setTimeout(connect, 2000);
+  };
+}
+connect();
+</script>
 EOF
-echo "viewer.mjs written"
-  ''' },
-{ timeout = "30s", cmd = '''
-cd /root/app && (node viewer.mjs >/tmp/viewer.log 2>&1 &) && echo "node started"
-  ''' },
-{ timeout = "2m", cmd = '''
-# Until it answers on 8080, up to 110s by the clock (each try at most 2s, so a server that
-# accepts and never answers can't outlast the command's 2m), saying how long every 10s
-start=$(date +%s) n=0 said=0
-until wget -q -T 2 -O /dev/null http://127.0.0.1:8080/health 2>/dev/null; do
-  n=$(($(date +%s) - start))
-  if [ "$n" -ge 110 ]; then
-    echo "the viewer did not listen in 110s; what Node printed:"
-    tail -n 20 /tmp/viewer.log
-    exit 1
-  fi
-  if [ $((n / 10)) -gt "$said" ]; then said=$((n / 10)); echo "still starting after ${n}s"; fi
-  sleep 1
-done
-echo "listening after ${n}s"
+# A tiny web server: socat runs this for each connection, and every path is the page
+cat > /root/live/serve.sh <<'EOF'
+#!/bin/bash
+read -r request
+while IFS= read -r h; do h=${h%$'\r'}; [ -z "$h" ] && break; done
+printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %s\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n' "$(wc -c < /root/live/index.html)"
+cat /root/live/index.html
+EOF
+chmod +x /root/live/serve.sh
+(socat TCP-LISTEN:8080,reuseaddr,fork EXEC:/root/live/serve.sh >/tmp/live.log 2>&1 &)
+echo "the page is served on 8080"
   ''' },
 ]
-ready = "wget -q -O /dev/null http://127.0.0.1:8080/health"
-timeout = "30s"
+ready = ". /home/supa/.stack-env; psql -tA \"$DB_URL\" -c 'select count(*) from public.ticks' | grep -q '^[1-9]' && curl -sf -o /dev/null http://127.0.0.1:8080/"
+timeout = "4m"
 
 [templates.db]
 snapshot = "db"
 
-[templates.viewer]
-snapshot = "viewer"
-
-# The database: one machine, up
-[machines.db]
+# The page on 8080, and the API it calls on 54321. On the fleet page only the first port is framed,
+# and the page reaches 54321 through the frame (preview/<machine>/54321/), so that is enough there
+[services.live]
 template = "db"
-
-# The viewer, behind localhost:8080, scaled to zero: its first request wakes it
-[services.viewer]
-template = "viewer"
-ports = ["8080:8080"]
-min = 0
-max = 1
-idle = "5m"
-
-# The viewer reaches the database's API gateway (REST and Realtime) as supabase.internal:54321: a
-# port other than 80 and 443, which a page turns into HTTP; anything else is a plain TCP stream
-[links.viewer-db]
-from = "viewer"
-to = "db"
-port = 54321
-as = "supabase.internal"
+ports = ["8080:8080", "54321:54321"]
