@@ -123,6 +123,10 @@ type Runtime struct {
 	JIT      bool   `json:"jit"` // false: the machine keeps the interpreter
 	// The snapshot was saved with free page reporting: the machine needs the same device
 	FreePageReporting bool `json:"free_page_reporting,omitempty"`
+	// A site with no kernel (armless's user mode): its program's process, saved with the state
+	// (relative to Base), and when the build saved it (ms since the epoch), for its clocks
+	UserState     string `json:"user_state,omitempty"`
+	UserSavedAtMs int64  `json:"user_saved_at,omitempty"`
 }
 
 // Manifest is runtimes.json: the machines, and the files they share
@@ -210,6 +214,8 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 			CPUs      int    `json:"cpus"`
 			JIT       *bool  `json:"jit"`                 // missing: a site built before the setting, on
 			FreePages bool   `json:"free_page_reporting"` // missing: built before it, without the device
+			Kernel    string `json:"kernel"`              // "none": no kernel, its program is a process
+			SavedAtMs int64  `json:"saved_at_ms"`
 			Agent     *struct {
 				Name      string   `json:"name"`
 				Purpose   string   `json:"purpose"`
@@ -273,7 +279,12 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 		if err := notALink(filepath.Join(agentRoot, name)); err != nil {
 			return nil, err
 		}
+		var userState string
+		if run.Kernel == "none" {
+			userState = "system/user.bin"
+		}
 		all = append(all, found{Runtime: Runtime{
+			UserState: userState, UserSavedAtMs: run.SavedAtMs,
 			Name: name, Title: run.Title, Purpose: run.Agent.Purpose, Sample: run.Agent.Sample, Watch: run.Agent.Watch,
 			Base: "../" + e.Name() + "/", BaseURL: string(m[1]), BuildID: buildID, MemoryMB: run.MemoryMB, CPUs: run.CPUs, Network: run.Network, JIT: run.JIT == nil || *run.JIT,
 			FreePageReporting: run.FreePages,

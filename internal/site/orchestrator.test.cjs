@@ -1405,3 +1405,19 @@ test('preview sockets: at most 32 at once; bytes the machine doesn\'t take are b
   assert.equal(s.said.at(-1).type, 'close', 'nothing said after the close');
   await slow.api.closePreview();
 });
+
+test('a machine with no kernel starts with its program\'s process, and one with a kernel has none', async () => {
+  const man = {
+    ...manifest,
+    runtimes: [
+      { ...manifest.runtimes[0], name: 'bun', base: '../bun/', user_state: 'system/user.bin', user_saved_at: 1795006448903 },
+      { ...manifest.runtimes[0], name: 'sh', base: '../sh/' },
+    ],
+  };
+  const { api, host } = setup({ man });
+  await api.runCommand({ runtime: 'bun', command: 'echo' });
+  await api.runCommand({ runtime: 'sh', command: 'echo' });
+  assert.equal(host('bun').config.user_state, 'system/user.bin');
+  assert.equal(host('bun').config.user_saved_at, 1795006448903);
+  assert.ok(!('user_state' in host('sh').config));
+});

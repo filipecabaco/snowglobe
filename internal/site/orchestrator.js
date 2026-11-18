@@ -180,6 +180,8 @@
         ...(r.free_page_reporting ? { free_page_reporting: true } : {}),
         filesystem: { json: "system/filesystem.json", baseurl: r.baseurl ?? "system/filesystem/" },
         initial_state: "system/state.bin.zst",
+        // No kernel: its program is a process saved with the state, and its jobs are shells beside it
+        ...(r.user_state ? { user_state: r.user_state, user_saved_at: r.user_saved_at } : {}),
         warm: "system/warm.pack",
         ...(r.network === "fetch" ? { network: { tls: "system/tls.json" } } : {}),
       };

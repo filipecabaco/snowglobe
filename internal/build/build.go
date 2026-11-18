@@ -97,8 +97,6 @@ type Settings struct {
 	// Kernel: "linux" or "none"; Argv is the command's words, which "none" runs
 	Kernel string
 	Argv   []string
-	// SkippedAgent: the image is one of the agent page's machines, which a build with no kernel isn't
-	SkippedAgent bool
 	// SkippedCPUs: the CPUs the image asks for (its label) that a build with no kernel runs on one
 	SkippedCPUs int
 	// JIT: runs compile hot guest code (the default) rather than keep the interpreter
@@ -231,9 +229,6 @@ func Run(o Options, version string) error {
 		s.Command, describeReady(s.Ready), s.Memory, s.Network, s.CPUs, s.BuildCPUs, onOff(s.JIT))
 	if s.Kernel == "none" {
 		fmt.Println("    kernel:  none (the command runs on its own, with no kernel)")
-		if s.SkippedAgent {
-			fmt.Println("    agent:   not on the agent page (its label; the agent page's jobs need a shell, so a kernel)")
-		}
 		if s.SkippedCPUs > 0 {
 			fmt.Printf("    cpus:    one in the page, not the image's %d (not with --kernel none yet)\n", s.SkippedCPUs)
 		}
@@ -689,8 +684,6 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		switch {
 		case o.CPUs > 1:
 			return nil, errors.New("kernel none: one CPU in the page (it builds on several: --build-cpus)")
-		case o.Agent:
-			return nil, errors.New("kernel none: not on the agent page (its jobs need a shell, so a kernel)")
 		}
 		// What an image's program needs with no kernel when that differs from what it needs with one
 		// (label nokernel-memory): no page cache shares its files' pages between its processes
@@ -707,10 +700,10 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		if s.CPUs > 1 {
 			s.SkippedCPUs, s.CPUs = s.CPUs, 1
 		}
-		// The image's agent page (its label) is left out rather than refused. Its exercises run, as
-		// a kernel's: typed into the program after the snapshot, the files they read packed
-		s.SkippedAgent = s.Agent
-		s.Agent, s.AgentExposedTo = false, nil
+		// The agent's jobs (--agent, or the image's label) run as shells spawned beside the program
+		// (armless's Process::spawn, vm.spawn in the page), so they need /bin/sh in the image but
+		// no kernel's serial shell. The image's exercises run, as a kernel's: typed into the
+		// program after the snapshot, the files they read packed
 	default:
 		return nil, fmt.Errorf("kernel %q: linux or none", s.Kernel)
 	}

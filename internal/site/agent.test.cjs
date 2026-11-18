@@ -778,3 +778,144 @@ test('WebMCP: preview_snapshot and preview_interact read and use the open previe
   const bare = W.dispatcher(W.definitions({}, { jobText: A.jobText, ask: async () => {} }));
   assert.match((await bare('preview_snapshot', {})).content[0].text, /can't read its preview/);
 });
+
+// A machine with no kernel: its jobs are shells spawned beside the program. `spawn` is the page's
+// vm.spawn (armless 0.23), played: the script the shell was given, what it printed, how it ended.
+function userMachine(o = {}) {
+  const jobs = [];
+  const emulator = {
+    user: true,
+    on() {},
+    serial_input() { throw new Error('no serial shell'); },
+    async spawn(opts) {
+      const h = { opts, input: '', closed: false, signals: [], released: false, stdout: [], stderr: [], exit: null };
+      h.write = (d) => { h.input += typeof d === 'string' ? d : Buffer.from(d).toString(); return true; };
+      h.closeInput = () => { h.closed = true; };
+      h.poll = () => {
+        if (h.released) throw new Error('released');
+        const r = { stdout: Buffer.from(h.stdout.join('')), stderr: Buffer.from(h.stderr.join('')), exit: h.exit };
+        h.stdout = []; h.stderr = [];
+        return r;
+      };
+      h.kill = (sig = 15) => { h.signals.push(sig); };
+      h.release = () => { h.released = true; };
+      jobs.push(h);
+      return h;
+    },
+  };
+  let t = 0;
+  let timer = null;
+  const c = new A.Controller({ emulator, cpus: 1, network: 'none', buildId: 'b', version: 'v0', state: () => 'ready', saving: () => false, ...o },
+    { now: () => t, timers: { setInterval: (fn) => { timer = fn; return 1; }, clearInterval() { timer = null; } } });
+  // The controller's interval, at time `to`
+  const tick = (to) => { t = to; timer?.(); };
+  return { c, emulator, jobs, tick };
+}
+
+
+test('no kernel: a command is a shell spawned beside the program, its script on stdin, its status the exit status', async () => {
+  const { c, jobs, tick } = userMachine();
+  const { jobId } = c.runCommand({ command: "echo 'it''s' $HOME", files: { 'a.txt': new Uint8Array([104, 105]) } });
+  await settle();
+  const [h] = jobs;
+  assert.deepEqual(h.opts.argv, ['/bin/sh', '-s']);
+  assert.ok(h.opts.env.some((e) => e.startsWith('PATH=')));
+  assert.equal(h.closed, true, 'its stdin ends after the script');
+  assert.equal(c.readJob(jobId).state, 'running');
+  // The script puts the command and the file in the workspace, and execs the command with no stdin
+  const ws = `/sgjob/${jobId}`;
+  assert.match(h.input, new RegExp(`^mkdir -p ${ws}/\\.sg ${ws}/in ${ws}/out \\|\\| exit 1\\n`));
+  assert.ok(h.input.endsWith(`exec sh ${ws}/.sg/cmd </dev/null 2>&1\n`));
+  const b64 = (file) => [...h.input.matchAll(new RegExp(`^printf %s (\\S+) >>${ws}/${file.replace('.', '\\.')}$`, 'gm'))].map((m) => m[1]).join('');
+  assert.ok(Buffer.from(b64('.sg/cmd.b64'), 'base64').toString().endsWith("echo 'it''s' $HOME\n"));
+  assert.equal(Buffer.from(b64('in/a.txt.b64'), 'base64').toString(), 'hi');
+  for (const line of h.input.split('\n')) assert.ok(line.length < 5000, 'short lines');
+  // Output (stdout and stderr), then its end
+  h.stdout.push('hel'); tick(10);
+  h.stdout.push('lo\n'); h.stderr.push('warn\n'); h.exit = 3; tick(20);
+  const v = c.readJob(jobId);
+  assert.deepEqual([v.state, v.exitStatus, v.killed, v.output], ['exited', 3, false, 'hello\nwarn\n']);
+  assert.equal(h.released, true);
+  assert.equal(c.current, null, 'the job slot is free');
+  assert.equal(c.status().state, 'ready');
+});
+
+test('no kernel: out of time, TERM then KILL, and everything it started is killed', async () => {
+  const { c, jobs, tick } = userMachine();
+  const { jobId } = c.runCommand({ command: 'sleep 100', timeoutSeconds: 1 });
+  await settle();
+  const [h] = jobs;
+  tick(500);
+  assert.deepEqual(h.signals, []);
+  tick(1000);
+  assert.deepEqual(h.signals, [15]);
+  assert.equal(c.readJob(jobId).state, 'running');
+  // It ends (143): stopped, and its group is killed outright
+  h.exit = 143; tick(1100);
+  const v = c.readJob(jobId);
+  assert.deepEqual([v.state, v.killed, v.exitStatus], ['timed_out', true, null]);
+  assert.deepEqual(h.signals, [15, 9]);
+  assert.equal(h.released, true);
+});
+
+test('no kernel: a command that ignores TERM gets KILL after the grace', async () => {
+  const { c, jobs, tick } = userMachine();
+  const { jobId } = c.runCommand({ command: 'trap "" TERM; sleep 100', timeoutSeconds: 1 });
+  await settle();
+  const [h] = jobs;
+  tick(1000);
+  tick(1000 + A.limits.KILL_GRACE_MS);
+  assert.deepEqual(h.signals, [15, 9]);
+  h.exit = 137; tick(1000 + A.limits.KILL_GRACE_MS + 50);
+  assert.equal(c.readJob(jobId).state, 'timed_out');
+});
+
+test('no kernel: cancel stops it, one that ended by itself is not called cancelled, and one job at a time', async () => {
+  const { c, jobs, tick } = userMachine();
+  const { jobId } = c.runCommand({ command: 'sleep 100' });
+  await settle();
+  assert.throws(() => c.runCommand({ command: 'true' }), /busy/);
+  c.cancelJob(jobId);
+  assert.deepEqual(jobs[0].signals, [15]);
+  jobs[0].exit = 143; tick(5);
+  assert.equal(c.readJob(jobId).state, 'cancelled');
+  const again = c.runCommand({ command: 'true' });
+  await settle();
+  jobs[1].exit = 0; tick(9);
+  assert.equal(c.readJob(again.jobId).state, 'exited');
+});
+
+test('no kernel: cancelled before the shell came, nothing runs; a shell that cannot start fails the job', async () => {
+  const m = userMachine();
+  const slow = m.emulator.spawn;
+  let release;
+  m.emulator.spawn = (o) => new Promise((r) => { release = () => r(slow(o)); });
+  const { jobId } = m.c.runCommand({ command: 'x' });
+  m.c.cancelJob(jobId);
+  assert.equal(m.c.readJob(jobId).state, 'cancelled');
+  release();
+  await settle();
+  assert.deepEqual([m.jobs[0].signals, m.jobs[0].released, m.jobs[0].input], [[9], true, '']);
+  assert.equal(m.c.current, null);
+
+  const bad = userMachine();
+  bad.emulator.spawn = async () => { throw new Error('armless: spawn: /bin/sh: not found'); };
+  const r = bad.c.runCommand({ command: 'x' });
+  await settle();
+  const v = bad.c.readJob(r.jobId);
+  assert.equal(v.state, 'failed');
+  assert.match(v.error, /\/bin\/sh: not found/);
+  assert.equal(bad.c.current, null);
+});
+
+test('no kernel: output beyond the limit keeps the most recent', async () => {
+  const { c, jobs, tick } = userMachine();
+  const { jobId } = c.runCommand({ command: 'yes' });
+  await settle();
+  const big = 'x'.repeat(A.limits.MAX_OUTPUT + 10) + 'END';
+  jobs[0].stdout.push(big); tick(1);
+  const v = c.readJob(jobId);
+  assert.ok(v.truncated);
+  assert.ok(v.output.endsWith('END'));
+  assert.ok(v.output.length <= A.limits.MAX_OUTPUT);
+});

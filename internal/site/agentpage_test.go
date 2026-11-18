@@ -84,6 +84,38 @@ func TestWriteAgentPageNamedMachine(t *testing.T) {
 	}
 }
 
+// A site with no kernel is on the page with its program's process, which the machine restores
+func TestWriteAgentPageNoKernel(t *testing.T) {
+	root := t.TempDir()
+	run := agentRun("Bun", 1)
+	run["kernel"], run["saved_at_ms"] = "none", int64(1795006448903)
+	fakeSite(t, root, "bun", run, "armless")
+	fakeSite(t, root, "sh", agentRun("Shell", 1), "armless")
+	runtimes, err := WriteAgentPage(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimes) != 2 {
+		t.Fatalf("runtimes: %+v", runtimes)
+	}
+	for _, r := range runtimes {
+		switch r.Name {
+		case "bun":
+			if r.UserState != "system/user.bin" || r.UserSavedAtMs != 1795006448903 {
+				t.Errorf("no kernel: its process and when it was saved: %+v", r)
+			}
+		default:
+			if r.UserState != "" || r.UserSavedAtMs != 0 {
+				t.Errorf("a kernel's site has no process: %+v", r)
+			}
+		}
+	}
+	data, _ := os.ReadFile(filepath.Join(root, AgentDir, "runtimes.json"))
+	if !strings.Contains(string(data), `"user_state": "system/user.bin"`) {
+		t.Errorf("runtimes.json: %s", data)
+	}
+}
+
 func TestWriteAgentPage(t *testing.T) {
 	root := t.TempDir()
 	pyRun := agentRun("Python", 1, "https://chatgpt.com")

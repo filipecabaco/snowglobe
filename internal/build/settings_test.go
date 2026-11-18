@@ -98,7 +98,6 @@ func TestResolveKernel(t *testing.T) {
 	// What a machine with no kernel can't do yet
 	for name, o := range map[string]Options{
 		"several CPUs":   {Kernel: "none", CPUs: 2},
-		"the agent page": {Kernel: "none", Agent: true},
 		"another kernel": {Kernel: "bsd"},
 	} {
 		if _, err := Resolve(o, image(nil, "sh")); err == nil || !strings.Contains(err.Error(), "kernel") {
@@ -127,16 +126,16 @@ func TestAProgramWithNoKernelHasTheImagesEnvironmentAndExercises(t *testing.T) {
 	}
 }
 
-func TestAnImagesAgentLabelIsLeftOutWithNoKernel(t *testing.T) {
+func TestAnAgentPageWorksWithNoKernel(t *testing.T) {
 	labels := map[string]string{"snowglobe.kernel": "none", "snowglobe.agent": "true", "snowglobe.agent-exposed-to": `["https://agent.example"]`}
 	s, err := Resolve(Options{}, image(labels, "duckdb"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Agent || s.AgentExposedTo != nil || !s.SkippedAgent {
-		t.Errorf("the label is left out, and said so: %+v", s)
+	if !s.Agent || len(s.AgentExposedTo) != 1 {
+		t.Errorf("the label is kept: its jobs run as spawned shells: %+v", s)
 	}
-	if _, err := Resolve(Options{Agent: true}, image(labels, "duckdb")); err == nil {
-		t.Error("--agent is refused")
+	if s, err := Resolve(Options{Agent: true}, image(labels, "duckdb")); err != nil || !s.Agent {
+		t.Errorf("--agent is taken: %+v %v", s, err)
 	}
 }
