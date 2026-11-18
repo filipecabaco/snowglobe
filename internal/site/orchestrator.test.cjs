@@ -1421,3 +1421,27 @@ test('a machine with no kernel starts with its program\'s process, and one with 
   assert.equal(host('bun').config.user_saved_at, 1795006448903);
   assert.ok(!('user_state' in host('sh').config));
 });
+
+test('a fleet health check never wakes a machine, waits for no job, and isn\'t use', async () => {
+  const { api, log, host } = setup({ man: { ...manifest, runtimes: manifest.runtimes.map((r) => ({ ...r, network: r.name === 'python' ? 'fetch' : 'none' })) } });
+  assert.equal(await api.healthCheck({ runtime: 'python', cmd: 'true' }), null, 'asleep: not checked');
+  assert.deepEqual(log, [], 'and not woken');
+  await api.wake('python');
+  const h = host('python');
+  const m = api._machines.find((x) => x.name === 'python');
+  m.lastUsed = 1;
+  h.onRun = (id, job) => setImmediate(() => { Object.assign(job, { state: 'exited', exitStatus: job.command === 'true' ? 0 : 3 }); h.emit('job', { jobId: id }); });
+  assert.deepEqual(await api.healthCheck({ runtime: 'python', cmd: 'true' }), { exit: 0, last: 'exit 0' });
+  assert.deepEqual(await api.healthCheck({ runtime: 'python', cmd: 'false' }), { exit: 3, last: 'exit 3' });
+  assert.equal(m.lastUsed, 1, 'its idle clock goes on');
+  assert.equal(m.job, null);
+  assert.equal(m.dirty, false, 'a check changes nothing worth saving');
+  assert.equal((await api.healthCheck({ runtime: 'python', http: { port: 4173, path: '/healthz' } })).status, 200);
+  assert.equal((await api.healthCheck({ runtime: 'python', http: { port: 9, path: '/' } })).status, null, 'nothing listens');
+  await api.wake('duckdb');
+  assert.deepEqual(await api.healthCheck({ runtime: 'duckdb', http: { port: 4173 } }), { status: null, last: 'duckdb has no network device' });
+  h.onRun = null;
+  const j = await api.runCommand({ runtime: 'python', command: 'sleep 9' });
+  assert.equal(await api.healthCheck({ runtime: 'python', cmd: 'true' }), null, 'beside a job: checked another time');
+  h.finish(j.jobId, '');
+});

@@ -407,8 +407,19 @@ as = "db.internal"</pre>
               (<code>as_port</code>, default <code>port</code>) is a raw TCP stream, which carries Postgres, Redis and
               WebSocket traffic alike. A guest's <code>ws://name/</code> on 80 or 443, and a page in the frame, can
               open WebSockets too. A machine reads its links when it wakes.</li>
+            <li><b>Health checks</b> run once a step is done, with the daemon's defaults and rules. A check never wakes
+              a sleeping machine, and doesn't count as use, so a machine still sleeps when idle. <code>replace</code>
+              starts the machine from its image and runs its steps again. <code>hook</code> runs <code>heal_cmd</code>
+              and checks again. <code>drain</code> only reports, since the page has one machine and nothing to take out
+              of service. After 5 heals in a row with no check passing, the step is degraded. <code>wait_ready</code>
+              holds a service's step until it passes.</li>
+            <li><b>Supervisors</b> restart their children by strategy, restart type and
+              <code>max_restarts</code>/<code>max_seconds</code>, as the daemon does. A nested supervisor that gives up
+              fails its parent, and a top-level one is degraded until you press its Restart. A child is restarted by
+              starting its machine from its image and running that machine's steps again, so children of one site
+              restart together. A supervised machine that stops by itself has ended.</li>
             <li><b>Read, not applied:</b> <code>min</code>, <code>max</code>, <code>idle</code>, <code>concurrency</code>,
-              <code>health</code>, <code>supervisors</code>, <code>ttl</code>, <code>egress</code>, <code>network.mode</code> and host ports. The page lists them.</li>
+              <code>ttl</code>, <code>egress</code>, <code>network.mode</code>, labels and host ports. The page lists them.</li>
           </ul>
 
           <h2 class="h3" id="ui">In a browser: snowglobe ui</h2>

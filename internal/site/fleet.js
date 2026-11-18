@@ -462,12 +462,12 @@
   // as not applied here. fleet.test.cjs checks both lists against the Go structs, so a key added to the
   // format has to be decided here too, and a file the CLI refuses is refused here.
   const KEYS = {
-    templates: { applied: ["site", "build", "snapshot", "network"], said: ["idle", "max_machines", "allow_private", "egress", "expose", "health"] },
+    templates: { applied: ["site", "build", "snapshot", "network", "health"], said: ["idle", "max_machines", "allow_private", "egress", "expose"] },
     snapshots: { applied: ["template", "run", "ready", "timeout"], said: [] },
-    services: { applied: ["template", "ports"], said: ["min", "max", "idle", "concurrency", "state", "labels", "health"] },
-    machines: { applied: ["template"], said: ["count", "ports", "ttl", "labels", "health"] },
+    services: { applied: ["template", "ports", "health"], said: ["min", "max", "idle", "concurrency", "state", "labels"] },
+    machines: { applied: ["template", "health"], said: ["count", "ports", "ttl", "labels"] },
     links: { applied: ["from", "to", "port", "as", "as_port"], said: [] },
-    supervisors: { applied: [], said: ["strategy", "children", "max_restarts", "max_seconds", "restart", "labels"] },
+    supervisors: { applied: ["strategy", "children", "max_restarts", "max_seconds", "restart"], said: ["labels"] },
   };
   const TOP = ["name", "templates", "snapshots", "services", "machines", "links", "supervisors", "network"];
   // Said one by one elsewhere in plan(); the rest of `said` is said here
@@ -475,6 +475,85 @@
 
   const tables = (v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.entries(v) : []);
   const isTable = (v) => v && typeof v === "object" && !Array.isArray(v);
+
+  // A health check's keys (fleet.HealthSpec, fleet.HTTPSpec): fleet.test.cjs checks them against Go
+  const HEALTH_KEYS = ["http", "cmd", "interval", "timeout", "failures", "grace", "heal", "heal_cmd", "drain", "wait_ready"];
+  const HTTP_KEYS = ["port", "path", "status"];
+  // Heals in a row with no check passing before healing stops (daemon maxHeals), and the longest wait between two
+  const MAX_HEALS = 5;
+  const MAX_HEAL_BACKOFF_MS = 5 * 60000;
+  const RESTART_TYPES = ["permanent", "transient", "temporary"];
+  const STRATEGIES = ["one_for_one", "one_for_all", "rest_for_one"];
+
+  /** "200-399" or "200,204": [[lo, hi], ...], or null if it isn't one (daemon parseStatus). */
+  function statusRanges(spec) {
+    const out = [];
+    for (const part of String(spec).split(",")) {
+      const m = /^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$/.exec(part);
+      const a = m ? Number(m[1]) : NaN, b = m?.[2] !== undefined ? Number(m[2]) : a;
+      if (!m || a < 100 || b > 599 || a > b) return null;
+      out.push([a, b]);
+    }
+    return out;
+  }
+
+  /**
+   * A health check as the daemon keeps it (daemon.NormalHealth), its defaults filled in: { health }
+   * or { error }. A machine's heals by none (its default) or hook; a service's and a template's also
+   * by drain or replace (the default).
+   */
+  function normalHealth(kind, h) {
+    if (!isTable(h)) return { error: "health: a table ([...health])" };
+    for (const k of Object.keys(h)) if (!HEALTH_KEYS.includes(k)) return { error: `health: unknown key ${k}` };
+    if (h.http !== undefined) {
+      if (!isTable(h.http)) return { error: "health: http: a table (port, path, status)" };
+      for (const k of Object.keys(h.http)) if (!HTTP_KEYS.includes(k)) return { error: `health: http: unknown key ${k}` };
+    }
+    const hasCmd = typeof h.cmd === "string" && h.cmd !== "";
+    if (h.cmd !== undefined && typeof h.cmd !== "string") return { error: "health: cmd: a command, as a string" };
+    if ((h.http === undefined) === !hasCmd) return { error: "health: one of http or cmd" };
+    let http = null;
+    if (h.http) {
+      const { port, path = "/", status = "200-399" } = h.http;
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: `health: http port ${JSON.stringify(port)}: 1 to 65535` };
+      if (typeof path !== "string" || !path.startsWith("/")) return { error: `health: http path ${JSON.stringify(path)}: starts with /` };
+      const ranges = typeof status === "string" ? statusRanges(status) : null;
+      if (!ranges) return { error: `health: http status ${JSON.stringify(status)}: codes (100 to 599) or ranges of them, like 200-399` };
+      http = { port, path: path || "/", status, ranges };
+    }
+    const dur = (k, dflt) => {
+      if (h[k] === undefined || h[k] === "") return dflt;
+      const ms = duration(h[k]);
+      return ms === null ? NaN : ms;
+    };
+    const intervalMs = dur("interval", 10000);
+    if (Number.isNaN(intervalMs)) return { error: `health: interval: a duration like "10s", not ${JSON.stringify(h.interval)}` };
+    if (intervalMs < 1000) return { error: `health: interval ${h.interval}: 1s or more` };
+    const timeoutMs = dur("timeout", Math.min(2000, intervalMs));
+    if (Number.isNaN(timeoutMs) || timeoutMs <= 0 || timeoutMs > intervalMs) return { error: `health: timeout ${JSON.stringify(h.timeout)}: more than 0 and at most the interval (${spoken(intervalMs)})` };
+    if (h.failures !== undefined && (!Number.isInteger(h.failures) || h.failures < 0)) return { error: "health: failures: 1 or more" };
+    const graceMs = dur("grace", 30000);
+    if (Number.isNaN(graceMs)) return { error: `health: grace: a duration like "30s", not ${JSON.stringify(h.grace)}` };
+    const drainMs = dur("drain", 30000);
+    if (Number.isNaN(drainMs)) return { error: `health: drain: a duration like "30s", not ${JSON.stringify(h.drain)}` };
+    let heal = h.heal ?? "";
+    if (heal === "") heal = kind === "machine" ? "none" : "replace";
+    if (kind === "machine" && (heal === "drain" || heal === "replace")) return { error: `health: heal ${heal}: a machine heals by none or hook; put it under a supervisor to have it restarted` };
+    if (!["none", "drain", "hook", "replace"].includes(heal)) return { error: `health: heal ${JSON.stringify(heal)}: none, drain, hook or replace` };
+    if (heal === "hook" && (typeof h.heal_cmd !== "string" || !h.heal_cmd)) return { error: "health: heal hook: needs heal_cmd, the command it runs" };
+    if (h.wait_ready !== undefined && typeof h.wait_ready !== "boolean") return { error: "health: wait_ready: true or false" };
+    return {
+      health: {
+        http, cmd: hasCmd ? h.cmd : null, intervalMs, timeoutMs, failures: h.failures || 3, graceMs, heal,
+        healCmd: heal === "hook" ? h.heal_cmd : null, drainMs, waitReady: h.wait_ready === true,
+      },
+    };
+  }
+
+  /** What a health check is, in a few words: "GET :8000/healthz (200-399) every 10s" or "`pg_isready` every 5s". */
+  function describeHealth(h) {
+    return `${h.http ? `GET :${h.http.port}${h.http.path} (${h.http.status})` : `\`${h.cmd}\``} every ${spoken(h.intervalMs)}`;
+  }
 
   /**
    * What the page does with a fleet file, against the machines it has (runtimes: runtimes.json's
@@ -502,8 +581,14 @@
     }
 
     const templates = new Map();
+    const templateHealth = new Map(); // a template's health check, its services' and machines' when they have none
     for (const [name, t] of tables(file.templates)) {
       if (!NAME.test(name)) { bad(`templates.${name}`, "a name is letters, digits, . _ or -"); continue; }
+      if (isTable(t) && t.health !== undefined) {
+        const h = normalHealth("template", t.health);
+        if (h.error) { bad(`templates.${name}`, h.error); continue; }
+        templateHealth.set(name, h.health);
+      }
       templates.set(name, t);
     }
     const snapshots = new Map();
@@ -634,12 +719,19 @@
       if (guest.some((p) => p === null)) { bad(where, `ports: "host:guest" like "8080:8000", not ${JSON.stringify(ports[guest.indexOf(null)])}`); continue; }
       if (!guest.length) { bad(where, "it has no ports to open"); continue; }
       if (!r.network) { bad(where, `${r.runtime} has no network device on the page, so its servers can't be reached`); continue; }
+      let health = templateHealth.get(sv.template) ?? null;
+      if (sv.health !== undefined) {
+        const h = normalHealth("service", sv.health);
+        if (h.error) { bad(where, h.error); continue; }
+        health = h.health;
+      }
       const needs = needsOf(r, where);
       if (!needs) continue;
       steps.push({
-        key: `service/${name}`, kind: "service", name, runtime: r.runtime, needs, ports: guest, port: guest[0],
-        summary: `Open ${r.runtime}'s port ${guest[0]}`,
+        key: `service/${name}`, kind: "service", name, runtime: r.runtime, needs, ports: guest, port: guest[0], health,
+        summary: `Open ${r.runtime}'s port ${guest[0]}${health ? `, checked by ${describeHealth(health)}` : ""}`,
       });
+      if (health?.heal === "drain") notes.push(`services.${name}: heal drain only reports here: the page has one machine for it, none to take out of service`);
       const scale = ["min", "max", "idle", "concurrency"].filter((k) => sv[k] !== undefined);
       if (scale.length) notes.push(`services.${name}: ${scale.join(", ")} don't apply: the page keeps one machine per site, woken by use and put to sleep when others need the room`);
       if (guest.length > 1) notes.push(`services.${name}: only its first port (${guest[0]}) is opened`);
@@ -651,11 +743,100 @@
       if (!NAME.test(name)) { bad(where, "a name is letters, digits, . _ or -"); continue; }
       const r = typeof m.template === "string" ? resolve(m.template) : { error: "it names no template" };
       if (r.error) { bad(where, r.error); continue; }
+      // Its own check, else its template's, healed by hook or none (a template's replace and drain are for its services)
+      let health = templateHealth.get(m.template) ?? null;
+      if (health && health.heal !== "hook") health = { ...health, heal: "none", healCmd: null };
+      if (m.health !== undefined) {
+        const h = normalHealth("machine", m.health);
+        if (h.error) { bad(where, h.error); continue; }
+        health = h.health;
+      }
+      if (health?.http && !r.network) { bad(where, `${r.runtime} has no network device on the page, so its HTTP check can't reach it`); continue; }
       const needs = needsOf(r, where);
       if (!needs) continue;
-      steps.push({ key: `machine/${name}`, kind: "machine", name, runtime: r.runtime, needs, summary: `Wake ${r.runtime}` });
+      steps.push({ key: `machine/${name}`, kind: "machine", name, runtime: r.runtime, needs, health,
+        summary: `Wake ${r.runtime}${health ? `, checked by ${describeHealth(health)}` : ""}` });
       if (m.ttl !== undefined) notes.push(`machines.${name}: ttl doesn't apply: the page's machine is kept until you clear its save`);
     }
+
+    // Supervisors: each restarts its children (the file's services, machines and supervisors, in
+    // order) when one fails, by its strategy. On the page a child is restarted by starting its
+    // machine from its image and running that machine's steps again
+    const supSpecs = new Map(tables(file.supervisors).filter(([, s]) => isTable(s)));
+    const supervisors = new Map();
+    const owner = new Map();
+    const stepOf = (kind, name) => steps.find((s) => s.kind === kind && s.name === name);
+    const childKind = (c) => (isTable(file.services?.[c]) ? "service" : isTable(file.machines?.[c]) ? "machine" : supSpecs.has(c) ? "supervisor" : null);
+    for (const [name, sv] of supSpecs) {
+      const where = `supervisors.${name}`;
+      if (!NAME.test(name)) { bad(where, "a name is letters, digits, . _ or -"); continue; }
+      for (const k of ["templates", "services", "machines", "snapshots", "links"]) {
+        if (isTable(file[k]?.[name])) bad(where, `a ${k.slice(0, -1)} has that name (a child is named by its name alone)`);
+      }
+      const strategy = sv.strategy ?? "one_for_one";
+      if (!STRATEGIES.includes(strategy)) { bad(where, `strategy ${JSON.stringify(strategy)}: one_for_one, one_for_all or rest_for_one`); continue; }
+      if (sv.max_restarts !== undefined && (!Number.isInteger(sv.max_restarts) || sv.max_restarts < 0)) { bad(where, "max_restarts 1 or more"); continue; }
+      let maxMs = 60000;
+      if (sv.max_seconds !== undefined) {
+        maxMs = duration(sv.max_seconds);
+        if (!maxMs) { bad(where, `max_seconds: a duration like "60s", not ${JSON.stringify(sv.max_seconds)}`); continue; }
+      }
+      if (!Array.isArray(sv.children) || !sv.children.length || sv.children.some((c) => typeof c !== "string")) { bad(where, "children: at least one, by name"); continue; }
+      const restart = isTable(sv.restart) ? sv.restart : {};
+      if (sv.restart !== undefined && !isTable(sv.restart)) { bad(where, "restart: a table of a child's name to permanent, transient or temporary"); continue; }
+      let wrong = null;
+      const seen = new Set();
+      for (const c of sv.children) {
+        if (seen.has(c)) wrong = `child ${c} twice`;
+        else if (c === name) wrong = "its own child";
+        else if (!childKind(c)) wrong = `child ${c}: no service, machine or supervisor of that name in the file`;
+        else if (owner.has(c) && owner.get(c) !== name) wrong = `child ${c} is a child of supervisor ${owner.get(c)} too`;
+        if (wrong) break;
+        seen.add(c);
+        owner.set(c, name);
+      }
+      for (const [c, t] of Object.entries(restart)) {
+        if (wrong) break;
+        if (!seen.has(c)) wrong = `restart ${c}: not one of its children`;
+        else if (!RESTART_TYPES.includes(t)) wrong = `restart ${c} = ${JSON.stringify(t)}: permanent, transient or temporary`;
+      }
+      if (wrong) { bad(where, wrong); continue; }
+      supervisors.set(name, {
+        name, strategy, maxRestarts: sv.max_restarts || 3, maxMs,
+        children: sv.children.map((c) => ({ kind: childKind(c), name: c, restart: restart[c] ?? "permanent" })),
+      });
+    }
+    // A supervisor runs only if each child does: a step left out (a problem above), or a supervisor
+    // that can't, leaves it out too; one that is its own descendant is refused
+    const supOk = new Map();
+    const supCheck = (name, via = []) => {
+      if (supOk.has(name)) return supOk.get(name);
+      if (via.includes(name)) { bad(`supervisors.${name}`, `supervisors ${[...via, name].join(" → ")} go round in a circle`); supOk.set(name, false); return false; }
+      const s = supervisors.get(name);
+      let ok = !!s;
+      for (const c of s?.children ?? []) {
+        if (c.kind === "supervisor" ? !supCheck(c.name, [...via, name]) : !stepOf(c.kind, c.name)) {
+          if (c.kind !== "supervisor") bad(`supervisors.${name}`, `its child ${c.kind} ${c.name} can't run here`);
+          ok = false;
+          break;
+        }
+      }
+      supOk.set(name, ok);
+      return ok;
+    };
+    const supList = [];
+    for (const name of supervisors.keys()) {
+      if (!supCheck(name)) continue;
+      const s = supervisors.get(name);
+      for (const c of s.children) c.key = c.kind === "supervisor" ? `supervisor/${c.name}` : stepOf(c.kind, c.name).key;
+      s.parent = owner.get(name) ?? null;
+      supList.push(s);
+      // Children of one site share its machine: one restarted is all of them restarted
+      const sites = new Map();
+      for (const c of s.children) if (c.kind !== "supervisor") { const rt = stepOf(c.kind, c.name).runtime; sites.set(rt, [...(sites.get(rt) ?? []), c.name]); }
+      for (const [rt, who] of sites) if (who.length > 1) notes.push(`supervisors.${name}: ${who.join(", ")} run in ${rt}, so restarting one restarts them all`);
+    }
+    for (const st of steps) st.supervisor = owner.has(st.name) && supOk.get(owner.get(st.name)) && childKind(st.name) === st.kind ? owner.get(st.name) : null;
 
     if (isTable(file.network) && file.network.mode && file.network.mode !== "exclusive") notes.push(`network.mode ${file.network.mode}: not applied: the page runs one instance`);
     for (const [name, t] of templates) {
@@ -680,7 +861,7 @@
 
     const order = { snapshot: 0, link: 1, machine: 2, service: 3 };
     steps.sort((a, b) => order[a.kind] - order[b.kind]);
-    return { name: typeof file.name === "string" && file.name ? file.name : "fleet", steps, links: linkList, problems, notes };
+    return { name: typeof file.name === "string" && file.name ? file.name : "fleet", steps, links: linkList, supervisors: supList, problems, notes };
   }
 
   // ---------------------------------------------------------------- running it
@@ -693,9 +874,14 @@
    */
   function createRun(api, thePlan, {
     onchange, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), pollMs = 500,
-    callMs = 30000, graceMs = 30000, timer = setTimeout,
+    callMs = 30000, graceMs = 30000, timer = setTimeout, tickMs = 1000, fresh = (runtime) => api.startFresh(runtime),
   } = {}) {
     const states = new Map(thePlan.steps.map((s) => [s.key, { status: "pending", detail: null, output: "", error: null }]));
+    // How each checked step's health goes (once it is done), and each supervisor's
+    const healths = new Map();
+    const sups = new Map((thePlan.supervisors ?? []).map((s) => [s.name, { state: "running", restarts: [], last: null }]));
+    const supBy = new Map((thePlan.supervisors ?? []).map((s) => [s.name, s]));
+    let watching = null; // the timer of the next tick, while health is watched
     const byKey = new Map(thePlan.steps.map((s) => [s.key, s]));
     let chain = Promise.resolve();
     let stopping = false; // stop() is waiting for what runs to end
@@ -803,7 +989,20 @@
       }
       if (step.kind === "service") {
         const r = await api.openPreview({ runtime: step.runtime, port: step.port, path: "/" }, { source: "fleet" });
-        if (r.error) throw new Error(`the preview is open, but its first request failed: ${r.error}`);
+        if (r.error && !step.health?.waitReady) throw new Error(`the preview is open, but its first request failed: ${r.error}`);
+        if (step.health?.waitReady) {
+          // wait_ready: done once it passes a check, within its grace
+          const until = now() + step.health.graceMs;
+          for (let n = 1; ; n++) {
+            set(step.key, { detail: `waiting for it to pass its check (${describeHealth(step.health)})` });
+            const c = await checkOnce(step);
+            if (c?.ok) break;
+            if (stopping) throw new Error("stopped");
+            if (now() + step.health.intervalMs > until) throw new Error(`it didn't pass its check within its grace (${spoken(step.health.graceMs)})${c ? `: ${c.last}` : ""}`);
+            await sleep(Math.min(step.health.intervalMs, 2000 * n));
+          }
+          return { detail: `port ${step.port} passed its check`, url: r.url ?? null };
+        }
         return { detail: `port ${step.port} answered ${r.status}`, url: r.url ?? null };
       }
       await api.wake(step.runtime);
@@ -816,20 +1015,232 @@
       for (const need of step.needs) {
         if (states.get(need).status !== "done") throw new Error(`${key} needs ${need} first`);
       }
-      const run = chain.then(async () => {
-        if (stopping || states.get(key).status === "running") return;
-        set(key, { status: "running", detail: null, error: null, output: "", startedAt: now() });
-        try {
-          set(key, { status: "done", ...(await execute(step)) });
-        } catch (e) {
-          // A step that stop() ended goes back to pending, not failed
-          if (stopping) set(key, { status: "pending", detail: null, error: null, output: "" });
-          else set(key, { status: "failed", error: String(e?.message ?? e) });
+      await enqueue(() => doStep(step));
+      return states.get(key);
+    }
+
+    /** `fn` once what runs before it is done: steps, health checks and restarts one at a time. */
+    function enqueue(fn) {
+      const run = chain.then(fn);
+      chain = run.catch(() => {});
+      return run;
+    }
+
+    async function doStep(step) {
+      const key = step.key;
+      if (stopping || states.get(key).status === "running") return;
+      set(key, { status: "running", detail: null, error: null, output: "", startedAt: now() });
+      try {
+        set(key, { status: "done", ...(await execute(step)) });
+        // Its checks start over: grace from now
+        if (step.health) healths.set(key, { state: "starting", failures: 0, last: null, checked: null, since: now(), doneAt: now(), nextAt: now(), heals: 0, healAt: 0, hooked: false });
+      } catch (e) {
+        // A step that stop() ended goes back to pending, not failed
+        if (stopping) set(key, { status: "pending", detail: null, error: null, output: "" });
+        else set(key, { status: "failed", error: String(e?.message ?? e) });
+      }
+    }
+
+    // ------------------------------------------------ health and supervisors
+
+    /** One check of a step's machine: { ok, last }, or null if it wasn't checked (asleep, or busy:
+     *  a check never wakes a machine). */
+    async function checkOnce(step) {
+      const h = step.health;
+      if (!api.healthCheck) return null;
+      let r;
+      try {
+        r = await answer(Promise.resolve(api.healthCheck({ runtime: step.runtime, cmd: h.cmd ?? undefined, http: h.http ? { port: h.http.port, path: h.http.path } : undefined,
+          timeoutSeconds: Math.max(1, Math.ceil(h.timeoutMs / 1000)) })), "a health check");
+      } catch (e) { return { ok: false, last: String(e?.message ?? e) }; }
+      if (!r) return null;
+      if (h.http) return { ok: r.status != null && h.http.ranges.some(([a, b]) => r.status >= a && r.status <= b), last: r.last ?? `HTTP ${r.status}` };
+      return { ok: r.exit === 0, last: r.last ?? `exit ${r.exit}` };
+    }
+
+    const setHealth = (key, patch) => { Object.assign(healths.get(key), patch); changed(); };
+
+    /** Whether a machine stopped by itself (its state failed): a supervised child's process ended. */
+    async function machineFailed(runtime) {
+      try { return (await api.status?.(runtime))?.state === "failed"; } catch { return false; }
+    }
+
+    /**
+     * One round of the watch: each done step whose check is due is checked; one that fails
+     * `failures` in a row (past its grace) is unhealthy, and healed (a hook, then starting its
+     * machine again) or handed to its supervisor. A supervised child whose machine stopped by
+     * itself has ended. Runs in the queue, so never beside a step.
+     */
+    function tick() {
+      return enqueue(async () => {
+        for (const step of thePlan.steps) {
+          if (stopping) return;
+          if (states.get(step.key).status !== "done") continue;
+          if (step.supervisor && await machineFailed(step.runtime)) {
+            const h = healths.get(step.key);
+            if (h?.ended) continue;
+            if (h) setHealth(step.key, { state: "unhealthy", last: "its machine stopped", ended: true });
+            else healths.set(step.key, { state: "unhealthy", last: "its machine stopped", ended: true });
+            await childFailed(step.supervisor, step.key, "ended", "its machine stopped");
+            continue;
+          }
+          const h = healths.get(step.key);
+          if (!step.health || !h) continue;
+          // Unhealthy and waiting out its backoff: heal once it is over
+          if (h.state === "unhealthy" && !step.supervisor && h.healAt && now() >= h.healAt) { await heal(step); continue; }
+          if (now() < h.nextAt) continue;
+          setHealth(step.key, { nextAt: now() + step.health.intervalMs });
+          const r = await checkOnce(step);
+          if (!r) continue;
+          if (r.ok) {
+            setHealth(step.key, { state: "healthy", failures: 0, last: r.last, checked: now(), heals: 0, healAt: 0, why: null, hooked: h.state === "healthy" ? false : h.hooked, ended: false, ...(h.state !== "healthy" ? { since: now() } : {}) });
+            continue;
+          }
+          // A failed check counts once its grace is over (or once it has passed one)
+          if (h.state === "starting" && now() - h.doneAt < step.health.graceMs) { setHealth(step.key, { last: r.last, checked: now() }); continue; }
+          const failures = h.failures + 1;
+          setHealth(step.key, { failures, last: r.last, checked: now() });
+          if (failures < step.health.failures || h.state === "unhealthy" || h.state === "degraded") continue;
+          setHealth(step.key, { state: "unhealthy", since: now() });
+          if (step.supervisor) await childFailed(step.supervisor, step.key, "unhealthy", r.last);
+          else await heal(step);
         }
       });
-      chain = run.catch(() => {});
-      await run;
-      return states.get(key);
+    }
+
+    /**
+     * An unhealthy step that no supervisor watches, healed as its check says: none (and drain, on the
+     * page) only report; hook runs heal_cmd, then checks again (unhealthy again, a service is
+     * restarted, a machine left to report); replace starts its machine from its image again and runs
+     * its steps. One heal at a time, waiting longer after each; after MAX_HEALS with no check
+     * passing it is degraded and healing stops.
+     */
+    async function heal(step) {
+      const h = healths.get(step.key);
+      const hc = step.health;
+      let how = hc.heal;
+      if (how === "hook" && h.hooked) how = step.kind === "service" ? "replace" : "none";
+      if (how === "none" || how === "drain") return;
+      if (h.healAt && now() < h.healAt) return;
+      const attempt = h.heals + 1;
+      if (attempt > MAX_HEALS) { setHealth(step.key, { state: "degraded", healAt: 0, why: `healed ${MAX_HEALS} times in a row with no check passing: healing stopped until one does` }); return; }
+      setHealth(step.key, { heals: attempt, healAt: now() + Math.min(hc.intervalMs * 2 ** (attempt - 1), MAX_HEAL_BACKOFF_MS) });
+      if (how === "hook") {
+        setHealth(step.key, { state: "healing", last: `running its heal command (heal ${attempt} of ${MAX_HEALS})` });
+        let said;
+        try {
+          const r = await exec(step.runtime, hc.healCmd, 60);
+          said = r.exit === 0 ? "exit 0" : r.exit === null ? r.state : `exit ${r.exit}`;
+        } catch (e) { said = String(e?.message ?? e); }
+        // Checked again: passing, it is healthy; failing again, it is healed past its hook
+        setHealth(step.key, { state: "checking", failures: 0, hooked: true, last: `ran its heal command (${said}), checking it again`, nextAt: now() });
+        return;
+      }
+      setHealth(step.key, { state: "healing", last: `starting ${step.runtime} again (heal ${attempt} of ${MAX_HEALS})` });
+      const keep = { heals: attempt, healAt: healths.get(step.key).healAt };
+      await restart([step.runtime]);
+      // A restart that didn't bring it back is still counted, and still waits its backoff
+      const after = healths.get(step.key);
+      if (after) Object.assign(after, keep);
+    }
+
+    /** The machines `runtimes` started from their image (in reverse order) and their steps run again
+     *  (in plan order): a restart, on the page. What it couldn't do is said on the step. */
+    async function restart(runtimes) {
+      const set1 = new Set(runtimes);
+      for (const rt of [...set1].reverse()) {
+        for (let tries = 0; ; tries++) {
+          try { await fresh(rt); break; } catch (e) {
+            if (tries >= 10 || !/busy/.test(String(e?.message))) break;
+            await sleep(300);
+          }
+        }
+      }
+      for (const step of thePlan.steps) {
+        if (stopping) return;
+        if (!set1.has(step.runtime) || step.kind === "link") continue;
+        healths.delete(step.key);
+        set(step.key, { status: "pending", detail: null, error: null, output: "" });
+        await doStep(step);
+      }
+    }
+
+    /** The steps under a supervisor's child (itself, or a supervisor's children, all the way down). */
+    function leaves(child) {
+      if (child.kind !== "supervisor") return [byKey.get(child.key)];
+      return supBy.get(child.name).children.filter((c) => c.restart !== "temporary").flatMap(leaves);
+    }
+
+    /**
+     * A supervisor's child failed (`how`: unhealthy, ended, or escalated: a supervisor under it gave
+     * up): restarted by its restart type and the supervisor's strategy, unless that is more than
+     * max_restarts within max_seconds, when the supervisor fails its own parent, or (at the top)
+     * is degraded until it is restarted.
+     */
+    async function childFailed(supName, childKey, how, detail) {
+      const sup = supBy.get(supName);
+      const st = sups.get(supName);
+      const idx = sup.children.findIndex((c) => c.key === childKey);
+      const child = sup.children[idx];
+      const what = `${child.kind} ${child.name} ${how}${detail ? `: ${detail}` : ""}`;
+      if (child.restart === "temporary") { st.last = `${what}: temporary, so nothing is restarted`; return changed(); }
+      if (child.restart === "transient" && how === "ended") { st.last = `${what}: transient, so a normal exit: nothing is restarted`; return changed(); }
+      if (st.state === "degraded") { st.last = `${what}: not restarted (the supervisor is degraded)`; return changed(); }
+      st.restarts = [...st.restarts.filter((t) => now() - t < sup.maxMs), now()];
+      if (st.restarts.length > sup.maxRestarts) {
+        st.restarts = [];
+        if (sup.parent) {
+          st.last = `more than ${sup.maxRestarts} restarts in ${spoken(sup.maxMs)}: it failed ${sup.parent}`;
+          changed();
+          return childFailed(sup.parent, `supervisor/${supName}`, "escalated", what);
+        }
+        st.state = "degraded";
+        st.last = `more than ${sup.maxRestarts} restarts in ${spoken(sup.maxMs)} (${what}): degraded, restarting nothing until it is restarted`;
+        return changed();
+      }
+      const which = sup.strategy === "one_for_all" ? sup.children.map((_, i) => i)
+        : sup.strategy === "rest_for_one" ? sup.children.map((_, i) => i).filter((i) => i >= idx) : [idx];
+      const restarted = which.map((i) => sup.children[i]).filter((c, i) => c === child || c.restart !== "temporary");
+      // A supervisor restarted starts over: its restarts forgotten, no longer degraded
+      for (const c of restarted) if (c.kind === "supervisor") resetSup(c.name);
+      const runtimes = [...new Set(restarted.flatMap(leaves).map((s) => s.runtime))];
+      st.last = `restarted ${restarted.map((c) => c.name).join(", ")} (${sup.strategy}, restart ${st.restarts.length} of ${sup.maxRestarts} in ${spoken(sup.maxMs)}): ${what}`;
+      changed();
+      await restart(runtimes);
+    }
+
+    function resetSup(name) {
+      Object.assign(sups.get(name), { state: "running", restarts: [] });
+      for (const c of supBy.get(name).children) if (c.kind === "supervisor") resetSup(c.name);
+    }
+
+    /** A degraded supervisor (or any) started over: its children restarted, its count forgotten. */
+    function restartSupervisor(name) {
+      const sup = supBy.get(name);
+      if (!sup) throw new Error(`no supervisor ${name}`);
+      return enqueue(async () => {
+        resetSup(name);
+        sups.get(name).last = "restarted by hand";
+        changed();
+        await restart([...new Set(sup.children.filter((c) => c.restart !== "temporary").flatMap(leaves).map((s) => s.runtime))]);
+      });
+    }
+
+    /** Health watched every `tickMs` until unwatch() (or stop()). */
+    function watch() {
+      if (watching) return;
+      const next = () => {
+        watching = timer(async () => {
+          if (!watching) return;
+          try { await tick(); } catch {}
+          if (watching) next();
+        }, tickMs);
+      };
+      next();
+    }
+    function unwatch() {
+      if (watching) clearTimeout(watching);
+      watching = null;
     }
 
     /** Every step, in order, each once what it needs is done; stops at the first that fails. */
@@ -851,6 +1262,7 @@
      */
     async function stop({ also = [] } = {}) {
       stopping = true;
+      unwatch();
       const problems = [];
       try {
         await chain;
@@ -871,6 +1283,8 @@
           } catch (e) { problems.push(`${runtime}: ${String(e?.message ?? e)}`); }
         }
         for (const st of states.values()) Object.assign(st, { status: "pending", detail: null, output: "", error: null, url: undefined });
+        healths.clear();
+        for (const name of sups.keys()) { resetSup(name); sups.get(name).last = null; }
       } finally {
         stopping = false;
         changed();
@@ -878,10 +1292,14 @@
       return { problems };
     }
 
-    return { state: (key) => states.get(key), runStep, runAll, stop, steps: thePlan.steps };
+    return {
+      state: (key) => states.get(key), runStep, runAll, stop, steps: thePlan.steps,
+      health: (key) => healths.get(key) ?? null, supervisor: (name) => sups.get(name) ?? null, supervisors: thePlan.supervisors ?? [],
+      watch, unwatch, tick, restartSupervisor,
+    };
   }
 
-  const SnowglobeFleet = { parse, plan, createRun, highlight, graph, duration, siteOf, guestPort, TomlError, KEYS, TOP };
+  const SnowglobeFleet = { parse, plan, createRun, highlight, graph, duration, siteOf, guestPort, describeHealth, TomlError, KEYS, TOP, HEALTH_KEYS, HTTP_KEYS };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeFleet;
   else root.SnowglobeFleet = SnowglobeFleet;
 })(typeof window !== "undefined" ? window : globalThis);

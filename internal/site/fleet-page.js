@@ -241,8 +241,20 @@
     // A new file starts from no links: its link steps set its own. A machine that was awake with the
     // old ones is suspended (it reads its names at its next wake)
     api.setLinks([]).catch((e) => say(e.message));
-    current = { plan, run: F.createRun(api, plan, { onchange: () => render() }) };
+    current?.run.unwatch();
+    current = { plan, run: F.createRun(api, plan, { onchange: () => render(), fresh: healFresh }) };
     render();
+  }
+
+  /**
+   * A heal or a supervisor starting a machine from its image again: the person's Run started the
+   * fleet, which is their yes for it, and only for the machines it uses.
+   */
+  async function healFresh(runtime) {
+    if (!ran || !current?.plan.steps.some((s) => s.runtime === runtime)) return false;
+    freshFor = new Set([runtime]);
+    freshOk = true;
+    try { return await api.startFresh(runtime); } finally { freshOk = false; freshFor = new Set(); }
   }
 
   const busy = () => active > 0 || !!current && current.plan.steps.some((s) => current.run.state(s.key).status === "running");
@@ -280,6 +292,7 @@
         act(async () => {
           await mark();
           await fit();
+          run.watch();
           await run.runStep(s.key);
           after(s);
         }).catch((err) => say(err.message));
@@ -294,9 +307,12 @@
       const running = st.status === "running" ? `${st.detail ?? "running…"}${st.startedAt != null ? ` · ${elapsed(st.startedAt)}` : ""}` : "";
       const state = st.status === "failed" ? st.error : st.status === "running" ? running : st.status === "done" ? st.detail : "";
       if (state) row.append(el("p", "step-state" + (st.status === "failed" ? " bad" : ""), state));
+      const health = healthText(s);
+      if (health) row.append(el("p", "step-health" + (/^(unhealthy|degraded)/.test(health) ? " bad" : ""), health));
       if (st.output && st.status !== "done") row.append(el("pre", "step-out", st.output));
       return row;
     }));
+    renderSups();
     stopBtn.disabled = stopping || !ran;
     runAll.disabled = stopping || busy() || !steps.length || steps.every((s) => run.state(s.key).status === "done");
 
@@ -311,6 +327,44 @@
     }));
     // While a step runs, its time moves on every second
     if (busy() && !tickTimer) tickTimer = setInterval(() => { if (busy()) render(); else { clearInterval(tickTimer); tickTimer = null; } }, 1000);
+  }
+
+  /** How a done step's checks go, and who heals it: "healthy · exit 0, 3s ago · heals by replace". */
+  function healthText(s) {
+    if (!s.health && !s.supervisor) return "";
+    const h = current.run.health(s.key);
+    const who = s.supervisor ? `restarted by supervisor ${s.supervisor}` : s.health.heal === "none" || s.health.heal === "drain" ? "only reported" : `heals by ${s.health.heal}`;
+    if (!h) return s.health ? `checked once it runs · ${who}` : `under supervisor ${s.supervisor}`;
+    const ago = h.checked != null ? `, ${elapsed(h.checked)} ago` : "";
+    const word = { starting: "starting (not yet passed)", checking: "checking again" }[h.state] ?? h.state;
+    const failing = h.failures && h.state !== "healthy" && s.health ? ` (${h.failures} of ${s.health.failures} failed)` : "";
+    return [`${word}${failing}`, h.why ?? (h.last ? `${h.last}${ago}` : null), who].filter(Boolean).join(" · ");
+  }
+
+  const supsList = $("fleet-sups");
+  /** Each supervisor: its strategy and children, how it is, what it last did, and a Restart. */
+  function renderSups() {
+    const list = current?.run.supervisors ?? [];
+    $("fleet-sups-box").hidden = !list.length;
+    supsList.replaceChildren(...list.map((sup) => {
+      const st = current.run.supervisor(sup.name);
+      const go = el("button", "btn sm", "Restart");
+      go.type = "button";
+      go.title = "Restarts its children (but temporary ones) and forgets its restarts";
+      go.disabled = stopping || busy() || !ran;
+      go.addEventListener("click", (e) => {
+        if (!e.isTrusted || stopping || busy() || !ran) return;
+        act(() => current.run.restartSupervisor(sup.name)).catch((err) => say(err.message));
+      });
+      const kids = sup.children.map((c) => `${c.name}${c.restart === "permanent" ? "" : ` (${c.restart})`}`).join(", ");
+      const head = el("div", "sup-head");
+      head.append(el("b", null, sup.name), el("span", "grow", `${sup.strategy} over ${kids}${sup.parent ? ` · under ${sup.parent}` : ""}`), go);
+      const row = li(head);
+      const recent = st.restarts.length ? ` · ${st.restarts.length} of ${sup.maxRestarts} restarts in ${Math.round(sup.maxMs / 1000)}s` : "";
+      row.append(el("p", st.state === "degraded" ? "bad" : null, `${st.state}${recent}`));
+      if (st.last) row.append(el("p", st.state === "degraded" ? "bad" : null, st.last));
+      return row;
+    }));
   }
 
   /**
@@ -371,6 +425,7 @@
         await mark();
         say("Running the fleet…");
         await fit();
+        run.watch();
         return run.runAll();
       });
     } catch (err) { say(err.message); return; }

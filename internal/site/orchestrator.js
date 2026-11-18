@@ -380,6 +380,8 @@
         const j = jobs.get(jobId);
         if (j) try { j.final = await host.readJob(jobId); } catch {}
         j?.end?.();
+        // A health check's command isn't use: the machine's idle clock goes on
+        if (j?.check) { scheduler.notify(); changed(); return; }
         m.lastUsed = now();
         m.lifecycle.touch();
         scheduler.notify();
@@ -986,6 +988,47 @@
       return fetchText(m, port, path, { signal, answerMs });
     }
 
+    /**
+     * A fleet's health check of a machine: { runtime, cmd } (a command that must exit 0) or
+     * { runtime, http: { port, path } } (a GET; its status is the caller's to judge), within
+     * `timeoutSeconds`. Never wakes a machine, and isn't use (its idle clock goes on): null when it
+     * isn't running, or is busy with a job or a copy (checked another time). Otherwise { exit } or
+     * { status } (status null: nothing answered), with `last`, a word on what it found.
+     */
+    async function healthCheck({ runtime, cmd, http, timeoutSeconds = 2 }) {
+      const m = get(runtime);
+      if (m.lifecycle.state !== "running" || !m.host || m.job || m.xfers || m.starting) return null;
+      const limitMs = Math.max(1, timeoutSeconds) * 1000;
+      if (http) {
+        if (!m.network) return { status: null, last: `${m.name} has no network device` };
+        const r = await fetchText(m, http.port, http.path ?? "/", { answerMs: limitMs }).catch((e) => ({ status: null, error: String(e?.message ?? e) }));
+        if (!r) return { status: null, last: "nothing answered" };
+        // error: no answer came (the page's own 502), as against a server that answered with one
+        if (r.error) return { status: null, last: typeof r.error === "string" ? r.error : "nothing answered" };
+        return { status: r.status, last: `HTTP ${r.status}` };
+      }
+      const host = m.host;
+      const { jobId } = await host.runCommand({ command: cmd, timeoutSeconds: Math.max(1, timeoutSeconds) });
+      m.job = jobId;
+      const j = { machine: m, final: null, nonce: null, check: true };
+      j.ended = new Promise((resolve) => { j.end = resolve; });
+      jobs.set(jobId, j);
+      changed();
+      try {
+        const late = new Promise((resolve) => setTimeout(resolve, limitMs + 2000, "late"));
+        if (await Promise.race([j.ended, late]) === "late") {
+          try { await host.cancelJob(jobId); } catch {}
+          return { exit: null, last: `no answer within ${timeoutSeconds}s` };
+        }
+        const v = j.final ?? {};
+        if (v.state === "exited") return { exit: v.exitStatus, last: `exit ${v.exitStatus}` };
+        return { exit: null, last: v.state ?? "ended" };
+      } finally {
+        jobs.delete(jobId);
+        if (m.job === jobId) m.job = null;
+      }
+    }
+
     /** A small GET to a running machine's server, over its network: { status, body } (64 KiB at
      *  most), { status, error: true }, or null if nothing answered. */
     async function fetchText(m, port, path, { signal, answerMs = 10000 } = {}) {
@@ -1306,6 +1349,7 @@
         return true;
       },
       startFresh,
+      healthCheck,
       openPreview,
       async closePreview(opts) { return closePreview("closed", opts?.source); },
       async preview() { return previewView(); },
