@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -203,8 +202,13 @@ func runTemplate(args []string) error {
 			return nil
 		})
 		fs.IntVar(&req.WarmRuns, "warm-runs", 0, "")
+		// The health check its services and machines take when they have none of their own
+		hf := addHealthFlags(fs)
 		positional, err := parse(fs, args[1:])
 		if err != nil {
+			return err
+		}
+		if req.Health, err = hf.health(); err != nil {
 			return err
 		}
 		switch {
@@ -277,6 +281,7 @@ func runUp(args []string) error {
 		req.Labels[k] = val
 		return nil
 	})
+	hf := addHealthFlags(fs)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	positional, err := parse(fs, args)
 	if err != nil {
@@ -284,6 +289,9 @@ func runUp(args []string) error {
 	}
 	if len(positional) != 1 {
 		return errors.New("up takes a template's name (snowglobe template ls)")
+	}
+	if req.Health, err = hf.health(); err != nil {
+		return err
 	}
 	req.Template = positional[0]
 	c, err := daemonClient()
@@ -380,20 +388,7 @@ func runService(args []string) error {
 		fs.IntVar(&req.Concurrency, "concurrency", 0, "")
 		fs.StringVar(&req.State, "state", "discard", "")
 		// A health check: --health-http PORT[/PATH] or --health-cmd CMD, and how it heals
-		var hc daemon.Health
-		var hHTTP, hStatus string
-		var hInterval, hTimeout, hGrace, hDrain time.Duration
-		fs.StringVar(&hHTTP, "health-http", "", "")
-		fs.StringVar(&hStatus, "health-status", "", "")
-		fs.StringVar(&hc.Cmd, "health-cmd", "", "")
-		fs.DurationVar(&hInterval, "health-interval", 0, "")
-		fs.DurationVar(&hTimeout, "health-timeout", 0, "")
-		fs.IntVar(&hc.Failures, "health-failures", 0, "")
-		fs.DurationVar(&hGrace, "health-grace", 0, "")
-		fs.StringVar(&hc.Heal, "heal", "", "")
-		fs.StringVar(&hc.HealCmd, "heal-cmd", "", "")
-		fs.DurationVar(&hDrain, "drain", 0, "")
-		fs.BoolVar(&hc.WaitReady, "wait-ready", false, "")
+		hf := addHealthFlags(fs)
 		fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 		positional, err := parse(fs, args[1:])
 		if err != nil {
@@ -404,19 +399,8 @@ func runService(args []string) error {
 		}
 		req.Name = positional[0]
 		req.Idle = daemon.Duration(idle)
-		if hHTTP != "" || hc.Cmd != "" || hc.Heal != "" || hc.HealCmd != "" || hStatus != "" || hc.WaitReady {
-			if hHTTP != "" {
-				portS, path, _ := strings.Cut(hHTTP, "/")
-				p, err := strconv.Atoi(portS)
-				if err != nil {
-					return fmt.Errorf("--health-http %q: PORT or PORT/PATH, like 8000/healthz", hHTTP)
-				}
-				hc.HTTP = &daemon.HTTPCheck{Port: p, Path: "/" + path, Status: hStatus}
-			} else if hStatus != "" {
-				return errors.New("--health-status is for --health-http")
-			}
-			hc.Interval, hc.Timeout, hc.Grace, hc.Drain = daemon.Duration(hInterval), daemon.Duration(hTimeout), daemon.Duration(hGrace), daemon.Duration(hDrain)
-			req.Health = &hc
+		if req.Health, err = hf.health(); err != nil {
+			return err
 		}
 		for _, spec := range ports {
 			p, err := daemon.ParsePort(spec)
@@ -431,11 +415,7 @@ func runService(args []string) error {
 		}
 		fmt.Printf("%s: %d to %d replicas of %s, idle %s, state %s\n", s.Name, s.Min, s.Max, s.Template, time.Duration(s.Idle), s.State)
 		if h := s.Health; h != nil {
-			what := "cmd " + h.Cmd
-			if h.HTTP != nil {
-				what = fmt.Sprintf("GET :%d%s (%s)", h.HTTP.Port, h.HTTP.Path, h.HTTP.Status)
-			}
-			fmt.Printf("  health %s every %s, %d failures, heal %s\n", what, time.Duration(h.Interval), h.Failures, h.Heal)
+			fmt.Printf("  %s\n", describeHealth(h))
 		}
 		for _, p := range s.Ports {
 			fmt.Printf("  port %s\n", p)

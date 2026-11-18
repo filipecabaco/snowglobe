@@ -20,6 +20,7 @@ type fake struct {
 	services  map[string]daemon.ServiceStatus
 	machines  map[string]daemon.Machine
 	links     map[string]daemon.Link
+	sups      map[string]daemon.SupervisorStatus
 	// Shown each template asked for
 	onAddTemplate func(daemon.AddTemplate)
 	calls         []string
@@ -34,7 +35,7 @@ type fake struct {
 
 func newFake() *fake {
 	return &fake{templates: map[string]daemon.Template{}, snapshots: map[string]daemon.Snapshot{},
-		services: map[string]daemon.ServiceStatus{}, machines: map[string]daemon.Machine{}, links: map[string]daemon.Link{},
+		services: map[string]daemon.ServiceStatus{}, machines: map[string]daemon.Machine{}, links: map[string]daemon.Link{}, sups: map[string]daemon.SupervisorStatus{},
 		status: map[string]int{}, readyAfter: map[string]int{}, limits: map[string]float64{}, timesOut: map[string]bool{}}
 }
 
@@ -93,7 +94,11 @@ func (f *fake) AddTemplate(r daemon.AddTemplate) (*daemon.Template, error) {
 	if f.onAddTemplate != nil {
 		f.onAddTemplate(r)
 	}
-	t := daemon.Template{Name: r.Name, Site: r.Site, Snapshot: r.Snapshot, Labels: r.Labels, Idle: r.Idle}
+	h, err := daemon.NormalHealth(daemon.KindTemplate, r.Health)
+	if err != nil {
+		return nil, err
+	}
+	t := daemon.Template{Name: r.Name, Site: r.Site, Snapshot: r.Snapshot, Labels: r.Labels, Idle: r.Idle, Health: h}
 	f.templates[r.Name] = t
 	return &t, nil
 }
@@ -118,6 +123,11 @@ func (f *fake) RemoveSnapshot(n string) error {
 }
 func (f *fake) AddService(s daemon.Service) (*daemon.ServiceStatus, error) {
 	f.calls = append(f.calls, "add service "+s.Name)
+	h, err := daemon.NormalHealth(daemon.KindService, s.Health)
+	if err != nil {
+		return nil, err
+	}
+	s.Health = h
 	st := daemon.ServiceStatus{Service: s}
 	f.services[s.Name] = st
 	return &st, nil
@@ -132,9 +142,73 @@ func (f *fake) Up(u daemon.Up) (*daemon.Machine, error) {
 	if _, taken := f.machines[u.Name]; taken {
 		return nil, fmt.Errorf("a machine called %s exists", u.Name)
 	}
-	m := daemon.Machine{Name: u.Name, Template: u.Template, Labels: u.Labels}
+	h, err := daemon.NormalHealth(daemon.KindMachine, u.Health)
+	if err != nil {
+		return nil, err
+	}
+	m := daemon.Machine{Name: u.Name, Template: u.Template, Labels: u.Labels, Health: h}
 	f.machines[u.Name] = m
 	return &m, nil
+}
+func (f *fake) Supervisors() ([]daemon.SupervisorStatus, error) {
+	var out []daemon.SupervisorStatus
+	for _, s := range f.sups {
+		out = append(out, s)
+	}
+	return out, nil
+}
+func (f *fake) AddSupervisor(s daemon.Supervisor) (*daemon.SupervisorStatus, error) {
+	var kids []string
+	for _, c := range s.Children {
+		k := c.Kind + "/" + c.Name
+		if c.Restart != "" {
+			k += ":" + c.Restart
+		}
+		kids = append(kids, k)
+	}
+	f.calls = append(f.calls, "add supervisor "+s.Name+" "+s.Strategy+" "+strings.Join(kids, ","))
+	st := daemon.SupervisorStatus{Supervisor: s}
+	f.sups[s.Name] = st
+	return &st, nil
+}
+func (f *fake) RemoveSupervisor(n string) error {
+	f.calls = append(f.calls, "rm supervisor "+n)
+	delete(f.sups, n)
+	return nil
+}
+func (f *fake) SetHealth(kind, name string, h *daemon.Health, labels map[string]string) error {
+	what := "none"
+	if h != nil {
+		what = h.Cmd
+	}
+	f.calls = append(f.calls, "health "+kind+" "+name+" "+what)
+	h, err := daemon.NormalHealth(kind, h)
+	if err != nil {
+		return err
+	}
+	set := func(l map[string]string) {
+		for k, v := range labels {
+			l[k] = v
+		}
+	}
+	switch kind {
+	case daemon.KindService:
+		s := f.services[name]
+		s.Health = h
+		set(s.Labels)
+		f.services[name] = s
+	case daemon.KindMachine:
+		m := f.machines[name]
+		m.Health = h
+		set(m.Labels)
+		f.machines[name] = m
+	case daemon.KindTemplate:
+		t := f.templates[name]
+		t.Health = h
+		set(t.Labels)
+		f.templates[name] = t
+	}
+	return nil
 }
 func (f *fake) RemoveMachine(n string) error {
 	f.calls = append(f.calls, "rm machine "+n)
@@ -200,6 +274,20 @@ func write(t *testing.T, text string) string {
 func load(t *testing.T, text string) *File {
 	t.Helper()
 	f, err := Load(write(t, text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// loadAt writes text as the fleet file in dir (the same file, changed) and loads it.
+func loadAt(t *testing.T, dir, text string) *File {
+	t.Helper()
+	path := filepath.Join(dir, "snowglobe.toml")
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,13 +743,28 @@ status = "200,204"
 		h.Interval != daemon.Duration(15*time.Second) || h.Failures != 2 || h.Heal != daemon.HealHook || h.HealCmd != "pkill -HUP python3" || !h.WaitReady {
 		t.Fatalf("health: %+v", h)
 	}
-	// A change to the check replaces the service
-	changed := load(t, withHealth("[services.web.health]\ncmd = \"curl -sf localhost:8000/\"\n"))
+	// A change to the check is made in place: the service (and its replicas) stay
+	changed := loadAt(t, f.Dir, withHealth("[services.web.health]\ncmd = \"curl -sf localhost:8000/\"\n"))
 	p, err = changed.Plan(api)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(steps(p), "\n"); !strings.Contains(got, "~ service web") {
+	if got := strings.Join(steps(p), "\n"); got != "* service web (health check, in place)" {
+		t.Errorf("steps: %s", got)
+	}
+	api.calls = nil
+	if err := p.Apply(api, (&builds{}).build, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(api.calls, "; "); got != "health service web curl -sf localhost:8000/" {
+		t.Errorf("calls: %s", got)
+	}
+	if p, _ := changed.Plan(api); !p.Empty() {
+		t.Errorf("after: %v", steps(p))
+	}
+	// And so is taking it away
+	p, _ = loadAt(t, f.Dir, example).Plan(api)
+	if got := strings.Join(steps(p), "\n"); got != "* service web (health check, in place)" {
 		t.Errorf("steps: %s", got)
 	}
 	// Without one, a service hashes as it did before health checks
@@ -681,6 +784,147 @@ func TestABadHealthCheckIsRefused(t *testing.T) {
 		"[services.web.health]\n[services.web.health.http]\nport = 8000\nstatus = \"2xx\"\n": "http status",
 	} {
 		_, err := Load(write(t, withHealth(bad)))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", bad, err, want)
+		}
+	}
+}
+
+func TestAServiceOfAnEarlierVersionIsLabelledAnewNotReplaced(t *testing.T) {
+	f := load(t, withHealth("[services.web.health]\ncmd = \"true\"\n"))
+	api := newFake()
+	p, _ := f.Plan(api)
+	if err := p.Apply(api, (&builds{}).build, quiet); err != nil {
+		t.Fatal(err)
+	}
+	// As 0.23 and 0.24 labelled it: a hash with its health check
+	var legacy string
+	objs, _ := f.objects()
+	for _, o := range objs {
+		if o.Key() == "service/web" {
+			legacy = o.Legacy
+		}
+	}
+	s := api.services["web"]
+	s.Labels[SpecLabel] = legacy
+	api.services["web"] = s
+	p, _ = f.Plan(api)
+	if got := strings.Join(steps(p), "\n"); got != "* service web (labelled anew)" {
+		t.Fatalf("steps: %s", got)
+	}
+	p.Apply(api, (&builds{}).build, quiet)
+	if p, _ := f.Plan(api); !p.Empty() {
+		t.Errorf("after: %v", steps(p))
+	}
+}
+
+func TestTemplatesAndMachinesHaveHealthChecksToo(t *testing.T) {
+	f := load(t, strings.Replace(example, "labels = { role = \"worker\" }\n", "labels = { role = \"worker\" }\n\n[machines.worker.health]\ncmd = \"pgrep worker\"\nheal = \"hook\"\nheal_cmd = \"worker &\"\n", 1)+
+		"\n[templates.py.health]\ncmd = \"true\"\n")
+	api := newFake()
+	p, _ := f.Plan(api)
+	if err := p.Apply(api, (&builds{}).build, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if h := api.templates["py"].Health; h == nil || h.Cmd != "true" || h.Heal != daemon.HealReplace {
+		t.Errorf("template's: %+v", h)
+	}
+	for _, n := range []string{"worker-1", "worker-2"} {
+		if h := api.machines[n].Health; h == nil || h.Cmd != "pgrep worker" || h.Heal != daemon.HealHook {
+			t.Errorf("%s's: %+v", n, h)
+		}
+	}
+	// Changed: in place, every machine of the entry; the template isn't rebuilt
+	changed := loadAt(t, f.Dir, strings.Replace(example, "labels = { role = \"worker\" }\n", "labels = { role = \"worker\" }\n\n[machines.worker.health]\ncmd = \"pgrep worker2\"\n", 1)+
+		"\n[templates.py.health]\ncmd = \"true\"\n")
+	p, _ = changed.Plan(api)
+	if got := strings.Join(steps(p), "\n"); got != "* machine worker (health check, in place)" {
+		t.Errorf("steps: %s", got)
+	}
+	api.calls = nil
+	p.Apply(api, (&builds{}).build, quiet)
+	if got := strings.Join(api.calls, "; "); got != "health machine worker-1 pgrep worker2; health machine worker-2 pgrep worker2" {
+		t.Errorf("calls: %s", got)
+	}
+	// A machine heals by none or hook
+	_, err := Load(write(t, strings.Replace(example, "labels = { role = \"worker\" }\n", "labels = { role = \"worker\" }\n\n[machines.worker.health]\ncmd = \"true\"\nheal = \"replace\"\n", 1)))
+	if err == nil || !strings.Contains(err.Error(), "a machine heals by none or hook") {
+		t.Errorf("machine healed by replace: %v", err)
+	}
+}
+
+const supervised = `
+[supervisors.app]
+strategy = "rest_for_one"
+children = ["web", "worker"]
+max_restarts = 5
+max_seconds = "2m"
+
+[supervisors.app.restart]
+worker = "transient"
+
+[supervisors.top]
+strategy = "one_for_all"
+children = ["app"]
+`
+
+func TestSupervisorsComeAfterTheirChildrenWithTheirNames(t *testing.T) {
+	f := load(t, example+supervised)
+	api := newFake()
+	p, err := f.PlanInstance(api, "two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := steps(p)
+	if got[len(got)-2] != "+ supervisor app-two (rest_for_one over web, worker)" || got[len(got)-1] != "+ supervisor top-two (one_for_all over app)" {
+		t.Errorf("steps: %s", strings.Join(got, "\n"))
+	}
+	if err := p.Apply(api, (&builds{}).build, quiet); err != nil {
+		t.Fatal(err)
+	}
+	var adds []string
+	for _, c := range api.calls {
+		if strings.HasPrefix(c, "add supervisor") {
+			adds = append(adds, c)
+		}
+	}
+	want := []string{
+		"add supervisor app-two rest_for_one service/web-two,machine/worker-two-1:transient,machine/worker-two-2:transient",
+		"add supervisor top-two one_for_all supervisor/app-two",
+	}
+	if strings.Join(adds, "\n") != strings.Join(want, "\n") {
+		t.Errorf("added:\n%s\nwant:\n%s", strings.Join(adds, "\n"), strings.Join(want, "\n"))
+	}
+	if s := api.sups["app-two"]; s.MaxRestarts != 5 || s.MaxSeconds != daemon.Duration(2*time.Minute) || s.Labels[EntryLabel] != "app" {
+		t.Errorf("app: %+v", s)
+	}
+	// Applied: nothing to do; down: the supervisors go first
+	if p, _ := f.PlanInstance(api, "two"); !p.Empty() {
+		t.Errorf("again: %v", steps(p))
+	}
+	p, _ = (&File{Name: f.Name, Dir: f.Dir}).PlanInstance(api, "two")
+	api.calls = nil
+	p.Apply(api, (&builds{}).build, quiet)
+	if len(api.calls) < 2 || !strings.HasPrefix(api.calls[0], "rm supervisor") || !strings.HasPrefix(api.calls[1], "rm supervisor") {
+		t.Errorf("down: %v", api.calls)
+	}
+}
+
+func TestABadSupervisorIsRefused(t *testing.T) {
+	for bad, want := range map[string]string{
+		"[supervisors.s]\nchildren = [\"web\"]\nstrategy = \"all\"\n":                              `strategy "all"`,
+		"[supervisors.s]\nchildren = []\n":                                                         "at least one",
+		"[supervisors.s]\nchildren = [\"nope\"]\n":                                                 "child nope: no service, machine or supervisor",
+		"[supervisors.s]\nchildren = [\"web\", \"web\"]\n":                                         "child web twice",
+		"[supervisors.s]\nchildren = [\"s\"]\n":                                                    "its own child",
+		"[supervisors.web]\nchildren = [\"worker\"]\n":                                             "a service has that name",
+		"[supervisors.s]\nchildren = [\"web\"]\n[supervisors.s.restart]\nworker = \"temporary\"\n": "restart worker: not one of its children",
+		"[supervisors.s]\nchildren = [\"web\"]\n[supervisors.s.restart]\nweb = \"sometimes\"\n":    `restart web = "sometimes"`,
+		"[supervisors.s]\nchildren = [\"web\"]\nmax_seconds = \"long\"\n":                          "max_seconds",
+		"[supervisors.a]\nchildren = [\"web\"]\n[supervisors.b]\nchildren = [\"web\"]\n":           "a child of supervisor",
+		"[supervisors.a]\nchildren = [\"b\"]\n[supervisors.b]\nchildren = [\"a\"]\n":               "from itself",
+	} {
+		_, err := Load(write(t, example+bad))
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v, want %q", bad, err, want)
 		}

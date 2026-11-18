@@ -86,6 +86,7 @@ type Server struct {
 	forwards map[string][]net.Listener
 	// Services' ports and replicas' activity
 	svc *services
+	sup *supervisors
 	// How often stopped machines and idle replicas are looked for (taken from reapEvery and
 	// scaleEvery when it starts)
 	reapEvery, scaleEvery time.Duration
@@ -107,6 +108,8 @@ type Server struct {
 	linked    map[string]bool
 	// Machine names being started: taken until they are up, or not (guarded by mu)
 	starting map[string]bool
+	// Machines being stopped on purpose: not dead to the reaper (nor to their supervisor)
+	stopping map[string]bool
 	// The process groups of the template servers it started and that still run (each with its
 	// machines and jobs), and whether it is stopping: then it starts nothing more (guarded by mu)
 	groups  map[int]bool
@@ -147,9 +150,9 @@ func New(o Options) (*Server, error) {
 	if err := os.MkdirAll(o.Dir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), reapEvery: reapEvery, scaleEvery: scaleEvery,
+	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), sup: newSupervisors(), reapEvery: reapEvery, scaleEvery: scaleEvery,
 		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery, runs: newRuns(),
-		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}, starting: map[string]bool{}, groups: map[int]bool{}, stopped: make(chan struct{})}
+		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}, starting: map[string]bool{}, stopping: map[string]bool{}, groups: map[int]bool{}, stopped: make(chan struct{})}
 	if o.memOf != nil {
 		s.memOf = o.memOf
 	}
@@ -579,6 +582,8 @@ type AddTemplate struct {
 	// with it compiled. Not with Snapshot: a snapshot is one team's, and the profile is the site's
 	Warm     []string `json:"warm,omitempty"`
 	WarmRuns int      `json:"warm_runs,omitempty"`
+	// The health check its services and machines have when they set none of their own
+	Health *Health `json:"health,omitempty"`
 	// From another host (IsRemote): held to the daemon's Policy
 	remote bool
 }
@@ -655,6 +660,13 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	if req.WarmRuns < 0 || req.WarmRuns > maxWarmRuns {
 		return nil, errStatus(400, "warm_runs %d: 1 to %d", req.WarmRuns, maxWarmRuns)
 	}
+	if req.Health != nil {
+		h := copyHealth(req.Health)
+		if err := checkHealth(h); err != nil {
+			return nil, err
+		}
+		req.Health = h
+	}
 	s.mu.Lock()
 	_, taken := s.st.Templates[name]
 	s.mu.Unlock()
@@ -669,7 +681,7 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	t := &Template{
 		Name: name, Site: site, JobsRoot: filepath.Join(dir, "jobs"), Log: filepath.Join(dir, "log"),
 		MaxMachines: max, VM: s.o.VM, Idle: req.Idle, Labels: req.Labels, Started: time.Now(),
-		AllowPrivate: req.AllowPrivate, Egress: req.Egress,
+		AllowPrivate: req.AllowPrivate, Egress: req.Egress, Health: req.Health,
 	}
 	if snap != nil {
 		t.Snapshot = snap.Name
@@ -1000,6 +1012,9 @@ type Up struct {
 	// Its network, at most its template's: none, https (TCP 443 and DNS, public addresses
 	// only), internet or private ("": its template's). Every job on it has this one
 	Egress string `json:"egress,omitempty"`
+	// A health check on it (else its template's): reported, healed by a hook, and restarted by its
+	// supervisor if it has one
+	Health *Health `json:"health,omitempty"`
 	// Refused at once when it doesn't fit the memory budget, rather than waiting for room (the
 	// scaler's starts: it tries again on its next round)
 	noWait bool
@@ -1108,6 +1123,13 @@ func (s *Server) up(req Up) (*Machine, error) {
 	default:
 		return nil, errStatus(400, "egress %s: none, https, internet or private", req.Egress)
 	}
+	if req.Health != nil {
+		h, err := machineHealth(req.Health)
+		if err != nil {
+			return nil, err
+		}
+		req.Health = h
+	}
 	s.mu.Lock()
 	_, ok := s.st.Templates[req.Template]
 	_, taken := s.st.Machines[name]
@@ -1134,7 +1156,7 @@ func (s *Server) up(req Up) (*Machine, error) {
 		return nil, err
 	}
 	defer done()
-	if len(ports) > 0 || (req.Egress != "" && req.Egress != "none") {
+	if len(ports) > 0 || (req.Egress != "" && req.Egress != "none") || (req.Health != nil && req.Health.HTTP != nil) {
 		if err := needsNetwork(t); err != nil {
 			return nil, err
 		}
@@ -1179,7 +1201,7 @@ func (s *Server) up(req Up) (*Machine, error) {
 		return nil, errStatus(409, "%v", err)
 	}
 	m := &Machine{Name: name, Template: t.Name, Pid: spawned.Pid, Socket: spawned.Socket, Ports: ports, Labels: req.Labels, Snapshot: req.Snapshot, Created: time.Now(),
-		Egress: req.Egress, Dir: dir}
+		Egress: req.Egress, Dir: dir, Health: req.Health}
 	if req.TTL > 0 {
 		expires := m.Created.Add(time.Duration(req.TTL))
 		m.Expires = &expires
@@ -1203,13 +1225,27 @@ func (s *Server) up(req Up) (*Machine, error) {
 
 // RemoveMachine stops a machine and forgets it.
 func (s *Server) RemoveMachine(name string) error {
+	if _, err := s.takeDown(name); err != nil {
+		return err
+	}
+	s.note("machine.removed", "machine "+name, "removed")
+	s.dropLinks(KindMachine, name)
+	return nil
+}
+
+// takeDown stops a machine and forgets it, but not the links to and from it: a machine its
+// supervisor restarts (as it was) keeps them. It is what the machine was.
+func (s *Server) takeDown(name string) (*Machine, error) {
 	s.mu.Lock()
 	m, ok := s.st.Machines[name]
 	ls := s.forwards[name]
 	delete(s.forwards, name)
+	if ok {
+		s.stopping[name] = true
+	}
 	s.mu.Unlock()
 	if !ok {
-		return errStatus(404, "no machine called %s", name)
+		return nil, errStatus(404, "no machine called %s", name)
 	}
 	for _, l := range ls {
 		l.Close()
@@ -1220,13 +1256,14 @@ func (s *Server) RemoveMachine(name string) error {
 	}
 	s.mu.Lock()
 	delete(s.st.Machines, name)
+	delete(s.stopping, name)
 	s.save()
 	s.mu.Unlock()
 	s.used(m.Template)
-	s.note("machine.removed", "machine "+name, "removed")
 	s.unlinkMachine(name)
-	s.dropLinks(KindMachine, name)
-	return nil
+	s.forget(name)
+	c := *m
+	return &c, nil
 }
 
 // stop ends a machine: asked, then made to.
@@ -1363,8 +1400,11 @@ func (s *Server) reap(ctx context.Context) {
 			s.mu.Unlock()
 			return
 		}
+		// What each was: its supervisor (if any) starts it again as it was
+		gone := map[string]Machine{}
 		for _, n := range deadMachines {
-			if m, ok := s.st.Machines[n]; ok && !control.Alive(m.Socket) {
+			if m, ok := s.st.Machines[n]; ok && !s.stopping[n] && !control.Alive(m.Socket) {
+				gone[n] = *m
 				for _, l := range s.forwards[n] {
 					l.Close()
 				}
@@ -1382,6 +1422,7 @@ func (s *Server) reap(ctx context.Context) {
 			}
 			for mn, m := range s.st.Machines {
 				if m.Template == n {
+					gone[mn] = *m
 					for _, l := range s.forwards[mn] {
 						l.Close()
 					}
@@ -1412,10 +1453,16 @@ func (s *Server) reap(ctx context.Context) {
 		s.save()
 		s.mu.Unlock()
 		for _, n := range deadMachines {
-			if !s.hasLocked(KindMachine, n) {
-				s.unlinkMachine(n)
-				s.dropLinks(KindMachine, n)
+			if s.hasLocked(KindMachine, n) {
+				continue
 			}
+			s.unlinkMachine(n)
+			s.forget(n)
+			if m, ok := gone[n]; ok && s.ended(m) {
+				// Its supervisor starts it again: its links stay
+				continue
+			}
+			s.dropLinks(KindMachine, n)
 		}
 		for _, n := range deadTemplates {
 			if !s.hasLocked(KindTemplate, n) {
@@ -1617,6 +1664,7 @@ func (s *Server) Handler() http.Handler {
 		{f.Jobs, s.jobRoutes},
 		{f.Snapshots, s.snapshotRoutes},
 		{f.Services, s.serviceRoutes},
+		{f.Machines, s.supervisorRoutes},
 	}
 	for _, g := range groups {
 		if g.on {
@@ -1672,12 +1720,13 @@ func (s *Server) templateRoutes(mux Router) {
 	mux.HandleFunc("DELETE /v1/templates/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveTemplate(r.PathValue("name")))
 	})
+	mux.HandleFunc("PUT /v1/templates/{name}/health", s.serveSetHealth(KindTemplate))
 }
 
 func (s *Server) machineRoutes(mux Router) {
 	mux.HandleFunc("GET /v1/machines/{name}/attach", s.serveAttach)
 	mux.HandleFunc("GET /v1/machines", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, s.Machines(labelQuery(r)), nil)
+		reply(w, s.withChecks(s.Machines(labelQuery(r))), nil)
 	})
 	mux.HandleFunc("POST /v1/machines", func(w http.ResponseWriter, r *http.Request) {
 		var req Up
@@ -1691,10 +1740,84 @@ func (s *Server) machineRoutes(mux Router) {
 	})
 	mux.HandleFunc("GET /v1/machines/{name}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.Machine(r.PathValue("name"))
+		if err == nil {
+			v = &s.withChecks([]Machine{*v})[0]
+		}
 		reply(w, v, err)
 	})
 	mux.HandleFunc("DELETE /v1/machines/{name}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveMachine(r.PathValue("name")))
+	})
+	mux.HandleFunc("PUT /v1/machines/{name}/health", s.serveSetHealth(KindMachine))
+}
+
+// SetHealthRequest changes a health check in place (Health nil: none), adding Labels.
+type SetHealthRequest struct {
+	Health *Health           `json:"health"`
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+func (s *Server) serveSetHealth(kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req SetHealthRequest
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		err := s.SetHealth(kind, r.PathValue("name"), req.Health, req.Labels)
+		reply(w, map[string]any{"kind": kind, "name": r.PathValue("name"), "health": req.Health != nil}, err)
+	}
+}
+
+// withChecks fills in how each machine's health checks are going.
+func (s *Server) withChecks(ms []Machine) []Machine {
+	s.svc.mu.Lock()
+	defer s.svc.mu.Unlock()
+	for i := range ms {
+		if h := s.svc.health[ms[i].Name]; h != nil {
+			rh := h.ReplicaHealth
+			ms[i].Checks = &rh
+		}
+	}
+	return ms
+}
+
+func (s *Server) supervisorRoutes(mux Router) {
+	mux.HandleFunc("GET /v1/supervisors", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, s.Supervisors(), nil)
+	})
+	mux.HandleFunc("POST /v1/supervisors", func(w http.ResponseWriter, r *http.Request) {
+		var req Supervisor
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.AddSupervisor(req)
+		reply(w, v, err)
+	})
+	mux.HandleFunc("GET /v1/supervisors/{name}", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.SupervisorStatus(r.PathValue("name"))
+		reply(w, v, err)
+	})
+	mux.HandleFunc("PUT /v1/supervisors/{name}", func(w http.ResponseWriter, r *http.Request) {
+		var req Supervisor
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.UpdateSupervisor(r.PathValue("name"), req)
+		reply(w, v, err)
+	})
+	mux.HandleFunc("POST /v1/supervisors/{name}/restart", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.RestartSupervisor(r.PathValue("name")); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		v, err := s.SupervisorStatus(r.PathValue("name"))
+		reply(w, v, err)
+	})
+	mux.HandleFunc("DELETE /v1/supervisors/{name}", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, map[string]any{"removed": r.PathValue("name")}, s.RemoveSupervisor(r.PathValue("name")))
 	})
 }
 
@@ -1766,6 +1889,7 @@ func (s *Server) serviceRoutes(mux Router) {
 		v, err := s.ServiceStatus(r.PathValue("name"))
 		reply(w, v, err)
 	})
+	mux.HandleFunc("PUT /v1/services/{name}/health", s.serveSetHealth(KindService))
 	mux.HandleFunc("POST /v1/services/{name}/heal", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.HealService(r.PathValue("name")); err != nil {
 			reply(w, nil, err)

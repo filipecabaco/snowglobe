@@ -35,7 +35,8 @@ min = 1
 max = 2
 concurrency = 50
 
-# Each app machine answers GET / with a 2xx or 3xx, or it is swapped for a fresh one. A check on /
+# Each app machine answers GET / with a 2xx or 3xx, or it is swapped for a fresh one (by the
+# supervisor below, which a supervised service heals by). A check on /
 # rather than /todos: a database that is down is one problem, not a reason to replace every app
 # machine
 [services.app.health]
@@ -53,3 +54,11 @@ from = "app"
 to = "db"
 port = 5432
 as = "db.internal"
+
+# The database first, then the app that uses it: if the database's machine ends, it starts again
+# and so does the app (rest_for_one), with fresh connections; an app replica that fails its check
+# is replaced on its own. More than 3 restarts in a minute and the supervisor stops trying
+# (degraded) until `snowglobe supervisor restart app-stack`
+[supervisors.app-stack]
+strategy = "rest_for_one"
+children = ["db", "app"]

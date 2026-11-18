@@ -331,7 +331,7 @@ function renderAxis() {
 }
 
 // Which events count as marks on the axis, and which are quiet ones
-const loud = /^(machine\.up|template\.(added|awake|asleep)|build\.(done|failed)|service\.(replica_up|replica_unhealthy|replica_replaced|degraded)|snapshot\.saved|admission\.refused)$/;
+const loud = /^(machine\.up|template\.(added|awake|asleep)|build\.(done|failed)|service\.(replica_up|replica_unhealthy|replica_replaced|degraded)|machine\.(unhealthy|degraded)|supervisor\.(restarted|escalated|degraded)|snapshot\.saved|admission\.refused)$/;
 function renderEvents() {
   const cut = Date.now() - span();
   const ticks = state.events.filter((e) => new Date(e.time).getTime() >= cut);

@@ -832,3 +832,38 @@ func (c *Client) ForgetFleet(name string, down bool) (json.RawMessage, error) {
 	}
 	return v, c.call("DELETE", "/v1/fleets/"+url.PathEscape(name)+q, nil, &v)
 }
+
+func (c *Client) Supervisors() ([]SupervisorStatus, error) {
+	var ss []SupervisorStatus
+	return ss, c.call("GET", "/v1/supervisors", nil, &ss)
+}
+
+func (c *Client) AddSupervisor(req Supervisor) (*SupervisorStatus, error) {
+	var s SupervisorStatus
+	return &s, c.call("POST", "/v1/supervisors", req, &s)
+}
+
+func (c *Client) Supervisor(name string) (*SupervisorStatus, error) {
+	var s SupervisorStatus
+	return &s, c.call("GET", "/v1/supervisors/"+url.PathEscape(name), nil, &s)
+}
+
+func (c *Client) UpdateSupervisor(name string, req Supervisor) (*SupervisorStatus, error) {
+	var s SupervisorStatus
+	return &s, c.call("PUT", "/v1/supervisors/"+url.PathEscape(name), req, &s)
+}
+
+func (c *Client) RestartSupervisor(name string) (*SupervisorStatus, error) {
+	var s SupervisorStatus
+	return &s, c.call("POST", "/v1/supervisors/"+url.PathEscape(name)+"/restart", nil, &s)
+}
+
+func (c *Client) RemoveSupervisor(name string) error {
+	return c.call("DELETE", "/v1/supervisors/"+url.PathEscape(name), nil, nil)
+}
+
+// SetHealth changes the health check of a service, machine or template (kind) in place, nil for
+// none, adding labels to it.
+func (c *Client) SetHealth(kind, name string, h *Health, labels map[string]string) error {
+	return c.call("PUT", "/v1/"+kind+"s/"+url.PathEscape(name)+"/health", SetHealthRequest{Health: h, Labels: labels}, nil)
+}

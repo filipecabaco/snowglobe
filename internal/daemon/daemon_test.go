@@ -239,6 +239,15 @@ func fakeMachine(sock string) {
 				send(c, control.JobResult{Status: &status, Output: []byte("checked\n")})
 				c.Close()
 				continue
+			case "checkpid":
+				// Fails while SOCK.fail-PID is there: a machine started again (a new process) passes
+				status := 0
+				if _, err := os.Stat(fmt.Sprintf("%s.fail-%d", sock, os.Getpid())); err == nil {
+					status = 1
+				}
+				send(c, control.JobResult{Status: &status, Output: []byte("checked\n")})
+				c.Close()
+				continue
 			case "false":
 				send(c, control.JobResult{Status: new(1), Output: []byte("no\n")})
 				c.Close()

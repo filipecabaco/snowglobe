@@ -78,7 +78,8 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `list_templates`, `add_template`, `remove_template`, `list_machines`, `up`, `stop_machine`,
   `run_command` (on a `machine`, a fresh fork of a `template`, or a `service`'s replica),
   `write_file`, `read_file`, `snapshot_machine`, `list_snapshots`, `remove_snapshot`,
-  `list_services`, `add_service`, `remove_service`, `heal_service`, `build` (waits by default), `build_status`,
+  `list_services`, `add_service`, `remove_service`, `heal_service`, `set_health`, `list_supervisors`,
+  `add_supervisor`, `restart_supervisor`, `remove_supervisor`, `build` (waits by default), `build_status`,
   `list_builds`, `cancel_build`, `submit_run`, `run_status` (`wait_seconds`), `list_runs`,
   `list_ports`, `check_port`, `recent_events`, `fleet_diff`, `fleet_plan`, `fleet_apply` (one
   `step` too), `graph`, `list_links`, `link`, `unlink`, and fleets kept like compose projects:
@@ -184,7 +185,27 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   count as use; heals back off and stop after 5 in a row (degraded) until a replica passes or
   `service heal <name>` starts them over. `--wait-ready` holds a new replica's first connection until it passes. Each
   replica's `health` (state, failures, last result) and the service's `service_health` are in
-  `/v1/services`.
+  `/v1/services` (`inherited_health` when the check is its template's, `supervisor` when it has one).
+  Machines and templates take the same flags: `up --health-*` checks a machine (heal `none`, the
+  default, or `hook`: a machine is restarted only by a supervisor; its state is `checks` in
+  `/v1/machines`), and `template add --health-*` is the check its services and machines take when
+  they have none of their own. `snowglobe health service|machine|template <name> [--health-* |
+  --none]` changes one in place, restarting nothing: `PUT /v1/{services,machines,templates}/{name}/health
+  {"health": {...} | null}`.
+- `snowglobe supervisor add <name> --child KIND/NAME[:RESTART]... [--strategy S] [--max-restarts N]
+  [--max-seconds D]`, `supervisor ls`, `supervisor restart <name>`, `supervisor rm <name>`: an Elixir
+  style supervisor over services, machines and supervisors, in order. A child fails when its health
+  check makes it (or a service's replica) unhealthy, or its process ends unasked. `one_for_one` (the
+  default) restarts that child (a service: its failed replica), `one_for_all` every child,
+  `rest_for_one` that child and those after it; stopped in reverse order, started in order. A
+  machine starts again as it was (name, ports, labels, snapshot, links, what is left of its ttl); a
+  service's running replicas are replaced, as many as ran. Restart types: `permanent` (default),
+  `transient` (restarted when it fails a check, not when its process ends), `temporary` (never, and
+  restarts nothing else). More than `max_restarts` (3) in `max_seconds` (60s) and it fails itself:
+  its parent decides, or (top level) it is `degraded` until `supervisor restart`. A supervised
+  service's own `heal` isn't used. API: `/v1/supervisors` (GET, POST `{name, strategy, children:
+  [{kind, name, restart}], max_restarts, max_seconds}`), `GET/PUT/DELETE /v1/supervisors/{name}`,
+  `POST /v1/supervisors/{name}/restart`.
 - `snowglobe daemon --detach` starts the daemon in the background, in a session of its own so it
   outlives the terminal, its log in `daemon.log` beside the socket; it returns once the daemon
   answers, and does nothing if one runs. `snowglobe daemon stop` stops it, and everything it
@@ -217,7 +238,8 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   one is free or what holds it (exit 1 when taken). API: `/v1/ports`, `/v1/ports/check?port=N`.
 - `snowglobe events [--json] [--after SEQ]` streams the daemon's events (kind, subject, message:
   machine.up, machine.stopped, machine.expired, service.replica_up, service.replica_unhealthy,
-  service.replica_replaced, service.degraded, service.heal_reset, template.asleep,
+  service.replica_replaced, service.degraded, service.heal_reset, machine.unhealthy,
+  supervisor.restarted, supervisor.escalated, supervisor.degraded, template.asleep,
   template.awake, snapshot.saved, admission.refused, ...), the last 200 first; `snowglobe top
   [--once]` shows it live (memory and budget, templates, services, machines, recent events). API:
   `/v1/events` (server-sent events, `?after=SEQ`), `/v1/stats`.
@@ -236,8 +258,12 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `max`, `idle`, `concurrency`, `state`, `labels`, and `[services.N.health]`: `cmd` or
   `[services.N.health.http]` (`port`, `path`, `status`), `interval`, `timeout`, `failures`, `grace`,
   `heal` = replace | drain | hook | none, `heal_cmd`, `drain`, `wait_ready`), `[machines.N]` (`template`, `count`, `ports`,
-  `ttl`, `labels`). What changed is replaced with what is made from it; what left the file is
-  removed. `snowglobe diff` shows the plan; `snowglobe down [-f F | --name FLEET]` removes it all.
+  `ttl`, `labels`, `[machines.N.health]` healed by none or hook), `[templates.N.health]` (what its
+  services and machines without one take), `[supervisors.N]` (`strategy`, `children` = names of the
+  file's services, machines and supervisors in order, `max_restarts`, `max_seconds`, `labels`,
+  `[supervisors.N.restart]` = a child's name = permanent | transient | temporary). What changed is
+  replaced with what is made from it, but a health check, which is changed in place (`* service
+  web (health check, in place)`); what left the file is removed. `snowglobe diff` shows the plan; `snowglobe down [-f F | --name FLEET]` removes it all.
   Examples: examples/fleet/snowglobe.toml, examples/todo-fleet/snowglobe.toml (an Elixir app and
   Postgres, linked as db.internal:5432, egress none).
 - Fleets as compose projects: the daemon keeps a list of fleet files. `GET/POST /v1/fleets` (POST

@@ -19,7 +19,7 @@ template = "app"
 ports = ["8080:8000"]
 `;
 
-const MARK = { create: "+", replace: "~", remove: "−" };
+const MARK = { create: "+", replace: "~", update: "*", remove: "−" };
 
 export function Fleets() {
   const { state, actions } = useStore();

@@ -72,10 +72,11 @@ export function Inspector({ where }) {
       caption = `service of ${s.template}`;
       figures = [["Replicas", `${s.replicas?.length || 0} of ${s.min}–${s.max}`], ["Ports", (s.ports || []).map((p) => `${p.host}→${p.guest}`).join(" ") || "none"],
         ["Idle after", dur(s.idle)], ["State", s.state]];
-      if (s.health) {
-        const h = s.health;
+      const h = s.health || s.inherited_health;
+      if (h) {
         const check = h.http ? `GET :${h.http.port}${h.http.path} (${h.http.status})` : `cmd ${h.cmd}`;
-        figures.push(["Health", s.service_health || "–"], ["Checked by", `${check} every ${dur(h.interval)}`], ["Heals by", h.heal]);
+        figures.push(["Health", s.service_health || "–"], ["Checked by", `${check} every ${dur(h.interval)}${s.health ? "" : ` (its template's)`}`],
+          ["Heals by", s.supervisor ? `supervisor ${s.supervisor}` : h.heal]);
       }
       if (s.service_health === "degraded") buttons.push(["Start healing over", () => run(() => actions.api(`/v1/services/${s.name}/heal`, { method: "POST" }), `Healing ${s.name} again`)]);
       buttons.push(["Remove", () => confirm(`Remove service ${s.name} and its replicas?`) && run(() => actions.api(`/v1/services/${s.name}`, { method: "DELETE" }), `Removed ${s.name}`)]);

@@ -71,6 +71,10 @@ GET    /v1/services                  POST /v1/services {name, template, ports?, 
 GET    /v1/services/{s}              DELETE /v1/services/{s}
 POST   /v1/services/{s}/heal         start healing over (no longer degraded, no backoff)
 POST   /v1/services/{s}/jobs         a job on one of its replicas (started if at zero)
+PUT    /v1/{services,machines,templates}/{n}/health   {health | null, labels?}: changed in place
+GET    /v1/supervisors               POST /v1/supervisors {name, strategy, children, max_restarts,
+                                                           max_seconds, labels?}
+GET    /v1/supervisors/{s}           PUT (in place) · DELETE · POST /v1/supervisors/{s}/restart
 ```
 
 The CLI reaches it automatically: `sh`, `cp`, `mcp`, `exec`, `attach`, `ps` and `stop` find the
@@ -116,6 +120,34 @@ row with no replica passing, the service is `degraded` and healing stops until o
 `HealService` (`service heal`, `heal_service`) drops its heal record and its replicas' hook marks.
 `wait_ready` holds a new replica's first connection until it passes (up to `grace`); it is off by
 default because it adds a check to every start from zero.
+
+Machines (not replicas) are checked the same way (`machineHealthLocked`): their own `Health`, else
+their template's, keyed `machine:NAME` in `heals` (a name has no colon). A machine heals by `none`
+(its default) or `hook`: replacing a machine loses what it wrote, so only a supervisor restarts one.
+A template's `Health` is what its services and machines without their own take
+(`serviceHealthLocked`). `SetHealth` changes any of the three in place and drops the affected
+records, so checks start over; the fleet leaves health out of a spec's hash and plans a change to it
+as an `update` step (`*`) that calls it, also relabelling a service hashed with its check by 0.23 or
+0.24 (`Object.Legacy`).
+
+### Supervisors
+
+`supervisor.go`. A supervisor is an ordered list of children (services, machines, supervisors),
+each `permanent`, `transient` or `temporary`, a strategy (`one_for_one`, `one_for_all`,
+`rest_for_one`) and an intensity (`max_restarts` within `max_seconds`, 3 in 60s). A child is of at
+most one supervisor, and supervisors don't go round in a circle. A child fails when `runProbe`
+moves it (or a service's replica) to unhealthy, or when `reap` finds its process gone (`ended`);
+the supervised child's own heal is skipped in `probe`. `childFailed` drops what restart types say
+is a normal exit (temporary always; transient when its process ended) and hands the rest to
+`supervise`, one restart at a time per supervisor: it checks the child still failed (another
+restart may have come first), counts the restart, and restarts what the strategy says, stopped in
+reverse order then started in order (`restartChildren`). A machine is taken down without dropping
+its links (`takeDown`) and upped again as it was (`upAgain`); a service loses the failed replica
+(its own failure) or all its running replicas (a sibling's) and is topped up to as many as ran; a
+supervisor restarts its children and its count. Over its intensity a supervisor fails itself: a
+nested one is its parent's failed child (`failEscalated`), a top-level one is `degraded` until
+`RestartSupervisor`. `stopping` keeps `reap` off a machine being stopped on purpose, which would
+otherwise read as a crash and restart it twice.
 
 ### Limits and lifecycle
 
