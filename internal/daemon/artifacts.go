@@ -161,10 +161,13 @@ func (bs *builds) cached() (bytes int64, n int) {
 // evictArtifacts lets go of the artifacts asked for longest ago while they take more than
 // --cache-size together. The one used last stays, whatever its size: it was just asked for.
 func (s *Server) evictArtifacts() {
-	if s.o.CacheSize <= 0 {
+	// (Read under builds.mu: a test changes it while a build ends)
+	s.builds.mu.Lock()
+	limit := s.o.CacheSize
+	if limit <= 0 {
+		s.builds.mu.Unlock()
 		return
 	}
-	s.builds.mu.Lock()
 	total, _ := s.builds.cached()
 	var kept []*Build
 	for _, b := range s.builds.all {
@@ -180,7 +183,7 @@ func (s *Server) evictArtifacts() {
 	}
 	sort.Slice(kept, func(i, j int) bool { return used(kept[i]).Before(used(kept[j])) })
 	var gone []*Build
-	for i := 0; total > s.o.CacheSize && i < len(kept)-1; i++ {
+	for i := 0; total > limit && i < len(kept)-1; i++ {
 		b := kept[i]
 		total -= b.Artifact.Bytes + b.Artifact.GzBytes
 		delete(s.builds.all, b.ID)
