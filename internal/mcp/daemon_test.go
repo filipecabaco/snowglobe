@@ -67,7 +67,16 @@ func (f *fakeDaemon) AddService(s daemon.Service) (*daemon.ServiceStatus, error)
 	f.services = append(f.services, st)
 	return &st, nil
 }
-func (f *fakeDaemon) RemoveService(string) error { return nil }
+func (f *fakeDaemon) RemoveService(string) error                      { return nil }
+func (f *fakeDaemon) Supervisors() ([]daemon.SupervisorStatus, error) { return nil, nil }
+func (f *fakeDaemon) AddSupervisor(s daemon.Supervisor) (*daemon.SupervisorStatus, error) {
+	return &daemon.SupervisorStatus{Supervisor: s}, nil
+}
+func (f *fakeDaemon) RemoveSupervisor(string) error { return nil }
+func (f *fakeDaemon) RestartSupervisor(name string) (*daemon.SupervisorStatus, error) {
+	return &daemon.SupervisorStatus{Supervisor: daemon.Supervisor{Name: name}}, nil
+}
+func (f *fakeDaemon) SetHealth(string, string, *daemon.Health, map[string]string) error { return nil }
 func (f *fakeDaemon) HealService(name string) (*daemon.ServiceStatus, error) {
 	return &daemon.ServiceStatus{Service: daemon.Service{Name: name}}, nil
 }

@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +36,10 @@ type API interface {
 	Links() ([]daemon.Link, error)
 	AddLink(daemon.Link) (*daemon.Link, error)
 	RemoveLink(name string) error
+	Supervisors() ([]daemon.SupervisorStatus, error)
+	AddSupervisor(daemon.Supervisor) (*daemon.SupervisorStatus, error)
+	RemoveSupervisor(name string) error
+	SetHealth(kind, name string, h *daemon.Health, labels map[string]string) error
 }
 
 // Builder builds the site of a Dockerfile directory into out (snowglobe build DIR --out OUT).
@@ -42,7 +47,7 @@ type Builder func(dir, out, network string) error
 
 // Step is one thing a plan does.
 type Step struct {
-	// "create", "replace" or "remove"
+	// "create", "replace", "update" (in place: a health check) or "remove"
 	Action string `json:"action"`
 	Kind   string `json:"kind"`
 	// The name it has (or will have) on the daemon
@@ -60,7 +65,7 @@ type Step struct {
 }
 
 func (s Step) String() string {
-	mark := map[string]string{"create": "+", "replace": "~", "remove": "-"}[s.Action]
+	mark := map[string]string{"create": "+", "replace": "~", "update": "*", "remove": "-"}[s.Action]
 	line := fmt.Sprintf("%s %s %s", mark, s.Kind, s.Name)
 	if s.Detail != "" {
 		line += " (" + s.Detail + ")"
@@ -79,6 +84,8 @@ type Plan struct {
 	file    *File
 	removes []have
 	creates []Object
+	// What is changed in place: a health check (and the spec label, from a hash of 0.23 or 0.24)
+	updates []Object
 }
 
 // have is something of the fleet's the daemon has.
@@ -88,6 +95,8 @@ type have struct {
 	entry, instance string
 	// A template: whether it is of a snapshot
 	ofSnapshot bool
+	// Its own health check (a template, service or machine)
+	health *daemon.Health
 }
 
 func (h have) key() string {
@@ -101,7 +110,7 @@ func (h have) key() string {
 // links are; templates, snapshots and links between templates are shared.
 func perInstance(o Object) bool {
 	switch o.Kind {
-	case KindService, KindMachine:
+	case KindService, KindMachine, KindSupervisor:
 		return true
 	case KindLink:
 		return o.Spec.(LinkSpec).Mode == Exclusive
@@ -140,7 +149,7 @@ func current(api API, fleet, inst string) ([]have, map[string]string, error) {
 		return nil, nil, err
 	}
 	for _, t := range ts {
-		add(KindTemplate, t.Name, t.Labels, have{ofSnapshot: t.Snapshot != ""})
+		add(KindTemplate, t.Name, t.Labels, have{ofSnapshot: t.Snapshot != "", health: t.Health})
 	}
 	ss, err := api.Snapshots()
 	if err != nil {
@@ -154,7 +163,7 @@ func current(api API, fleet, inst string) ([]have, map[string]string, error) {
 		return nil, nil, err
 	}
 	for _, s := range svcs {
-		add(KindService, s.Name, s.Labels, have{})
+		add(KindService, s.Name, s.Labels, have{health: s.Health})
 	}
 	ls, err := api.Links()
 	if err != nil {
@@ -173,7 +182,15 @@ func current(api API, fleet, inst string) ([]have, map[string]string, error) {
 			taken[KindMachine+"/"+m.Name] = m.Labels[FleetLabel]
 			continue
 		}
-		add(KindMachine, m.Name, m.Labels, have{})
+		add(KindMachine, m.Name, m.Labels, have{health: m.Health})
+	}
+	sups, err := api.Supervisors()
+	if err != nil && !daemon.NotFound(err) {
+		// (A daemon from before supervisors has none)
+		return nil, nil, err
+	}
+	for _, s := range sups {
+		add(KindSupervisor, s.Name, s.Labels, have{})
 	}
 	return mine, taken, nil
 }
@@ -227,8 +244,10 @@ func (f *File) PlanInstance(api API, inst string) (*Plan, error) {
 	}
 	// What the fleet has, by key: a machine entry may have several machines
 	haveHash := map[string][]string{}
+	haveOf := map[string][]have{}
 	for _, h := range mine {
 		haveHash[h.key()] = append(haveHash[h.key()], h.hash)
+		haveOf[h.key()] = append(haveOf[h.key()], h)
 	}
 	// Names the daemon has that aren't the fleet's
 	var conflicts []string
@@ -250,8 +269,11 @@ func (f *File) PlanInstance(api API, inst string) (*Plan, error) {
 	for _, o := range want {
 		hashes, had := haveHash[o.Key()]
 		same := had && len(hashes) > 0
+		// Made by 0.23 or 0.24 (a hash with its health check): the same, but labelled anew
+		relabel := false
 		for _, h := range hashes {
-			same = same && h == o.Hash
+			same = same && (h == o.Hash || o.Legacy != "" && h == o.Legacy)
+			relabel = relabel || h != o.Hash
 		}
 		if o.Kind == KindMachine && same && len(hashes) != len(p.names(o)) {
 			same = false
@@ -263,6 +285,14 @@ func (f *File) PlanInstance(api API, inst string) (*Plan, error) {
 		}
 		step := Step{Kind: o.Kind, Name: name, Key: o.Key(), Deps: o.Deps, PerInstance: perInstance(o)}
 		switch {
+		case same && (relabel || healthChanged(o, haveOf[o.Key()])):
+			step.Action, step.Detail = "update", "health check, in place"
+			if relabel && !healthChanged(o, haveOf[o.Key()]) {
+				step.Detail = "labelled anew"
+			}
+			p.Steps = append(p.Steps, step)
+			p.updates = append(p.updates, o)
+			continue
 		case same:
 			p.Unchanged++
 			continue
@@ -330,6 +360,14 @@ func (p *Plan) ApplyStep(api API, build Builder, key string, logf func(string, .
 	if !step.Ready {
 		return fmt.Errorf("%s is made from %s: apply that first", key, strings.Join(step.Deps, ", "))
 	}
+	if step.Action == "update" {
+		for _, o := range p.updates {
+			if o.Key() == key {
+				return p.update(api, o, logf)
+			}
+		}
+		return nil
+	}
 	if step.Action == "remove" {
 		logf("- %s %s", step.Kind, step.Name)
 		if err := remove(api, step.Kind, step.Name); err != nil && !daemon.NotFound(err) {
@@ -375,6 +413,8 @@ func (p *Plan) ApplyStep(api API, build Builder, key string, logf func(string, .
 func sortRemoves(hs []have) {
 	rank := func(h have) int {
 		switch {
+		case h.kind == KindSupervisor:
+			return -2
 		case h.kind == KindLink:
 			return -1
 		case h.kind == KindMachine || h.kind == KindService:
@@ -410,6 +450,12 @@ func describe(o Object) string {
 		return fmt.Sprintf("%s, %s, %d to %d", s.Template, strings.Join(s.Ports, " "), s.Min, max(s.Max, s.Min, 1))
 	case MachineSpec:
 		return fmt.Sprintf("%s × %d", s.Template, max(s.Count, 1))
+	case SupervisorSpec:
+		strategy := s.Strategy
+		if strategy == "" {
+			strategy = daemon.OneForOne
+		}
+		return fmt.Sprintf("%s over %s", strategy, strings.Join(s.Children, ", "))
 	case LinkSpec:
 		as, port := s.As, s.AsPort
 		if as == "" {
@@ -434,12 +480,47 @@ func (p *Plan) Apply(api API, build Builder, logf func(string, ...any)) error {
 			return fmt.Errorf("removing %s %s: %w", h.kind, h.name, err)
 		}
 	}
+	for _, o := range p.updates {
+		if err := p.update(api, o, logf); err != nil {
+			return err
+		}
+	}
 	for _, o := range p.creates {
 		begun := time.Now()
 		if err := p.create(api, build, o, logf); err != nil {
 			return fmt.Errorf("%s %s: %w", o.Kind, o.Name, err)
 		}
 		logf("+ %s %s (%s)", o.Kind, p.names(o)[0], time.Since(begun).Round(time.Millisecond))
+	}
+	return nil
+}
+
+// healthChanged says whether what the daemon has of an object has another health check than the
+// file's.
+func healthChanged(o Object, hs []have) bool {
+	kind := daemon.KindService
+	if o.Kind == KindMachine {
+		kind = daemon.KindMachine
+	}
+	want, err := daemon.NormalHealth(kind, healthOf(o.Spec))
+	if err != nil {
+		return false
+	}
+	for _, h := range hs {
+		if !reflect.DeepEqual(want, h.health) {
+			return true
+		}
+	}
+	return false
+}
+
+// update changes an object's health check in place, and labels it with the file's hash.
+func (p *Plan) update(api API, o Object, logf func(string, ...any)) error {
+	for _, n := range p.names(o) {
+		if err := api.SetHealth(o.Kind, n, healthOf(o.Spec), map[string]string{SpecLabel: o.Hash}); err != nil {
+			return fmt.Errorf("%s %s: health: %w", o.Kind, n, err)
+		}
+		logf("* %s %s (health check)", o.Kind, n)
 	}
 	return nil
 }
@@ -456,6 +537,8 @@ func remove(api API, kind, name string) error {
 		return api.RemoveMachine(name)
 	case KindLink:
 		return api.RemoveLink(name)
+	case KindSupervisor:
+		return api.RemoveSupervisor(name)
 	}
 	return fmt.Errorf("a %s?", kind)
 }
@@ -522,7 +605,7 @@ func (p *Plan) create(api API, build Builder, o Object, logf func(string, ...any
 			}
 		}
 		_, err := api.AddTemplate(daemon.AddTemplate{Site: site, Name: o.Name, MaxMachines: s.MaxMachines,
-			Idle: durationOf(s.Idle), Snapshot: s.Snapshot, Egress: s.egress(), Labels: p.labels(o, nil)})
+			Idle: durationOf(s.Idle), Snapshot: s.Snapshot, Egress: s.egress(), Labels: p.labels(o, nil), Health: s.Health.health()})
 		return err
 	case SnapshotSpec:
 		return p.snapshot(api, o, s, logf)
@@ -564,6 +647,20 @@ func (p *Plan) create(api API, build Builder, o Object, logf func(string, ...any
 		}
 		_, err := api.AddLink(l)
 		return err
+	case SupervisorSpec:
+		sup := daemon.Supervisor{Name: p.names(o)[0], Strategy: s.Strategy, MaxRestarts: s.MaxRestarts, MaxSeconds: durationOf(s.MaxSeconds), Labels: p.labels(o, s.Labels)}
+		for _, c := range s.Children {
+			kind := p.file.childKind(c)
+			names := []string{nameIn(c, p.Instance)}
+			if kind == KindMachine {
+				names = MachineNames(names[0], p.file.Machines[c])
+			}
+			for _, n := range names {
+				sup.Children = append(sup.Children, daemon.Child{Kind: kind, Name: n, Restart: s.Restart[c]})
+			}
+		}
+		_, err := api.AddSupervisor(sup)
+		return err
 	case MachineSpec:
 		ports, err := p.ports(s.Ports)
 		if err != nil {
@@ -574,7 +671,7 @@ func (p *Plan) create(api API, build Builder, o Object, logf func(string, ...any
 			specs = append(specs, fmt.Sprintf("%s:%d:%d", port.IP, port.Host, port.Guest))
 		}
 		for _, n := range p.names(o) {
-			if _, err := api.Up(daemon.Up{Template: s.Template, Name: n, Ports: specs, TTL: durationOf(s.TTL), Labels: p.labels(o, s.Labels)}); err != nil {
+			if _, err := api.Up(daemon.Up{Template: s.Template, Name: n, Ports: specs, TTL: durationOf(s.TTL), Labels: p.labels(o, s.Labels), Health: s.Health.health()}); err != nil {
 				return err
 			}
 		}

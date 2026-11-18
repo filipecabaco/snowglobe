@@ -24,6 +24,7 @@ type DaemonAPI interface {
 	TemplateJob(name string, req control.JobRequest) (*control.JobResult, error)
 	ServiceJob(name string, req control.JobRequest) (*control.JobResult, error)
 	HealService(name string) (*daemon.ServiceStatus, error)
+	RestartSupervisor(name string) (*daemon.SupervisorStatus, error)
 	Builds() ([]daemon.Build, error)
 	StartBuild(daemon.BuildRequest) (*daemon.Build, error)
 	Build(id string) (*daemon.Build, error)
@@ -106,12 +107,14 @@ var daemonTools = []map[string]any{
 	tool("add_template", "Restore a built site once as a template (a directory, a tarball, or a deployed site's URL), or make one from a snapshot.", obj(map[string]any{
 		"site": str("The built site (omit with snapshot)"), "name": str("Its name"), "snapshot": str("Start it from this snapshot instead"),
 		"idle": str("Stop its server after this long without a machine, e.g. 30m"), "max_machines": num("Most machines at once"), "labels": labels(),
+		"health": map[string]any{"type": "object", "description": "The health check its services and machines take when they have none of their own (as add_service's health)"},
 	})),
 	tool("remove_template", "Remove a template and every machine forked from it.", obj(map[string]any{"name": str("The template")}, "name")),
 	tool("list_machines", "Machines: lasting forks of templates, with their ports, labels and expiry.", obj(map[string]any{"labels": labels()})),
 	tool("up", "Fork a machine that lasts from a template, in tens of milliseconds. It keeps what it writes until stopped.", obj(map[string]any{
 		"template": str("The template"), "name": str("Its name (made up when omitted)"), "ports": strs("Ports to forward, [HOST:]GUEST (the site needs a network)"),
 		"ttl": str("Stop it after this long, e.g. 1h"), "snapshot": str("Start from this snapshot of the template's site"), "labels": labels(),
+		"health": map[string]any{"type": "object", "description": "A health check on it (as add_service's health), healed by none (the default) or hook; a supervisor restarts it"},
 	}, "template")),
 	tool("stop_machine", "Stop a machine and throw it away.", obj(map[string]any{"name": str("The machine")}, "name")),
 	tool("run_command", "Run a shell command (/bin/sh) and return its output and exit status: on a machine (it keeps what the command does), on a fresh fork of a template (thrown away after), or on a service's replica. Give exactly one of machine, template or service.", obj(map[string]any{
@@ -136,6 +139,20 @@ var daemonTools = []map[string]any{
 	}, "name", "template", "ports")),
 	tool("remove_service", "Remove a service and its replicas.", obj(map[string]any{"name": str("The service")}, "name")),
 	tool("heal_service", "Start a service's healing over after fixing what made it unhealthy: it is no longer degraded, its backoff is gone, hooks are tried again, and its unhealthy replicas are healed on the next tick.", obj(map[string]any{"name": str("The service")}, "name")),
+	tool("set_health", "Change the health check of a service, machine or template in place, without restarting anything (omit health to remove it). A template's is what its services and machines without one of their own take.", obj(map[string]any{
+		"kind": str("service, machine or template"), "name": str("Its name"),
+		"health": map[string]any{"type": "object", "description": "As add_service's health; omitted: none"},
+	}, "kind", "name")),
+	tool("list_supervisors", "Supervisors: their strategy, state (running or degraded), restarts counted now, and each child's state.", obj(map[string]any{})),
+	tool("add_supervisor", "Add a supervisor, as in Elixir: when one of its children (services, machines, supervisors) fails its health check or its process ends, it restarts the failed child (one_for_one), every child (one_for_all), or the failed one and those after it in the list (rest_for_one). More than max_restarts in max_seconds and it fails itself: its parent decides, or it stops restarting (degraded).", obj(map[string]any{
+		"name": str("Its name"), "strategy": str("one_for_one (default), one_for_all or rest_for_one"),
+		"children": map[string]any{"type": "array", "description": "In order: what starts first comes first", "items": map[string]any{"type": "object", "properties": map[string]any{
+			"kind": str("service, machine or supervisor"), "name": str("Its name"), "restart": str("permanent (default), transient (not when its process ends) or temporary (never, and restarts nothing else)"),
+		}, "required": []string{"kind", "name"}}},
+		"max_restarts": num("Restarts allowed in max_seconds (3)"), "max_seconds": str("The window, e.g. 60s (the default)"), "labels": labels(),
+	}, "name", "children")),
+	tool("restart_supervisor", "Start a supervisor over: no longer degraded, its restart count cleared, and its children (but temporary ones) restarted in order.", obj(map[string]any{"name": str("The supervisor")}, "name")),
+	tool("remove_supervisor", "Remove a supervisor; its children go on, unsupervised.", obj(map[string]any{"name": str("The supervisor")}, "name")),
 	tool("build", "Build a site from a Dockerfile directory on the daemon's host (full path), an image reference, or a Dockerfile's text, and make it a template. Waits for it unless wait is false.", obj(map[string]any{
 		"name": str("The template's name"), "source": str("A directory with a Dockerfile (full path) or an image reference"), "dockerfile": str("A Dockerfile's text (it can't COPY anything)"),
 		"network": str("fetch for a guest with a network (needed for ports), or none"), "memory_mb": num("Guest RAM"), "cpus": num("Guest CPUs"),
@@ -237,6 +254,20 @@ func (a args) duration(k string) (daemon.Duration, error) {
 	return daemon.Duration(v), nil
 }
 
+// health is a health check argument (nil when it isn't there).
+func (a args) health(k string) (*daemon.Health, error) {
+	h, ok := a[k]
+	if !ok || h == nil {
+		return nil, nil
+	}
+	data, _ := json.Marshal(h)
+	var out *daemon.Health
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("%s: %v", k, err)
+	}
+	return out, nil
+}
+
 // asJSON is v indented, for an agent to read.
 func asJSON(v any) string {
 	data, _ := json.MarshalIndent(v, "", "  ")
@@ -283,7 +314,11 @@ func (d *Daemon) do(name string, a args) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		v, err := api.AddTemplate(daemon.AddTemplate{Site: a.str("site"), Name: a.str("name"), Snapshot: a.str("snapshot"), Idle: idle, MaxMachines: int(a.num("max_machines")), Labels: a.labels("labels")})
+		health, err := a.health("health")
+		if err != nil {
+			return "", err
+		}
+		v, err := api.AddTemplate(daemon.AddTemplate{Site: a.str("site"), Name: a.str("name"), Snapshot: a.str("snapshot"), Idle: idle, MaxMachines: int(a.num("max_machines")), Labels: a.labels("labels"), Health: health})
 		return asJSON(v), err
 	case "remove_template":
 		return "removed template " + a.str("name"), api.RemoveTemplate(a.str("name"))
@@ -295,7 +330,11 @@ func (d *Daemon) do(name string, a args) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		v, err := api.Up(daemon.Up{Template: a.str("template"), Name: a.str("name"), Ports: a.strs("ports"), TTL: ttl, Snapshot: a.str("snapshot"), Labels: a.labels("labels")})
+		health, err := a.health("health")
+		if err != nil {
+			return "", err
+		}
+		v, err := api.Up(daemon.Up{Template: a.str("template"), Name: a.str("name"), Ports: a.strs("ports"), TTL: ttl, Snapshot: a.str("snapshot"), Labels: a.labels("labels"), Health: health})
 		return asJSON(v), err
 	case "stop_machine":
 		return "stopped " + a.str("name"), api.RemoveMachine(a.str("name"))
@@ -349,12 +388,9 @@ func (d *Daemon) do(name string, a args) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		var health *daemon.Health
-		if h, ok := a["health"]; ok && h != nil {
-			data, _ := json.Marshal(h)
-			if err := json.Unmarshal(data, &health); err != nil {
-				return "", fmt.Errorf("health: %v", err)
-			}
+		health, err := a.health("health")
+		if err != nil {
+			return "", err
 		}
 		var ports []daemon.Port
 		for _, p := range a.strs("ports") {
@@ -372,6 +408,41 @@ func (d *Daemon) do(name string, a args) (string, error) {
 	case "heal_service":
 		v, err := api.HealService(a.str("name"))
 		return asJSON(v), err
+	case "set_health":
+		health, err := a.health("health")
+		if err != nil {
+			return "", err
+		}
+		if err := api.SetHealth(a.str("kind"), a.str("name"), health, nil); err != nil {
+			return "", err
+		}
+		if health == nil {
+			return a.str("kind") + " " + a.str("name") + ": no health check of its own", nil
+		}
+		return a.str("kind") + " " + a.str("name") + ": health check changed in place", nil
+	case "list_supervisors":
+		v, err := api.Supervisors()
+		return asJSON(v), err
+	case "add_supervisor":
+		window, err := a.duration("max_seconds")
+		if err != nil {
+			return "", err
+		}
+		var kids []daemon.Child
+		if c, ok := a["children"]; ok && c != nil {
+			data, _ := json.Marshal(c)
+			if err := json.Unmarshal(data, &kids); err != nil {
+				return "", fmt.Errorf("children: %v", err)
+			}
+		}
+		v, err := api.AddSupervisor(daemon.Supervisor{Name: a.str("name"), Strategy: a.str("strategy"), Children: kids, MaxRestarts: int(a.num("max_restarts")),
+			MaxSeconds: window, Labels: a.labels("labels")})
+		return asJSON(v), err
+	case "restart_supervisor":
+		v, err := api.RestartSupervisor(a.str("name"))
+		return asJSON(v), err
+	case "remove_supervisor":
+		return "removed supervisor " + a.str("name"), api.RemoveSupervisor(a.str("name"))
 	case "build":
 		b, err := api.StartBuild(daemon.BuildRequest{Name: a.str("name"), Source: a.str("source"), Dockerfile: a.str("dockerfile"), Network: a.str("network"),
 			Memory: int(a.num("memory_mb")), CPUs: int(a.num("cpus")), NoTemplate: a.bool("no_template", false)})

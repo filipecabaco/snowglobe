@@ -336,19 +336,141 @@ func lastLine(out []byte) string {
 	return l
 }
 
-// watch starts keeping a new replica's health (its service checks it), and checks it at once.
-func (s *Server) watch(svc Service, m Machine) {
-	if svc.Health == nil {
-		return
-	}
-	s.svc.mu.Lock()
-	h := s.newHealthLocked(svc.Name, m.Name)
-	h.probing = true
-	s.svc.mu.Unlock()
-	go s.runProbe(svc, m, h)
+// watched is what a health check is on: a service (each of its replicas) or a machine.
+type watched struct {
+	kind   string // KindService or KindMachine
+	name   string
+	health Health
+	// A service's own record
+	svc Service
+	// A machine about to expire (ttl) isn't checked any more
+	expires *time.Time
+	// Its supervisor restarts it when it fails, rather than its own heal
+	supervised bool
 }
 
-// newHealthLocked starts a replica's health record. s.svc.mu is held.
+// key is its heals' key: a service's name, or machine:NAME (a name has no colon).
+func (w watched) key() string {
+	if w.kind == KindMachine {
+		return "machine:" + w.name
+	}
+	return w.name
+}
+
+func (w watched) subject() string { return w.kind + " " + w.name }
+
+// event is the kind of an event about one of its replicas (a service's) or about it (a machine).
+func (w watched) event(what string) string {
+	if w.kind == KindMachine {
+		return "machine." + what
+	}
+	return "service.replica_" + what
+}
+
+// who names the machine checked in an event's message.
+func (w watched) who(m string) string {
+	if w.kind == KindMachine {
+		return "machine " + m
+	}
+	return "replica " + m
+}
+
+// copyHealth is a copy of h that shares nothing with it.
+func copyHealth(h *Health) *Health {
+	if h == nil {
+		return nil
+	}
+	c := *h
+	if h.HTTP != nil {
+		hc := *h.HTTP
+		c.HTTP = &hc
+	}
+	return &c
+}
+
+// machineHealth is a machine's own health check, checked and filled in: heal none by default,
+// and none or hook only (a machine isn't one of many to replace: its supervisor restarts it).
+func machineHealth(h *Health) (*Health, error) {
+	c := copyHealth(h)
+	switch c.Heal {
+	case "":
+		c.Heal = HealNone
+	case HealDrain, HealReplace:
+		return nil, errStatus(400, "health: heal %s: a machine heals by none or hook; put it under a supervisor to have it restarted", c.Heal)
+	}
+	if err := checkHealth(c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// NormalHealth is a health check as the daemon keeps it, its defaults filled in, for a service or
+// template (kind service or template) or a machine: what to compare one in a file with.
+func NormalHealth(kind string, h *Health) (*Health, error) {
+	if h == nil {
+		return nil, nil
+	}
+	if kind == KindMachine {
+		return machineHealth(h)
+	}
+	c := copyHealth(h)
+	if err := checkHealth(c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// serviceHealthLocked is the health check a service's replicas have: its own, else its
+// template's. s.mu is held.
+func (s *Server) serviceHealthLocked(svc *Service) *Health {
+	if svc.Health != nil {
+		return svc.Health
+	}
+	if t := s.st.Templates[svc.Template]; t != nil {
+		return t.Health
+	}
+	return nil
+}
+
+// machineHealthLocked is the health check a machine (not a replica) has: its own, else its
+// template's, healed by hook or none (a template's replace and drain are for its services'
+// replicas). s.mu is held.
+func (s *Server) machineHealthLocked(m *Machine) *Health {
+	if m.Labels[serviceLabel] != "" {
+		return nil
+	}
+	if m.Health != nil {
+		return m.Health
+	}
+	t := s.st.Templates[m.Template]
+	if t == nil || t.Health == nil {
+		return nil
+	}
+	c := copyHealth(t.Health)
+	if c.Heal != HealHook {
+		c.Heal, c.HealCmd = HealNone, ""
+	}
+	return c
+}
+
+// watch starts keeping a new replica's health (its service checks it), and checks it at once.
+func (s *Server) watch(svc Service, m Machine) {
+	s.mu.Lock()
+	h := s.serviceHealthLocked(&svc)
+	supervised := s.supervisorOfLocked(KindService, svc.Name) != nil
+	s.mu.Unlock()
+	if h == nil {
+		return
+	}
+	w := watched{kind: KindService, name: svc.Name, health: *h, svc: svc, supervised: supervised}
+	s.svc.mu.Lock()
+	rh := s.newHealthLocked(svc.Name, m.Name)
+	rh.probing = true
+	s.svc.mu.Unlock()
+	go s.runProbe(w, m, rh)
+}
+
+// newHealthLocked starts a replica's (or machine's) health record. s.svc.mu is held.
 func (s *Server) newHealthLocked(service, machine string) *replicaHealth {
 	now := time.Now()
 	h := &replicaHealth{ReplicaHealth: ReplicaHealth{State: Starting, Since: now}, service: service, started: now, ready: make(chan struct{})}
@@ -423,30 +545,46 @@ func (s *Server) startsFresh(service string) bool {
 	return st != nil && st.fresh
 }
 
-// probe checks the replicas that are due, in the background, and heals the unhealthy ones whose
-// service may be healed now. It forgets what is gone.
+// probe checks the replicas and machines that are due, in the background, and heals the
+// unhealthy ones that may be healed now (a supervised one is its supervisor's). It forgets what
+// is gone.
 func (s *Server) probe() {
+	type target struct {
+		w  watched
+		rs []Machine
+	}
+	var targets []target
 	s.mu.Lock()
-	var svcs []Service
+	var svcs []watched
 	for _, svc := range s.st.Services {
-		if svc.Health != nil {
-			svcs = append(svcs, *svc)
+		if h := s.serviceHealthLocked(svc); h != nil {
+			svcs = append(svcs, watched{kind: KindService, name: svc.Name, health: *h, svc: *svc,
+				supervised: s.supervisorOfLocked(KindService, svc.Name) != nil})
+		}
+	}
+	for _, m := range s.st.Machines {
+		if h := s.machineHealthLocked(m); h != nil {
+			targets = append(targets, target{w: watched{kind: KindMachine, name: m.Name, health: *h, expires: m.Expires,
+				supervised: s.supervisorOfLocked(KindMachine, m.Name) != nil}, rs: []Machine{*m}})
 		}
 	}
 	s.mu.Unlock()
+	for _, w := range svcs {
+		targets = append(targets, target{w: w, rs: s.replicas(w.name)})
+	}
 	now := time.Now()
 	type job struct {
-		svc Service
-		m   Machine
-		h   *replicaHealth
+		w watched
+		m Machine
+		h *replicaHealth
 	}
 	var probes, heals []job
 	live := map[string]bool{}
-	services := map[string]bool{}
-	for _, svc := range svcs {
-		services[svc.Name] = true
-		rs := s.replicas(svc.Name)
-		hc := *svc.Health
+	keys := map[string]bool{}
+	for _, t := range targets {
+		w, rs := t.w, t.rs
+		keys[w.key()] = true
+		hc := w.health
 		s.svc.mu.Lock()
 		in := 0
 		for _, m := range rs {
@@ -454,25 +592,25 @@ func (s *Server) probe() {
 				in++
 			}
 		}
-		st := s.svc.heals[svc.Name]
+		st := s.svc.heals[w.key()]
 		for _, m := range rs {
 			live[m.Name] = true
 			h := s.svc.health[m.Name]
 			if h == nil {
-				// One the daemon didn't start as a replica (it came back with it): from now
-				h = s.newHealthLocked(svc.Name, m.Name)
+				// One the daemon didn't start (it came back with it), or a machine: from now
+				h = s.newHealthLocked(w.svc.Name, m.Name)
 			}
 			a := s.svc.activity[m.Name]
 			if h.probing || h.healing || h.State == Draining || a != nil && a.stopping {
 				continue
 			}
-			if h.State == Unhealthy && hc.Heal != HealNone && (st == nil || !st.degraded && !now.Before(st.next)) {
+			if h.State == Unhealthy && !w.supervised && hc.Heal != HealNone && (st == nil || !st.degraded && !now.Before(st.next)) {
 				h.healing = true
-				heals = append(heals, job{svc, m, h})
+				heals = append(heals, job{w, m, h})
 				// One heal at a time: what is left waits for this one's backoff
 				if st == nil {
 					st = &serviceHeal{}
-					s.svc.heals[svc.Name] = st
+					s.svc.heals[w.key()] = st
 				}
 				st.next = now.Add(time.Hour)
 				continue
@@ -485,12 +623,15 @@ func (s *Server) probe() {
 			if now.Sub(h.Checked) < every {
 				continue
 			}
-			// About to stop for being idle (above the minimum): left alone
-			if in > svc.Min && a != nil && a.active == 0 && now.Sub(a.last) > time.Duration(svc.Idle)-every {
+			// About to stop for being idle (above the minimum), or at its ttl: left alone
+			if w.kind == KindService && in > w.svc.Min && a != nil && a.active == 0 && now.Sub(a.last) > time.Duration(w.svc.Idle)-every {
+				continue
+			}
+			if w.expires != nil && w.expires.Sub(now) < every {
 				continue
 			}
 			h.probing = true
-			probes = append(probes, job{svc, m, h})
+			probes = append(probes, job{w, m, h})
 		}
 		s.svc.mu.Unlock()
 	}
@@ -502,22 +643,22 @@ func (s *Server) probe() {
 		}
 	}
 	for n := range s.svc.heals {
-		if !services[n] {
+		if !keys[n] {
 			delete(s.svc.heals, n)
 		}
 	}
 	s.svc.mu.Unlock()
 	for _, j := range probes {
-		go s.runProbe(j.svc, j.m, j.h)
+		go s.runProbe(j.w, j.m, j.h)
 	}
 	for _, j := range heals {
-		go s.heal(j.svc, j.m, j.h)
+		go s.heal(j.w, j.m, j.h)
 	}
 }
 
-// runProbe checks a replica once and takes in what it found.
-func (s *Server) runProbe(svc Service, m Machine, h *replicaHealth) {
-	ok, msg := check(*svc.Health, m)
+// runProbe checks a replica (or machine) once and takes in what it found.
+func (s *Server) runProbe(w watched, m Machine, h *replicaHealth) {
+	ok, msg := check(w.health, m)
 	now := time.Now()
 	s.svc.mu.Lock()
 	h.probing = false
@@ -528,81 +669,105 @@ func (s *Server) runProbe(svc Service, m Machine, h *replicaHealth) {
 	}
 	h.Checked, h.Last = now, msg
 	var event, detail string
+	failed := false
 	if ok {
 		h.Failures = 0
 		if h.State != Healthy {
 			if h.State == Unhealthy {
-				event, detail = "service.replica_healthy", fmt.Sprintf("replica %s healthy again: %s", m.Name, msg)
+				event, detail = w.event("healthy"), fmt.Sprintf("%s healthy again: %s", w.who(m.Name), msg)
 			} else {
-				event, detail = "service.replica_healthy", fmt.Sprintf("replica %s healthy in %d ms: %s", m.Name, now.Sub(h.started).Milliseconds(), msg)
+				event, detail = w.event("healthy"), fmt.Sprintf("%s healthy in %d ms: %s", w.who(m.Name), now.Sub(h.started).Milliseconds(), msg)
 			}
 			h.State, h.Since = Healthy, now
 		}
 		h.markReady()
-		// A replica that works: the service's heals start over
-		if st := s.svc.heals[svc.Name]; st != nil {
+		// One that works: its heals start over
+		if st := s.svc.heals[w.key()]; st != nil {
 			if st.degraded {
-				event, detail = "service.healthy", fmt.Sprintf("replica %s passed its check: healing again", m.Name)
+				kind := "service.healthy"
+				if w.kind == KindMachine {
+					kind = "machine.healthy"
+				}
+				event, detail = kind, fmt.Sprintf("%s passed its check: healing again", w.who(m.Name))
 			}
-			delete(s.svc.heals, svc.Name)
+			delete(s.svc.heals, w.key())
 		}
 	} else {
-		inGrace := h.State == Starting && now.Sub(h.started) < time.Duration(svc.Health.Grace)
+		inGrace := h.State == Starting && now.Sub(h.started) < time.Duration(w.health.Grace)
 		if !inGrace {
 			h.markReady()
 			h.Failures++
-			if h.Failures >= svc.Health.Failures && h.State != Unhealthy {
+			if h.Failures >= w.health.Failures && h.State != Unhealthy {
 				h.State, h.Since = Unhealthy, now
-				event, detail = "service.replica_unhealthy", fmt.Sprintf("replica %s failed %d checks in a row: %s", m.Name, h.Failures, msg)
+				event, detail = w.event("unhealthy"), fmt.Sprintf("%s failed %d checks in a row: %s", w.who(m.Name), h.Failures, msg)
+				failed = true
 			}
 		}
 	}
 	s.svc.mu.Unlock()
 	if event != "" {
-		s.note(event, "service "+svc.Name, "%s", detail)
+		s.note(event, w.subject(), "%s", detail)
+	}
+	if failed && w.supervised {
+		replica := ""
+		if w.kind == KindService {
+			replica = m.Name
+		}
+		s.childFailed(w.kind, w.name, failUnhealthy, msg, replica, nil)
 	}
 }
 
-// heal does what a service's health says to an unhealthy replica, unless it has healed too
-// often in a row: then it gives up (degraded) until one of its replicas passes a check.
-func (s *Server) heal(svc Service, m Machine, h *replicaHealth) {
-	hc := *svc.Health
+// heal does what a health check says to an unhealthy replica (or machine), unless it has healed
+// too often in a row: then it gives up (degraded) until one passes a check.
+func (s *Server) heal(w watched, m Machine, h *replicaHealth) {
+	hc := w.health
 	s.svc.mu.Lock()
-	st := s.svc.heals[svc.Name]
+	st := s.svc.heals[w.key()]
 	if st == nil {
-		// Another replica passed meanwhile (which starts heals over): this one is still unhealthy
+		// Another passed meanwhile (which starts heals over): this one is still unhealthy
 		st = &serviceHeal{}
-		s.svc.heals[svc.Name] = st
+		s.svc.heals[w.key()] = st
 	}
 	st.attempts++
 	if st.attempts > maxHeals {
 		st.degraded = true
 		h.healing = false
 		s.svc.mu.Unlock()
-		s.note("service.degraded", "service "+svc.Name, "healed %d times in a row with no replica passing its check: healing stopped until one does", maxHeals)
+		kind := "service.degraded"
+		if w.kind == KindMachine {
+			kind = "machine.degraded"
+		}
+		s.note(kind, w.subject(), "healed %d times in a row with no check passing: healing stopped until one does", maxHeals)
 		return
 	}
 	backoff := time.Duration(hc.Interval) << (st.attempts - 1)
 	st.next = time.Now().Add(min(backoff, maxHealBackoff))
-	if svc.State == "keep" && st.attempts >= 2 {
+	if w.kind == KindService && w.svc.State == "keep" && st.attempts >= 2 {
 		// Its last save failed too: the next one starts from the template
 		st.fresh = true
 	}
 	strategy := hc.Heal
 	if strategy == HealHook && h.hooked {
-		// Its hook didn't help
+		// Its hook didn't help: a replica is replaced, a machine stays as it is
 		strategy = HealReplace
+		if w.kind == KindMachine {
+			strategy = HealNone
+		}
 	}
 	switch strategy {
 	case HealHook:
 		h.hooked = true
 	case HealDrain, HealReplace:
 		h.State, h.Since = Draining, time.Now()
+	case HealNone:
+		h.healing = false
 	}
 	attempt := st.attempts
 	s.svc.mu.Unlock()
 
 	switch strategy {
+	case HealNone:
+		s.note("machine.unhealthy", w.subject(), "its heal command didn't help: it stays as it is (a supervisor would restart it)")
 	case HealHook:
 		ctx, cancel := context.WithTimeout(context.Background(), healTimeout)
 		r, err := control.JobLimited(ctx, m.Socket, m.Name, control.JobRequest{Cmd: hc.HealCmd, Timeout: healTimeout.Seconds()}, 4<<10)
@@ -621,37 +786,42 @@ func (s *Server) heal(svc Service, m Machine, h *replicaHealth) {
 		now := time.Now()
 		h.State, h.Since, h.Failures, h.started, h.Checked, h.healing = Starting, now, 0, now, time.Time{}, false
 		s.svc.mu.Unlock()
-		s.note("service.replica_healing", "service "+svc.Name, "replica %s: ran its heal command (%s), checking it again (heal %d of %d)", m.Name, result, attempt, maxHeals)
+		s.note(w.event("healing"), w.subject(), "%s: ran its heal command (%s), checking it again (heal %d of %d)", w.who(m.Name), result, attempt, maxHeals)
 	case HealDrain:
 		// Its idle time starts now: there is that long to look at it
 		s.touch(m.Name, 0)
-		s.note("service.replica_drained", "service "+svc.Name, "replica %s out of service, kept to be looked at until it is idle (heal %d of %d)", m.Name, attempt, maxHeals)
+		s.note("service.replica_drained", w.subject(), "replica %s out of service, kept to be looked at until it is idle (heal %d of %d)", m.Name, attempt, maxHeals)
 		s.svc.mu.Lock()
 		h.healing = false
 		s.svc.mu.Unlock()
-		s.healTopUp(svc)
+		s.healTopUp(w.svc)
 	case HealReplace:
-		s.note("service.replica_draining", "service "+svc.Name, "replica %s out of service, replacing it (heal %d of %d)", m.Name, attempt, maxHeals)
+		s.note("service.replica_draining", w.subject(), "replica %s out of service, replacing it (heal %d of %d)", m.Name, attempt, maxHeals)
 		// Below its minimum without it: another at once, before this one goes
-		s.healTopUp(svc)
-		deadline := time.Now().Add(time.Duration(hc.Drain))
-		for time.Now().Before(deadline) {
-			s.svc.mu.Lock()
-			a := s.svc.activity[m.Name]
-			busy := a != nil && a.active > 0
-			s.svc.mu.Unlock()
-			if !busy {
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		if s.stopReplica(svc, m, true) {
-			s.note("service.replica_replaced", "service "+svc.Name, "replica %s stopped, not saved", m.Name)
+		s.healTopUp(w.svc)
+		s.drainReplica(m.Name, time.Duration(hc.Drain))
+		if s.stopReplica(w.svc, m, true) {
+			s.note("service.replica_replaced", w.subject(), "replica %s stopped, not saved", m.Name)
 		}
 		s.svc.mu.Lock()
 		h.healing = false
 		s.svc.mu.Unlock()
-		s.healTopUp(svc)
+		s.healTopUp(w.svc)
+	}
+}
+
+// drainReplica waits (up to d) for a replica's connections to end.
+func (s *Server) drainReplica(machine string, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		s.svc.mu.Lock()
+		a := s.svc.activity[machine]
+		busy := a != nil && a.active > 0
+		s.svc.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -661,11 +831,15 @@ func (s *Server) heal(svc Service, m Machine, h *replicaHealth) {
 func (s *Server) HealService(name string) error {
 	s.mu.Lock()
 	svc, ok := s.st.Services[name]
+	var health *Health
+	if ok {
+		health = s.serviceHealthLocked(svc)
+	}
 	s.mu.Unlock()
 	if !ok {
 		return errStatus(404, "no service called %s", name)
 	}
-	if svc.Health == nil {
+	if health == nil {
 		return errStatus(400, "service %s has no health check to heal by", name)
 	}
 	s.svc.mu.Lock()

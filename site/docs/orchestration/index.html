@@ -42,8 +42,8 @@
           <h1 class="page-title" id="orchestration-title">Orchestration and fleets</h1>
           <p class="intro">Read this when one machine is not enough. <code>snowglobe daemon</code> runs many machines
             from one site, without KVM, root or Docker. It forks them in milliseconds, keeps snapshots of running
-            ones, puts services behind ports that scale to zero and checks their health, holds them all to a memory budget, and applies whole
-            fleets from a file.</p>
+            ones, puts services behind ports that scale to zero and checks their health, restarts what fails as
+            supervisors say, holds them all to a memory budget, and applies whole fleets from a file.</p>
           <p>The words this page uses:</p>
           <div class="table-wrap">
             <table>
@@ -54,6 +54,7 @@
                 <tr><td>snapshot</td><td>a running machine saved whole, to start machines and templates from</td></tr>
                 <tr><td>service</td><td>a template's machines behind host ports, started on demand, scaled to zero, and optionally health-checked and healed</td></tr>
                 <tr><td>link</td><td>a name one machine reaches another by; nothing else joins them</td></tr>
+                <tr><td>supervisor</td><td>an ordered list of services, machines and supervisors, restarted as its strategy says when one fails, as in Elixir</td></tr>
                 <tr><td>fleet</td><td>a <code>snowglobe.toml</code> naming all of the above, applied in one go</td></tr>
                 <tr><td>fleet instance</td><td>one copy of a fleet's services, machines and links, like <code>docker compose -p</code></td></tr>
               </tbody>
@@ -178,6 +179,61 @@ status = "200-399"   <span class="dim"># or a list: "200,204"</span></pre>
             <code>service.replica_draining</code>, <code>service.replica_drained</code>,
             <code>service.replica_replaced</code>, <code>service.degraded</code>, <code>service.healthy</code>,
             <code>service.heal_reset</code>.</p>
+          <p><b>Machines and templates</b> take the same check. <code>snowglobe up --health-cmd ...</code> (or
+            <code>[machines.NAME.health]</code>) checks a machine, and a template's check
+            (<code>snowglobe template add --health-*</code>, <code>[templates.NAME.health]</code>) is what its services
+            and machines have when they set none of their own. A machine isn't one of many, so it heals by
+            <code>none</code> (the default: it is reported) or <code>hook</code>; to have one restarted, put it under a
+            <a href="#supervisors">supervisor</a>. Its checks are in <code>/v1/machines</code> as <code>checks</code>,
+            and its events are <code>machine.healthy</code>, <code>machine.unhealthy</code>, <code>machine.healing</code>
+            and <code>machine.degraded</code>.</p>
+          <p><b>Changed in place.</b> <code>snowglobe health service|machine|template NAME</code> with a check's flags
+            (or <code>--none</code>) changes a check without restarting anything: <code>PUT /v1/{kind}s/{name}/health</code>,
+            the <code>set_health</code> tool. A fleet does the same: a file whose only change is a health check plans
+            it as <code>* service web (health check, in place)</code>, and its replicas stay.</p>
+
+          <h2 class="h3" id="supervisors">Supervisors</h2>
+          <p>A supervisor watches an ordered list of children (services, machines and other supervisors) and
+            restarts them when one fails, as an Elixir supervisor does its processes. A child fails when its health
+            check makes it unhealthy (a replica of it, for a service), or when its process ends without being asked
+            to. Put first what the others need: a database before the app that uses it.</p>
+          <pre>snowglobe supervisor add app --strategy rest_for_one --child service/db --child service/api --child machine/worker:transient
+snowglobe supervisor ls                           <span class="dim"># each child's state, and the restarts counted now</span>
+snowglobe supervisor restart app                  <span class="dim"># start it over, once degraded</span></pre>
+          <pre>[supervisors.app]
+strategy = "rest_for_one"     <span class="dim"># or one_for_one (the default), one_for_all</span>
+children = ["db", "api", "worker"]
+max_restarts = 3              <span class="dim"># restarts allowed in max_seconds</span>
+max_seconds = "60s"
+
+[supervisors.app.restart]
+worker = "transient"          <span class="dim"># permanent (the default), transient or temporary</span></pre>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">strategy</th><th scope="col">When a child fails, what is restarted</th></tr></thead>
+              <tbody>
+                <tr><td><code>one_for_one</code></td><td>the default: that child alone. For a service, the replica that failed</td></tr>
+                <tr><td><code>one_for_all</code></td><td>every child</td></tr>
+                <tr><td><code>rest_for_one</code></td><td>that child and every child after it in the list: <code>db</code> failing restarts <code>api</code> and <code>worker</code> too, <code>api</code> failing leaves <code>db</code> be</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>What is restarted is stopped in reverse order, then started in order. A machine starts again as it was:
+            its name, template, ports, labels, snapshot and links (and what is left of its <code>ttl</code>). A service's
+            running replicas are replaced, as many as were running, so a service at zero stays at zero. A supervisor
+            restarts all of its children.</p>
+          <p>A child's restart type says whether it is restarted. <code>permanent</code> (the default) always is.
+            <code>transient</code> is restarted when it fails its check, but its process ending is a normal exit: a
+            machine that runs a job and stops, say. <code>temporary</code> never is, and, as in Elixir, its failure
+            restarts nothing else either; a temporary sibling is left alone when the others restart.</p>
+          <p>More than <code>max_restarts</code> restarts within <code>max_seconds</code> and the supervisor fails
+            itself. A supervisor that is another's child is then its parent's failed child, and the parent's strategy
+            decides (restarting it restarts all of its children). A top-level one stops restarting and is
+            <code>degraded</code> until <code>snowglobe supervisor restart NAME</code>. A supervised service's own
+            <code>heal</code> isn't used: its supervisor restarts it. Unsupervised, a service heals as above, and a machine
+            is only reported. Removing a supervisor leaves its children running. Events:
+            <code>supervisor.restarted</code>, <code>supervisor.escalated</code>, <code>supervisor.degraded</code>,
+            <code>supervisor.child_exited</code>.</p>
 
           <h2 class="h3" id="fleets">Fleets: snowglobe apply</h2>
           <p>A <code>snowglobe.toml</code> says what the daemon should have, and <code>snowglobe apply</code> gets it
@@ -187,6 +243,7 @@ status = "200-399"   <span class="dim"># or a list: "200,204"</span></pre>
             <li>snapshots: a machine of a template set up by commands, saved once a readiness command succeeds. A command is a string, or <code>{ cmd = "...", timeout = "90s" }</code> for one with a time limit of its own; one without gets the snapshot's <code>timeout</code>, or 10 minutes;</li>
             <li>templates of those snapshots;</li>
             <li>services, each with an optional health check (<a href="#health">below</a>), and machines;</li>
+            <li>supervisors over those services and machines (<a href="#supervisors">above</a>);</li>
             <li>links, a network mode, and each template's egress (<a href="#links">below</a>).</li>
           </ul>
           <p>A small one:</p>
@@ -351,7 +408,7 @@ as = "db.internal"</pre>
               WebSocket traffic alike. A guest's <code>ws://name/</code> on 80 or 443, and a page in the frame, can
               open WebSockets too. A machine reads its links when it wakes.</li>
             <li><b>Read, not applied:</b> <code>min</code>, <code>max</code>, <code>idle</code>, <code>concurrency</code>,
-              a service's <code>health</code>, <code>ttl</code>, <code>egress</code>, <code>network.mode</code> and host ports. The page lists them.</li>
+              <code>health</code>, <code>supervisors</code>, <code>ttl</code>, <code>egress</code>, <code>network.mode</code> and host ports. The page lists them.</li>
           </ul>
 
           <h2 class="h3" id="ui">In a browser: snowglobe ui</h2>
@@ -427,12 +484,14 @@ snowglobe up py --ttl 1h</pre>
               asleep), services with their replicas and open connections, machines with what each takes and when it
               stops, and the latest events.</li>
             <li><code>snowglobe events</code> streams those events, the last 200 first: machines up and stopped,
-              replicas started and stopped, replicas unhealthy, healed and replaced, services degraded, templates asleep and awake, snapshots, admissions refused.
+              replicas started and stopped, replicas and machines unhealthy, healed and replaced, services degraded,
+              supervisors restarting, escalating and degraded, templates asleep and awake, snapshots, admissions refused.
               <code>--json</code> is for programs.</li>
           </ul>
           <pre>snowglobe top
 snowglobe events --json | jq 'select(.kind == "admission.refused")'
-snowglobe events --json | jq 'select(.kind == "service.replica_unhealthy" or .kind == "service.degraded")'</pre>
+snowglobe events --json | jq 'select(.kind == "service.replica_unhealthy" or .kind == "service.degraded")'
+snowglobe events --json | jq 'select(.kind | startswith("supervisor."))'</pre>
 
           <h2 class="h3" id="provider">A template provider: snowglobe provide</h2>
           <p><code>snowglobe daemon --mode provider</code> only builds. Push an image to a registry (or keep a
@@ -509,7 +568,9 @@ mkdir -p public/app &amp;&amp; tar --zstd -xf app.tar.zst -C public/app    <span
                 <tr><td><code>/v1/machines/{name}/jobs</code></td><td>a job on a machine</td></tr>
                 <tr><td><code>/v1/templates/{name}/jobs</code></td><td>a job on a fresh fork: <code>files</code>, <code>cmd</code>, <code>env</code>, <code>timeout</code>, and optionally <code>workdir</code>, the limits (<code>memory_limit_mb</code>, <code>cpus_limit</code>, <code>pids_limit</code>, <code>disk_limit_mb</code>, <code>max_rss_mb</code>, <code>cpu_time_s</code>, <code>output_limit</code>, <code>copy_limit_mb</code>, <code>read_only_in</code>), <code>egress</code> and <code>labels</code>; a limit it can't enforce (<code>memory_limit_mb</code> on a template built without <code>--memory-limits</code>, say) answers 200 with <code>error</code>, and the client disconnecting cancels it. A job connects to no Unix socket and writes nothing its template server shares with other jobs</td></tr>
                 <tr><td><code>POST /v1/runs</code>, <code>GET /v1/runs/{id}</code></td><td>fire-and-forget runs</td></tr>
-                <tr><td><code>/v1/services</code>, <code>/v1/services/{name}/jobs</code>, <code>POST /v1/services/{name}/heal</code></td><td>services, and a job on a replica. Each replica has <code>health</code> (state, failures, last result) and each service <code>service_health</code> when it has a health check</td></tr>
+                <tr><td><code>/v1/services</code>, <code>/v1/services/{name}/jobs</code>, <code>POST /v1/services/{name}/heal</code></td><td>services, and a job on a replica. Each replica has <code>health</code> (state, failures, last result) and each service <code>service_health</code> when it has a health check (<code>inherited_health</code> when it is its template's, and <code>supervisor</code> when it has one)</td></tr>
+                <tr><td><code>PUT /v1/services/{name}/health</code>, <code>/v1/machines/{name}/health</code>, <code>/v1/templates/{name}/health</code></td><td>a health check changed in place: <code>{"health": {...}}</code>, or <code>null</code> for none</td></tr>
+                <tr><td><code>/v1/supervisors</code>, <code>PUT /v1/supervisors/{name}</code>, <code>POST /v1/supervisors/{name}/restart</code></td><td>supervisors: <code>{name, strategy, children: [{kind, name, restart}], max_restarts, max_seconds}</code>, with their <code>state</code>, <code>restarts</code> and each child's state in <code>states</code>. A change is made in place</td></tr>
                 <tr><td><code>/v1/links</code>, <code>/v1/graph</code></td><td>links, and the graph of what reaches what</td></tr>
                 <tr><td><code>/v1/fleets</code></td><td>fleets and their instances</td></tr>
                 <tr><td><code>/v1/ports</code>, <code>/v1/ports/check?port=N&amp;ip=IP</code></td><td>host ports</td></tr>

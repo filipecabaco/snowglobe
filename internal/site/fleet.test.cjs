@@ -530,7 +530,7 @@ function goKeys() {
 
 test('format: every key of the Go fleet structs is decided here, and none is made up', () => {
   const go = goKeys();
-  const spec = { templates: 'TemplateSpec', snapshots: 'SnapshotSpec', services: 'ServiceSpec', machines: 'MachineSpec', links: 'LinkSpec' };
+  const spec = { templates: 'TemplateSpec', snapshots: 'SnapshotSpec', services: 'ServiceSpec', machines: 'MachineSpec', links: 'LinkSpec', supervisors: 'SupervisorSpec' };
   for (const [kind, type] of Object.entries(spec)) {
     const here = [...F.KEYS[kind].applied, ...F.KEYS[kind].said].sort();
     assert.deepEqual(here, [...go[type]].sort(), `${kind}: keys of ${type}`);

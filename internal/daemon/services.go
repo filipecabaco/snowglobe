@@ -46,6 +46,10 @@ type ServiceStatus struct {
 	// Its replicas' health, summed up (with a health check): starting, healthy, unhealthy, idle
 	// (none running) or degraded (healing given up)
 	ServiceHealth string `json:"service_health,omitempty"`
+	// Its template's health check, when it has none of its own (what its replicas are checked by)
+	InheritedHealth *Health `json:"inherited_health,omitempty"`
+	// The supervisor it is a child of, if any
+	Supervisor string `json:"supervisor,omitempty"`
 }
 
 // Replica is a service's machine, with what it is doing.
@@ -338,7 +342,7 @@ func (s *Server) pickReplica(name string) (*Machine, error) {
 	var conc, maxN int
 	var health *Health
 	if ok {
-		conc, maxN, health = svc.Concurrency, svc.Max, svc.Health
+		conc, maxN, health = svc.Concurrency, svc.Max, s.serviceHealthLocked(svc)
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -656,8 +660,16 @@ func (s *Server) ServiceStatus(name string) (*ServiceStatus, error) {
 	s.mu.Lock()
 	svc, ok := s.st.Services[name]
 	var st ServiceStatus
+	var health *Health
 	if ok {
 		st.Service = *svc
+		health = s.serviceHealthLocked(svc)
+		if svc.Health == nil && health != nil {
+			st.InheritedHealth = health
+		}
+		if sup := s.supervisorOfLocked(KindService, name); sup != nil {
+			st.Supervisor = sup.Name
+		}
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -670,14 +682,14 @@ func (s *Server) ServiceStatus(name string) (*ServiceStatus, error) {
 		if a := s.svc.activity[m.Name]; a != nil {
 			r.Active, r.Last = a.active, a.last
 		}
-		if h := s.svc.health[m.Name]; h != nil && st.Health != nil {
+		if h := s.svc.health[m.Name]; h != nil && health != nil {
 			rh := h.ReplicaHealth
 			r.Health = &rh
 		}
 		s.svc.mu.Unlock()
 		st.Replicas = append(st.Replicas, r)
 	}
-	if st.Health != nil {
+	if health != nil {
 		s.svc.mu.Lock()
 		h := s.svc.heals[name]
 		degraded := h != nil && h.degraded

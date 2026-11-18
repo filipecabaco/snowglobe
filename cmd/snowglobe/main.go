@@ -235,6 +235,20 @@ Usage:
                                                      when no other can take them. service heal
                                                      <name> starts healing over (after five heals
                                                      in a row with none passing it stops: degraded)
+  snowglobe health service|machine|template <name>   change a health check in place, restarting
+                [--health-* ... | --none]            nothing. up and template add take the same
+                                                     --health-* flags: a machine heals by none or
+                                                     hook; a template's check is what its
+                                                     services and machines without one take
+  snowglobe supervisor add <name>                    restart what fails, as an Elixir supervisor:
+                --child KIND/NAME[:RESTART]...       children (service, machine, supervisor) in
+                [--strategy one_for_one|             start order; one_for_one restarts the failed
+                  one_for_all|rest_for_one]          one, one_for_all all, rest_for_one it and
+                [--max-restarts 3]                   those after it. RESTART: permanent, transient
+                [--max-seconds 60s]                  (not when its process ends) or temporary.
+                                                     Over --max-restarts in --max-seconds it fails
+                                                     (its parent decides, or it is degraded).
+                                                     supervisor ls, restart <name>, rm <name>
   snowglobe events [--json] [--after SEQ]            the daemon's events: those it kept, then each
                                                      as it happens (machines up and stopped,
                                                      replicas, templates asleep and awake,
@@ -441,6 +455,10 @@ func run(args []string) int {
 		err = runSnapshot(args[1:])
 	case "service":
 		err = runService(args[1:])
+	case "supervisor":
+		err = runSupervisor(args[1:])
+	case "health":
+		err = runHealth(args[1:])
 	case "events":
 		err = runEvents(args[1:])
 	case "apply":

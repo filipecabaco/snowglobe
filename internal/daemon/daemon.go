@@ -50,9 +50,11 @@ type Template struct {
 	// Its machines may reach the host's loopback and private addresses (--allow-private)
 	AllowPrivate bool `json:"allow_private,omitempty"`
 	// Where its machines' connections may go (AddTemplate.Egress)
-	Egress  string            `json:"egress,omitempty"`
-	Labels  map[string]string `json:"labels,omitempty"`
-	Started time.Time         `json:"started"`
+	Egress string            `json:"egress,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
+	// The health check its services and machines have when they set none of their own
+	Health  *Health   `json:"health,omitempty"`
+	Started time.Time `json:"started"`
 	// What it restores from holds on disk: its snapshot's file, or its site's directory (a
 	// template made of a snapshot holds the snapshot's bytes, not more of its own)
 	SizeBytes int64 `json:"size_bytes"`
@@ -79,6 +81,10 @@ type Machine struct {
 	// Its own directory under its template's jobs root: all of the root its sandbox lets it
 	// touch, where its snapshots are written ("" for a machine from before there was one)
 	Dir string `json:"dir,omitempty"`
+	// Its own health check (else its template's, if any), and how its checks are going (filled in
+	// when it is listed)
+	Health *Health        `json:"health,omitempty"`
+	Checks *ReplicaHealth `json:"checks,omitempty"`
 }
 
 // Snapshot is a machine saved whole (RAM, CPUs, devices, the files its guest wrote): machines start
@@ -185,15 +191,16 @@ func SocketPath() (string, error) {
 
 // state is what the daemon writes to state.json.
 type state struct {
-	Templates map[string]*Template `json:"templates"`
-	Machines  map[string]*Machine  `json:"machines"`
-	Snapshots map[string]*Snapshot `json:"snapshots"`
-	Services  map[string]*Service  `json:"services"`
-	Links     map[string]*Link     `json:"links,omitempty"`
+	Templates   map[string]*Template   `json:"templates"`
+	Machines    map[string]*Machine    `json:"machines"`
+	Snapshots   map[string]*Snapshot   `json:"snapshots"`
+	Services    map[string]*Service    `json:"services"`
+	Links       map[string]*Link       `json:"links,omitempty"`
+	Supervisors map[string]*Supervisor `json:"supervisors,omitempty"`
 }
 
 func emptyState() state {
-	return state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}, Snapshots: map[string]*Snapshot{}, Services: map[string]*Service{}, Links: map[string]*Link{}}
+	return state{Templates: map[string]*Template{}, Machines: map[string]*Machine{}, Snapshots: map[string]*Snapshot{}, Services: map[string]*Service{}, Links: map[string]*Link{}, Supervisors: map[string]*Supervisor{}}
 }
 
 func loadState(path string) state {
@@ -219,6 +226,9 @@ func loadState(path string) state {
 	}
 	if st.Links == nil {
 		st.Links = map[string]*Link{}
+	}
+	if st.Supervisors == nil {
+		st.Supervisors = map[string]*Supervisor{}
 	}
 	return st
 }

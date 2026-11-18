@@ -462,13 +462,14 @@
   // as not applied here. fleet.test.cjs checks both lists against the Go structs, so a key added to the
   // format has to be decided here too, and a file the CLI refuses is refused here.
   const KEYS = {
-    templates: { applied: ["site", "build", "snapshot", "network"], said: ["idle", "max_machines", "allow_private", "egress", "expose"] },
+    templates: { applied: ["site", "build", "snapshot", "network"], said: ["idle", "max_machines", "allow_private", "egress", "expose", "health"] },
     snapshots: { applied: ["template", "run", "ready", "timeout"], said: [] },
     services: { applied: ["template", "ports"], said: ["min", "max", "idle", "concurrency", "state", "labels", "health"] },
-    machines: { applied: ["template"], said: ["count", "ports", "ttl", "labels"] },
+    machines: { applied: ["template"], said: ["count", "ports", "ttl", "labels", "health"] },
     links: { applied: ["from", "to", "port", "as", "as_port"], said: [] },
+    supervisors: { applied: [], said: ["strategy", "children", "max_restarts", "max_seconds", "restart", "labels"] },
   };
-  const TOP = ["name", "templates", "snapshots", "services", "machines", "links", "network"];
+  const TOP = ["name", "templates", "snapshots", "services", "machines", "links", "supervisors", "network"];
   // Said one by one elsewhere in plan(); the rest of `said` is said here
   const SAID_ELSEWHERE = new Set(["services.min", "services.max", "services.idle", "services.concurrency", "machines.ttl", "templates.egress"]);
 

@@ -52,7 +52,9 @@ type File struct {
 	Services  map[string]ServiceSpec  `toml:"services"`
 	Machines  map[string]MachineSpec  `toml:"machines"`
 	Links     map[string]LinkSpec     `toml:"links"`
-	Network   NetworkSpec             `toml:"network"`
+	// Supervisors over the file's services, machines and other supervisors
+	Supervisors map[string]SupervisorSpec `toml:"supervisors"`
+	Network     NetworkSpec               `toml:"network"`
 	// Where the file is: relative paths in it are from here
 	Dir string `toml:"-"`
 }
@@ -74,6 +76,9 @@ type TemplateSpec struct {
 	Egress string `toml:"egress" json:"egress,omitempty"`
 	// Guest ports the other templates reach it on under [network] mode = "all"
 	Expose []int `toml:"expose" json:"expose,omitempty"`
+	// The health check its services and machines have when they set none of their own (changed
+	// in place: not part of its hash)
+	Health *HealthSpec `toml:"health" json:"health,omitempty"`
 	// What the build saw of its directory (a hash of its files' names, sizes and times): a change
 	// rebuilds
 	Source string `toml:"-" json:"source,omitempty"`
@@ -214,6 +219,22 @@ type MachineSpec struct {
 	Ports    []string          `toml:"ports" json:"ports,omitempty"`
 	TTL      string            `toml:"ttl" json:"ttl,omitempty"`
 	Labels   map[string]string `toml:"labels" json:"labels,omitempty"`
+	// Its health check (else its template's): healed by none or hook; restarted by its supervisor
+	Health *HealthSpec `toml:"health" json:"health,omitempty"`
+}
+
+// SupervisorSpec is a supervisor (see `snowglobe supervisor add`): it restarts its children (the
+// file's services, machines and supervisors, by name, in order) when one fails, as strategy says.
+type SupervisorSpec struct {
+	// one_for_one (the default), one_for_all or rest_for_one
+	Strategy string   `toml:"strategy" json:"strategy,omitempty"`
+	Children []string `toml:"children" json:"children"`
+	// More restarts than max_restarts (3) within max_seconds (60s) and it fails itself
+	MaxRestarts int    `toml:"max_restarts" json:"max_restarts,omitempty"`
+	MaxSeconds  string `toml:"max_seconds" json:"max_seconds,omitempty"`
+	// A child's restart type, by its name: permanent (the default), transient or temporary
+	Restart map[string]string `toml:"restart" json:"restart,omitempty"`
+	Labels  map[string]string `toml:"labels" json:"labels,omitempty"`
 }
 
 // NetworkSpec is a fleet's network profile.
@@ -351,6 +372,7 @@ func (f *File) check() error {
 			}
 		}
 		duration("template "+n+": idle", t.Idle)
+		f.checkHealth("template "+n, daemon.KindService, t.Health, bad, duration)
 	}
 	for n, s := range f.Snapshots {
 		name("snapshot", n)
@@ -369,14 +391,7 @@ func (f *File) check() error {
 			bad("service %s: no template %s in the file", n, s.Template)
 		}
 		duration("service "+n+": idle", s.Idle)
-		if h := s.Health; h != nil {
-			for what, v := range map[string]string{"interval": h.Interval, "timeout": h.Timeout, "grace": h.Grace, "drain": h.Drain} {
-				duration("service "+n+": health: "+what, v)
-			}
-			if err := daemon.CheckHealth(h.health()); err != nil {
-				bad("service %s: %v", n, err)
-			}
-		}
+		f.checkHealth("service "+n, daemon.KindService, s.Health, bad, duration)
 	}
 	for n, m := range f.Machines {
 		name("machine", n)
@@ -390,6 +405,56 @@ func (f *File) check() error {
 			bad("machine %s: count 0 or more", n)
 		}
 		duration("machine "+n+": ttl", m.TTL)
+		f.checkHealth("machine "+n, daemon.KindMachine, m.Health, bad, duration)
+	}
+	owner := map[string]string{}
+	for n, sv := range f.Supervisors {
+		name("supervisor", n)
+		if other := names[n]; other != "" {
+			bad("supervisor %s: a %s has that name (a child is named by its name alone)", n, other)
+		}
+		if _, ok := f.Machines[n]; ok {
+			bad("supervisor %s: a machine has that name (a child is named by its name alone)", n)
+		}
+		switch sv.Strategy {
+		case "", daemon.OneForOne, daemon.OneForAll, daemon.RestForOne:
+		default:
+			bad("supervisor %s: strategy %q: one_for_one, one_for_all or rest_for_one", n, sv.Strategy)
+		}
+		if sv.MaxRestarts < 0 {
+			bad("supervisor %s: max_restarts 1 or more", n)
+		}
+		duration("supervisor "+n+": max_seconds", sv.MaxSeconds)
+		if len(sv.Children) == 0 {
+			bad("supervisor %s: children: at least one", n)
+		}
+		seen := map[string]bool{}
+		for _, c := range sv.Children {
+			if seen[c] {
+				bad("supervisor %s: child %s twice", n, c)
+			}
+			seen[c] = true
+			if f.childKind(c) == "" {
+				bad("supervisor %s: child %s: no service, machine or supervisor of that name in the file", n, c)
+			}
+			if c == n {
+				bad("supervisor %s: its own child", n)
+			}
+			if o := owner[c]; o != "" && o != n {
+				bad("supervisor %s: child %s is a child of supervisor %s too", n, c, o)
+			}
+			owner[c] = n
+		}
+		for c, r := range sv.Restart {
+			if !seen[c] {
+				bad("supervisor %s: restart %s: not one of its children", n, c)
+			}
+			switch r {
+			case daemon.Permanent, daemon.Transient, daemon.Temporary:
+			default:
+				bad("supervisor %s: restart %s = %q: permanent, transient or temporary", n, c, r)
+			}
+		}
 	}
 	switch f.Network.Mode {
 	case "", Exclusive, Inclusive, All:
@@ -422,6 +487,33 @@ func (f *File) check() error {
 	return nil
 }
 
+// checkHealth checks a health check in the file (a machine's heals by none or hook).
+func (f *File) checkHealth(what, kind string, h *HealthSpec, bad func(string, ...any), duration func(string, string)) {
+	if h == nil {
+		return
+	}
+	for k, v := range map[string]string{"interval": h.Interval, "timeout": h.Timeout, "grace": h.Grace, "drain": h.Drain} {
+		duration(what+": health: "+k, v)
+	}
+	if _, err := daemon.NormalHealth(kind, h.health()); err != nil {
+		bad("%s: %v", what, err)
+	}
+}
+
+// childKind is the kind of a supervisor's child, by its name ("" if the file has none).
+func (f *File) childKind(name string) string {
+	if _, ok := f.Services[name]; ok {
+		return KindService
+	}
+	if _, ok := f.Machines[name]; ok {
+		return KindMachine
+	}
+	if _, ok := f.Supervisors[name]; ok {
+		return KindSupervisor
+	}
+	return ""
+}
+
 // linkEnd is the key of a link's end: the file's kind (a template or service, else a machine).
 func (f *File) linkEnd(name, kind string) string {
 	_, isTemplate := f.Templates[name]
@@ -443,11 +535,12 @@ func (f *File) path(p string) string {
 
 // Kind of object a fleet makes
 const (
-	KindTemplate = "template"
-	KindSnapshot = "snapshot"
-	KindService  = "service"
-	KindMachine  = "machine"
-	KindLink     = "link"
+	KindTemplate   = "template"
+	KindSnapshot   = "snapshot"
+	KindService    = "service"
+	KindMachine    = "machine"
+	KindLink       = "link"
+	KindSupervisor = "supervisor"
 )
 
 // Object is one thing the fleet wants: its spec, a hash of it, and what it is made from.
@@ -458,6 +551,8 @@ type Object struct {
 	Hash string
 	// The objects (kind/name) it is made from
 	Deps []string
+	// Its hash as snowglobe 0.23 and 0.24 made it (a service's, with its health check)
+	Legacy string
 }
 
 // Key is how plans name objects: kind/name.
@@ -487,6 +582,15 @@ func (f *File) objects() ([]Object, error) {
 	for n, m := range f.Machines {
 		all = append(all, Object{Kind: KindMachine, Name: n, Spec: m, Deps: []string{KindTemplate + "/" + m.Template}})
 	}
+	for n, sv := range f.Supervisors {
+		o := Object{Kind: KindSupervisor, Name: n, Spec: sv}
+		for _, c := range sv.Children {
+			if k := f.childKind(c); k != "" {
+				o.Deps = append(o.Deps, k+"/"+c)
+			}
+		}
+		all = append(all, o)
+	}
 	for n, l := range f.Links {
 		l.Mode = f.mode()
 		all = append(all, Object{Kind: KindLink, Name: n, Spec: l, Deps: []string{f.linkEnd(l.From, KindTemplate), f.linkEnd(l.To, KindService)}})
@@ -511,7 +615,7 @@ func (f *File) objects() ([]Object, error) {
 		}
 	}
 	// Templates (and the snapshots they need) first, then services, machines and links; by name within
-	rank := map[string]int{KindTemplate: 0, KindSnapshot: 1, KindService: 2, KindMachine: 3, KindLink: 4}
+	rank := map[string]int{KindTemplate: 0, KindSnapshot: 1, KindService: 2, KindMachine: 3, KindLink: 4, KindSupervisor: 5}
 
 	sort.Slice(all, func(i, j int) bool {
 		if rank[all[i].Kind] != rank[all[j].Kind] {
@@ -543,7 +647,12 @@ func (f *File) objects() ([]Object, error) {
 			}
 			depHashes = append(depHashes, dep.Hash)
 		}
-		o.Hash = hash(o.Kind, o.Spec, depHashes)
+		// A health check is changed in place: not part of what it is
+		o.Hash = hash(o.Kind, withoutHealth(o.Spec), depHashes)
+		if sv, ok := o.Spec.(ServiceSpec); ok && sv.Health != nil {
+			// As a service with a health check was hashed before (snowglobe 0.23 and 0.24)
+			o.Legacy = hash(o.Kind, o.Spec, depHashes)
+		}
 		state[o.Key()] = 2
 		ordered = append(ordered, *o)
 		return nil
@@ -554,6 +663,35 @@ func (f *File) objects() ([]Object, error) {
 		}
 	}
 	return ordered, nil
+}
+
+// withoutHealth is a spec less its health check.
+func withoutHealth(spec any) any {
+	switch s := spec.(type) {
+	case TemplateSpec:
+		s.Health = nil
+		return s
+	case ServiceSpec:
+		s.Health = nil
+		return s
+	case MachineSpec:
+		s.Health = nil
+		return s
+	}
+	return spec
+}
+
+// healthOf is a spec's health check, as the daemon takes it (nil: none, or a kind without one).
+func healthOf(spec any) *daemon.Health {
+	switch s := spec.(type) {
+	case TemplateSpec:
+		return s.Health.health()
+	case ServiceSpec:
+		return s.Health.health()
+	case MachineSpec:
+		return s.Health.health()
+	}
+	return nil
 }
 
 func hash(kind string, spec any, deps []string) string {
