@@ -31,6 +31,8 @@ type Service struct {
 	Concurrency int `json:"concurrency"`
 	// "discard": a replica starts from the template; "keep": from the last one's save
 	State string `json:"state"`
+	// How its replicas are checked, and what is done with one that fails (none: not checked)
+	Health *Health `json:"health,omitempty"`
 	// The snapshot the next replica starts from (State "keep")
 	Saved   string            `json:"saved,omitempty"`
 	Labels  map[string]string `json:"labels,omitempty"`
@@ -41,6 +43,9 @@ type Service struct {
 type ServiceStatus struct {
 	Service
 	Replicas []Replica `json:"replicas"`
+	// Its replicas' health, summed up (with a health check): starting, healthy, unhealthy, idle
+	// (none running) or degraded (healing given up)
+	ServiceHealth string `json:"service_health,omitempty"`
 }
 
 // Replica is a service's machine, with what it is doing.
@@ -48,6 +53,8 @@ type Replica struct {
 	Machine string    `json:"machine"`
 	Active  int       `json:"active"`
 	Last    time.Time `json:"last"`
+	// How its checks go (its service has a health check)
+	Health *ReplicaHealth `json:"health,omitempty"`
 }
 
 // Duration is a time.Duration as JSON: "5m", "30s" (or nanoseconds).
@@ -88,10 +95,14 @@ type services struct {
 	// One start at a time per service, so that a burst of connections to a service at zero
 	// starts one replica, not one each
 	starting map[string]*sync.Mutex
+	// Replicas' health checks, by machine, and services' heals, by service
+	health map[string]*replicaHealth
+	heals  map[string]*serviceHeal
 }
 
 func newServices() *services {
-	return &services{listeners: map[string][]net.Listener{}, activity: map[string]*activity{}, starting: map[string]*sync.Mutex{}}
+	return &services{listeners: map[string][]net.Listener{}, activity: map[string]*activity{}, starting: map[string]*sync.Mutex{},
+		health: map[string]*replicaHealth{}, heals: map[string]*serviceHeal{}}
 }
 
 // touch records that machine did something (a connection opened (+1) or closed (-1), a job (0)).
@@ -180,6 +191,17 @@ func (s *Server) AddService(req Service) (*ServiceStatus, error) {
 	default:
 		return nil, errStatus(400, "state %q: discard or keep", req.State)
 	}
+	if req.Health != nil {
+		h := *req.Health
+		if h.HTTP != nil {
+			c := *h.HTTP
+			h.HTTP = &c
+		}
+		if err := checkHealth(&h); err != nil {
+			return nil, err
+		}
+		req.Health = &h
+	}
 	s.mu.Lock()
 	_, taken := s.st.Services[req.Name]
 	t, ok := s.st.Templates[req.Template]
@@ -190,7 +212,7 @@ func (s *Server) AddService(req Service) (*ServiceStatus, error) {
 	if !ok {
 		return nil, errStatus(404, "no template called %s", req.Template)
 	}
-	if len(req.Ports) > 0 {
+	if len(req.Ports) > 0 || req.Health != nil && req.Health.HTTP != nil {
 		if err := needsNetwork(t); err != nil {
 			return nil, err
 		}
@@ -221,8 +243,8 @@ func (s *Server) AddService(req Service) (*ServiceStatus, error) {
 		s.RemoveService(svc.Name)
 		return nil, err
 	}
-	s.note("service.added", "service "+svc.Name, "on %s, %d to %d replicas of %s, idle %s, state %s", portList(svc.Ports), svc.Min, svc.Max,
-		svc.Template, time.Duration(svc.Idle), svc.State)
+	s.note("service.added", "service "+svc.Name, "on %s, %d to %d replicas of %s, idle %s, state %s%s", portList(svc.Ports), svc.Min, svc.Max,
+		svc.Template, time.Duration(svc.Idle), svc.State, svc.Health.describe())
 	return s.ServiceStatus(svc.Name)
 }
 
@@ -314,8 +336,9 @@ func (s *Server) pickReplica(name string) (*Machine, error) {
 	s.mu.Lock()
 	svc, ok := s.st.Services[name]
 	var conc, maxN int
+	var health *Health
 	if ok {
-		conc, maxN = svc.Concurrency, svc.Max
+		conc, maxN, health = svc.Concurrency, svc.Max, svc.Health
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -325,9 +348,10 @@ func (s *Server) pickReplica(name string) (*Machine, error) {
 		all := s.replicas(name)
 		s.svc.mu.Lock()
 		defer s.svc.mu.Unlock()
+		// Neither one being stopped nor one out of service (it doesn't count towards Max either)
 		var rs []Machine
 		for _, m := range all {
-			if a := s.svc.activity[m.Name]; a == nil || !a.stopping {
+			if a := s.svc.activity[m.Name]; (a == nil || !a.stopping) && !s.outLocked(m.Name) {
 				rs = append(rs, m)
 			}
 		}
@@ -355,20 +379,24 @@ func (s *Server) pickReplica(name string) (*Machine, error) {
 		return &least, true
 	}
 	if m, ok := pick(); ok {
+		s.waitReady(health, m.Name)
 		return m, nil
 	}
 	// Room for another: one start at a time, then look again (another may have started it)
 	lock := s.startLock(name)
 	lock.Lock()
-	defer lock.Unlock()
-	if m, ok := pick(); ok {
-		return m, nil
+	m, ok := pick()
+	if !ok {
+		var err error
+		if m, err = s.startReplica(name, false); err != nil {
+			lock.Unlock()
+			return nil, err
+		}
+		s.touch(m.Name, 1)
 	}
-	m, err := s.startReplica(name, false)
-	if err != nil {
-		return nil, err
-	}
-	s.touch(m.Name, 1)
+	lock.Unlock()
+	// (Claimed: the scaler leaves it be while it is waited for)
+	s.waitReady(health, m.Name)
 	return m, nil
 }
 
@@ -386,13 +414,14 @@ func (s *Server) startLock(name string) *sync.Mutex {
 	return lock
 }
 
-// topUp starts replicas of a service until it has min, counting them under its start lock.
-// noWait: a start that doesn't fit the memory budget is refused at once (the scaler's).
+// topUp starts replicas of a service until it has min in service, counting them under its start
+// lock. noWait: a start that doesn't fit the memory budget is refused at once (the scaler's).
 func (s *Server) topUp(name string, min int, noWait bool) error {
 	lock := s.startLock(name)
 	lock.Lock()
 	defer lock.Unlock()
-	for running := len(s.replicas(name)); running < min; running++ {
+	in, _ := s.inService(s.replicas(name))
+	for running := len(in); running < min; running++ {
 		if _, err := s.startReplica(name, noWait); err != nil {
 			return err
 		}
@@ -406,7 +435,9 @@ func (s *Server) startReplica(name string, noWait bool) (*Machine, error) {
 	s.mu.Lock()
 	svc, ok := s.st.Services[name]
 	var req Up
+	var cur Service
 	if ok {
+		cur = *svc
 		req = Up{Template: svc.Template, Name: randomName(name), Labels: map[string]string{serviceLabel: name}, noWait: noWait}
 		// A replica is of its service's fleet and instance: its instance's links are its own
 		for _, k := range []string{"snowglobe.fleet", InstanceLabel} {
@@ -422,15 +453,24 @@ func (s *Server) startReplica(name string, noWait bool) (*Machine, error) {
 	if !ok {
 		return nil, errStatus(404, "no service called %s", name)
 	}
+	fresh := req.Snapshot != "" && s.startsFresh(name)
+	if fresh {
+		// Its last save failed its check as well: from the template this time
+		req.Snapshot = ""
+	}
 	begun := time.Now()
 	m, err := s.Up(req)
 	if err != nil {
 		return nil, fmt.Errorf("service %s: a replica: %w", name, err)
 	}
 	s.touch(m.Name, 0)
+	s.watch(cur, *m)
 	from := "its template"
-	if req.Snapshot != "" {
+	switch {
+	case req.Snapshot != "":
 		from = "its last state"
+	case fresh:
+		from = "its template (its last state failed its health check)"
 	}
 	s.note("service.replica_up", "service "+name, "replica %s up from %s in %d ms", m.Name, from, time.Since(begun).Milliseconds())
 	return m, nil
@@ -456,7 +496,11 @@ func (s *Server) scale() {
 	}
 	s.mu.Unlock()
 	for _, svc := range svcs {
-		rs := s.replicas(svc.Name)
+		rs, out := s.inService(s.replicas(svc.Name))
+		// Out of service (drained): stopped once idle, whatever the minimum (it isn't counted)
+		for _, m := range out {
+			s.stopReplica(svc, m, false)
+		}
 		running := len(rs)
 		for _, m := range rs {
 			if running <= svc.Min {
@@ -497,7 +541,9 @@ func (s *Server) stopReplica(svc Service, m Machine, force bool) bool {
 	if !s.markStopping(m.Name, idle, force, true) {
 		return false
 	}
-	if svc.State == "keep" {
+	// One that failed its health check is not saved: the next starts from the last good save
+	unsaved := s.unsaved(m.Name)
+	if svc.State == "keep" && !unsaved {
 		snap, err := s.Snapshot(m.Name, randomName(svc.Name+"-state"))
 		if err != nil {
 			// Not stopped: its state would be lost
@@ -525,10 +571,12 @@ func (s *Server) stopReplica(svc Service, m Machine, force bool) bool {
 		}
 	}
 	s.RemoveMachine(m.Name)
-	s.svc.mu.Lock()
-	delete(s.svc.activity, m.Name)
-	s.svc.mu.Unlock()
-	s.note("service.replica_stopped", "service "+svc.Name, "replica %s stopped, idle %s", m.Name, time.Duration(svc.Idle))
+	s.forget(m.Name)
+	if unsaved {
+		s.note("service.replica_stopped", "service "+svc.Name, "replica %s stopped, unsaved: it failed its health check", m.Name)
+	} else {
+		s.note("service.replica_stopped", "service "+svc.Name, "replica %s stopped, idle %s", m.Name, time.Duration(svc.Idle))
+	}
 	return true
 }
 
@@ -544,6 +592,7 @@ func (s *Server) scaler(ctx context.Context) {
 			return
 		case <-t.C:
 			s.scale()
+			s.probe()
 			s.lifecycle()
 		}
 	}
@@ -568,12 +617,11 @@ func (s *Server) RemoveService(name string) error {
 	lock.Lock()
 	for _, m := range s.replicas(name) {
 		s.RemoveMachine(m.Name)
-		s.svc.mu.Lock()
-		delete(s.svc.activity, m.Name)
-		s.svc.mu.Unlock()
+		s.forget(m.Name)
 	}
 	s.svc.mu.Lock()
 	delete(s.svc.starting, name)
+	delete(s.svc.heals, name)
 	s.svc.mu.Unlock()
 	lock.Unlock()
 	// (Read once its replicas are gone: a save before a stop updated it until it was forgotten)
@@ -607,8 +655,19 @@ func (s *Server) ServiceStatus(name string) (*ServiceStatus, error) {
 		if a := s.svc.activity[m.Name]; a != nil {
 			r.Active, r.Last = a.active, a.last
 		}
+		if h := s.svc.health[m.Name]; h != nil && st.Health != nil {
+			rh := h.ReplicaHealth
+			r.Health = &rh
+		}
 		s.svc.mu.Unlock()
 		st.Replicas = append(st.Replicas, r)
+	}
+	if st.Health != nil {
+		s.svc.mu.Lock()
+		h := s.svc.heals[name]
+		degraded := h != nil && h.degraded
+		s.svc.mu.Unlock()
+		st.ServiceHealth = serviceHealth(st.Replicas, degraded)
 	}
 	return &st, nil
 }

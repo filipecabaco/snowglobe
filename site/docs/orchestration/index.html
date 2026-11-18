@@ -122,6 +122,54 @@ snowglobe service rm web</pre>
           <p>Made of a snapshot whose server was already listening, a service at zero answers its first request in
             about 20 ms.</p>
 
+          <h2 class="h3" id="health">Health checks and healing</h2>
+          <p>A machine whose process died is already noticed and dropped, and a service under its <code>--min</code>
+            starts another. A health check catches what is still running but broken: a server that hangs, or one
+            that answers every request with a 500. Each running replica is checked in one of two ways. An HTTP GET
+            to a guest port passes when the answer's status is in range: a port that only accepts connections
+            doesn't pass. A command in the guest passes when it exits 0.</p>
+          <pre>snowglobe service add api --template api-ready -p 8080:8000 --health-http 8000/healthz
+snowglobe service add db --template pg --state keep --health-cmd 'pg_isready -q' --heal hook --heal-cmd 'pg_ctl restart'
+snowglobe service ls                              <span class="dim"># HEALTH: starting, healthy, unhealthy, idle or degraded</span></pre>
+          <pre>[services.api.health]
+interval = "10s"     <span class="dim"># how often each replica is checked</span>
+timeout = "2s"
+failures = 3         <span class="dim"># failed checks in a row that make it unhealthy</span>
+grace = "30s"        <span class="dim"># after it starts, failures don't count yet</span>
+heal = "replace"     <span class="dim"># or drain, hook (with heal_cmd), none</span>
+drain = "30s"        <span class="dim"># time for open connections to end before it is stopped</span>
+wait_ready = false
+
+[services.api.health.http]
+port = 8000
+path = "/healthz"
+status = "200-399"   <span class="dim"># or a list: "200,204"</span></pre>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th scope="col">heal</th><th scope="col">What happens to an unhealthy replica</th></tr></thead>
+              <tbody>
+                <tr><td><code>replace</code></td><td>the default: taken out of service (nothing new goes to it, and it no longer counts towards <code>max</code>), given <code>drain</code> for its connections to end, then stopped. If the service is below <code>min</code> without it, another starts at once; otherwise the next connection starts one</td></tr>
+                <tr><td><code>drain</code></td><td>taken out of service and kept as it is, for you to look at (<code>snowglobe sh</code> its machine); it stops once it has been idle for <code>idle</code></td></tr>
+                <tr><td><code>hook</code></td><td>runs <code>heal_cmd</code> in the guest (restart the app, say) and checks it again from the start. If it is unhealthy again, it is replaced</td></tr>
+                <tr><td><code>none</code></td><td>only reported: the event and its health. Connections still go to it</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Checks never get in the way of scale to zero. A service at zero has nothing to check and isn't woken.
+            A check doesn't count as use, so a healthy replica with no traffic still stops after <code>idle</code>.
+            A replica that is being stopped, or is about to stop for being idle, isn't checked. A replica that failed
+            its check is never saved: with <code>state = "keep"</code>, the next one starts from the last good save,
+            and from the template if that one fails too.</p>
+          <p>Heals are spaced out. Each heal of a service waits twice as long as the last one, starting at
+            <code>interval</code> and capped at 5 minutes, so a dependency that every replica shares can't make the
+            service replace them all at once. After 5 heals in a row with no replica passing a check, healing stops
+            and the service is <code>degraded</code> until one passes. <code>wait_ready</code> holds a new
+            replica's first connection until it passes a check (up to <code>grace</code>). It is off by default
+            because it adds the first check's time to every start from zero. Events: <code>service.replica_healthy</code>,
+            <code>service.replica_unhealthy</code>, <code>service.replica_healing</code>,
+            <code>service.replica_draining</code>, <code>service.replica_drained</code>,
+            <code>service.replica_replaced</code>, <code>service.degraded</code>, <code>service.healthy</code>.</p>
+
           <h2 class="h3" id="fleets">Fleets: snowglobe apply</h2>
           <p>A <code>snowglobe.toml</code> says what the daemon should have, and <code>snowglobe apply</code> gets it
             there. One file goes from source to running services. It can hold:</p>

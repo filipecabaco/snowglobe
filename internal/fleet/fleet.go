@@ -33,6 +33,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/filipecabaco/snowglobe/internal/daemon"
 )
 
 // The labels a fleet puts on what it makes
@@ -166,6 +168,43 @@ type ServiceSpec struct {
 	Concurrency int               `toml:"concurrency" json:"concurrency,omitempty"`
 	State       string            `toml:"state" json:"state,omitempty"`
 	Labels      map[string]string `toml:"labels" json:"labels,omitempty"`
+	// How its replicas are checked, and what is done with one that fails
+	Health *HealthSpec `toml:"health" json:"health,omitempty"`
+}
+
+// HealthSpec is a service's health check ([services.NAME.health]): one of http or cmd.
+type HealthSpec struct {
+	HTTP      *HTTPSpec `toml:"http" json:"http,omitempty"`
+	Cmd       string    `toml:"cmd" json:"cmd,omitempty"`
+	Interval  string    `toml:"interval" json:"interval,omitempty"`
+	Timeout   string    `toml:"timeout" json:"timeout,omitempty"`
+	Failures  int       `toml:"failures" json:"failures,omitempty"`
+	Grace     string    `toml:"grace" json:"grace,omitempty"`
+	Heal      string    `toml:"heal" json:"heal,omitempty"`
+	HealCmd   string    `toml:"heal_cmd" json:"heal_cmd,omitempty"`
+	Drain     string    `toml:"drain" json:"drain,omitempty"`
+	WaitReady bool      `toml:"wait_ready" json:"wait_ready,omitempty"`
+}
+
+// HTTPSpec is a health check's GET: of path on guest port, answered with a status in status
+// ("200-399" by default, or a list: "200,204").
+type HTTPSpec struct {
+	Port   int    `toml:"port" json:"port"`
+	Path   string `toml:"path" json:"path,omitempty"`
+	Status string `toml:"status" json:"status,omitempty"`
+}
+
+// health is the daemon's health check for a spec (nil without one).
+func (h *HealthSpec) health() *daemon.Health {
+	if h == nil {
+		return nil
+	}
+	out := &daemon.Health{Cmd: h.Cmd, Interval: durationOf(h.Interval), Timeout: durationOf(h.Timeout), Failures: h.Failures,
+		Grace: durationOf(h.Grace), Heal: h.Heal, HealCmd: h.HealCmd, Drain: durationOf(h.Drain), WaitReady: h.WaitReady}
+	if h.HTTP != nil {
+		out.HTTP = &daemon.HTTPCheck{Port: h.HTTP.Port, Path: h.HTTP.Path, Status: h.HTTP.Status}
+	}
+	return out
 }
 
 // MachineSpec is Count machines of a template (named NAME, or NAME-1 to NAME-Count).
@@ -330,6 +369,14 @@ func (f *File) check() error {
 			bad("service %s: no template %s in the file", n, s.Template)
 		}
 		duration("service "+n+": idle", s.Idle)
+		if h := s.Health; h != nil {
+			for what, v := range map[string]string{"interval": h.Interval, "timeout": h.Timeout, "grace": h.Grace, "drain": h.Drain} {
+				duration("service "+n+": health: "+what, v)
+			}
+			if err := daemon.CheckHealth(h.health()); err != nil {
+				bad("service %s: %v", n, err)
+			}
+		}
 	}
 	for n, m := range f.Machines {
 		name("machine", n)

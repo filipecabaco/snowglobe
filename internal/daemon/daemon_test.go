@@ -227,6 +227,29 @@ func fakeMachine(sock string) {
 		switch req["mode"] {
 		case "job":
 			sleepFor(req)
+			// Health checks: "check" fails while SOCK.fail is there, "heal" takes it (and
+			// SOCK.status) away. Neither counts as a job
+			switch req["cmd"] {
+			case "check":
+				status := 0
+				if _, err := os.Stat(sock + ".fail"); err == nil {
+					status = 1
+				}
+				os.WriteFile(sock+".checks", fmt.Append(nil, time.Now().UnixNano()), 0o600)
+				send(c, control.JobResult{Status: &status, Output: []byte("checked\n")})
+				c.Close()
+				continue
+			case "false":
+				send(c, control.JobResult{Status: new(1), Output: []byte("no\n")})
+				c.Close()
+				continue
+			case "heal":
+				os.Remove(sock + ".fail")
+				os.Remove(sock + ".status")
+				send(c, control.JobResult{Status: new(int), Output: []byte("healed\n")})
+				c.Close()
+				continue
+			}
 			jobs++
 			send(c, control.JobResult{Status: new(int), Output: fmt.Appendf(nil, "%s: %d\n", req["cmd"], jobs)})
 			c.Close()
@@ -251,6 +274,23 @@ func fakeMachine(sock string) {
 			c.Close()
 		case "connect":
 			send(c, map[string]any{"connected": req["port"]})
+			if port, _ := req["port"].(float64); port == 8080 {
+				// An HTTP server: every answer the status in SOCK.status (200 without it)
+				go func() {
+					defer c.Close()
+					_, err := http.ReadRequest(r)
+					if err != nil {
+						return
+					}
+					status := 200
+					if data, err := os.ReadFile(sock + ".status"); err == nil {
+						fmt.Sscan(string(data), &status)
+					}
+					os.WriteFile(sock+".checks", fmt.Append(nil, time.Now().UnixNano()), 0o600)
+					fmt.Fprintf(c, "HTTP/1.1 %d %s\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok", status, http.StatusText(status))
+				}()
+				continue
+			}
 			go func() { io.Copy(c, r); c.Close() }()
 		case "attach":
 			// The screen, then what is typed in, echoed

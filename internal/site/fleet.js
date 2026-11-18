@@ -464,7 +464,7 @@
   const KEYS = {
     templates: { applied: ["site", "build", "snapshot", "network"], said: ["idle", "max_machines", "allow_private", "egress", "expose"] },
     snapshots: { applied: ["template", "run", "ready", "timeout"], said: [] },
-    services: { applied: ["template", "ports"], said: ["min", "max", "idle", "concurrency", "state", "labels"] },
+    services: { applied: ["template", "ports"], said: ["min", "max", "idle", "concurrency", "state", "labels", "health"] },
     machines: { applied: ["template"], said: ["count", "ports", "ttl", "labels"] },
     links: { applied: ["from", "to", "port", "as", "as_port"], said: [] },
   };

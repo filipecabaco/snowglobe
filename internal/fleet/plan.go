@@ -539,7 +539,7 @@ func (p *Plan) create(api API, build Builder, o Object, logf func(string, ...any
 			ports = append(ports, port)
 		}
 		_, err := api.AddService(daemon.Service{Name: p.names(o)[0], Template: s.Template, Ports: ports, Min: s.Min, Max: s.Max,
-			Idle: durationOf(s.Idle), Concurrency: s.Concurrency, State: s.State, Labels: p.labels(o, s.Labels)})
+			Idle: durationOf(s.Idle), Concurrency: s.Concurrency, State: s.State, Health: s.Health.health(), Labels: p.labels(o, s.Labels)})
 		return err
 	case LinkSpec:
 		l := daemon.Link{Name: p.names(o)[0], Port: s.Port, As: s.As, AsPort: s.AsPort, Labels: p.labels(o, nil)}

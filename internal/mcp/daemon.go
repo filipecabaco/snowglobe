@@ -131,6 +131,7 @@ var daemonTools = []map[string]any{
 		"name": str("Its name"), "template": str("The template (its site needs a network)"), "ports": strs("[IP:]HOST:GUEST"),
 		"min": num("Replicas kept running (0: scale to zero)"), "max": num("Most replicas (default 1)"), "idle": str("Stop a replica idle this long, e.g. 5m"),
 		"concurrency": num("Connections a replica takes before another starts"), "state": str("discard (default) or keep: carry a replica's state across zero"), "labels": labels(),
+		"health": map[string]any{"type": "object", "description": "A health check on each running replica (never wakes a service at zero, never keeps one from stopping): http {port, path, status \"200-399\"} or cmd (exit 0); interval (10s), timeout (2s), failures (3), grace (30s); heal: replace (default), drain, hook (runs heal_cmd first) or none; drain (30s): time for connections to end; wait_ready: hold a new replica's first connection until it passes"},
 	}, "name", "template", "ports")),
 	tool("remove_service", "Remove a service and its replicas.", obj(map[string]any{"name": str("The service")}, "name")),
 	tool("build", "Build a site from a Dockerfile directory on the daemon's host (full path), an image reference, or a Dockerfile's text, and make it a template. Waits for it unless wait is false.", obj(map[string]any{
@@ -346,6 +347,13 @@ func (d *Daemon) do(name string, a args) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		var health *daemon.Health
+		if h, ok := a["health"]; ok && h != nil {
+			data, _ := json.Marshal(h)
+			if err := json.Unmarshal(data, &health); err != nil {
+				return "", fmt.Errorf("health: %v", err)
+			}
+		}
 		var ports []daemon.Port
 		for _, p := range a.strs("ports") {
 			port, err := daemon.ParsePort(p)
@@ -355,7 +363,7 @@ func (d *Daemon) do(name string, a args) (string, error) {
 			ports = append(ports, port)
 		}
 		v, err := api.AddService(daemon.Service{Name: a.str("name"), Template: a.str("template"), Ports: ports, Min: int(a.num("min")), Max: int(a.num("max")),
-			Idle: idle, Concurrency: int(a.num("concurrency")), State: a.str("state"), Labels: a.labels("labels")})
+			Idle: idle, Concurrency: int(a.num("concurrency")), State: a.str("state"), Labels: a.labels("labels"), Health: health})
 		return asJSON(v), err
 	case "remove_service":
 		return "removed service " + a.str("name"), api.RemoveService(a.str("name"))
