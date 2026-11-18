@@ -85,11 +85,13 @@ https://filipecabaco.github.io/snowglobe/fleet/ reads the file in the page and t
 | one site | ONE machine: every entry on that site shares its files and processes |
 | `[links.*]` | real; both ends need a network; a machine reads its links when it wakes |
 | `[services.*]` ports | first guest port only, shown in a frame; the host port is not opened |
-| `min`, `max`, `idle`, `concurrency`, `health`; `ttl`; `egress`; `network.mode` | read, not applied (one instance; a machine's network is what its site was built with) |
+| `health` (services, machines, templates) | applied once a step is done: never wakes a sleeping machine; `replace` = the machine from its image and its steps run again; `hook` then check again; `drain` only reports; degraded after 5 heals; `wait_ready` holds the service step |
+| `[supervisors.*]` | applied as the daemon does (strategies, restart types, intensity, escalation, a Restart button when degraded); a child restarts by its machine starting from its image, so children of one site restart together |
+| `min`, `max`, `idle`, `concurrency`; `ttl`; `egress`; `network.mode`; labels | read, not applied (one instance; a machine's network is what its site was built with) |
 
 - A link from a machine to itself, or between two entries on the same site, is refused.
 - The page prints a note for each key it reads but does not apply; read them before trusting a result.
 - Link transport in the tab (HTTP on 80/443, raw TCP and WebSockets elsewhere): snowglobe-networking.
-- Natively, none of those limits apply: scale, health checks, ttl, egress and modes are enforced by the daemon.
+- Natively, none of those limits apply: scale, ttl, egress and modes are enforced by the daemon, and a heal or restart replaces one replica, not a whole site.
 
 More: https://filipecabaco.github.io/snowglobe/docs/orchestration/ and the "Fleets" and "The fleet page" sections of https://filipecabaco.github.io/snowglobe/llms.txt

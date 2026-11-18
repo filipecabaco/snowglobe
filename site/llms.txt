@@ -592,7 +592,15 @@ connection keeps `to` awake; either machine ending closes the connection). WebSo
 `new WebSocket("<page>/preview/<machine>/<port>/…")`: the service worker can't see WebSockets, so `preview-hook.js` replaces
 `WebSocket` in the preview's pages with a proxy that passes the socket to the page (up to 32 at once, while the preview is open),
 which runs `ws-client.js` into the machine. UDP is not carried.
-Scale (`min`, `max`, `idle`), `ttl`, `egress` and `network.mode` are read, not applied. The page's example is
+Health checks (`[services.N.health]`, `[machines.N.health]`, a template's) run in the tab once a step is done, with the
+daemon's defaults and rules. A check never wakes a sleeping machine and isn't use (orchestrator.js `healthCheck`). `replace`
+starts the machine from its image and runs its steps again, `hook` runs `heal_cmd` and checks again, and `drain` only
+reports (one machine, nothing to take out of service). After 5 heals in a row with no check passing, the step is degraded.
+`wait_ready` holds a service's step until it passes. `[supervisors.N]` restart their children as the daemon's do
+(strategies, restart types, `max_restarts` in `max_seconds`; a nested one that gives up fails its parent, and a top-level
+one is degraded until its Restart button). A child is restarted by starting its machine from its image and running that
+machine's steps again, so children of one site restart together. A supervised machine that stops by itself has ended.
+Scale (`min`, `max`, `idle`), `ttl`, `egress`, labels and `network.mode` are read, not applied. The page's example is
 `examples/fleet/snowglobe.toml`, which `snowglobe apply` runs for real too: a Supabase machine gets a row a second, and a node machine
 subscribes to the table with supabase-js over Supabase Realtime (a WebSocket, at `supabase.internal:54321`) and draws what it hears.
 

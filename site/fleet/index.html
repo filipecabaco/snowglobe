@@ -95,6 +95,14 @@
     .step-head .step-sum { flex: 1; color: var(--ink-2); min-width: 0; }
     .step-state { margin: 6px 0 0 18px; color: var(--ink-2); font-size: 14px; }
     .step-state.bad { color: var(--signal); }
+    .step-health { margin: 4px 0 0 18px; color: var(--ink-2); font-size: 13px; }
+    .step-health.bad { color: var(--signal); }
+    ul.sups > li { padding: 8px 0; border-top: 1px solid var(--rule); }
+    ul.sups > li:first-child { border-top: 0; }
+    ul.sups .sup-head { display: flex; gap: 8px; align-items: baseline; }
+    ul.sups .sup-head .grow { flex: 1; color: var(--ink-2); font-size: 13px; }
+    ul.sups p { margin: 4px 0 0; color: var(--ink-2); font-size: 13px; }
+    ul.sups p.bad { color: var(--signal); }
     .step-out { margin: 6px 0 0 18px; padding: 8px 10px; max-height: 180px; overflow: auto; font: 12px/1.45 var(--mono, ui-monospace, monospace); border: 1px solid var(--rule); border-radius: 6px; white-space: pre-wrap; }
     .problems { margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--signal); border-radius: 8px; }
     .problems li { margin: 2px 0; }
@@ -166,6 +174,11 @@
           </figure>
           <p id="fleet-plan-empty" class="lede" hidden></p>
           <ol id="fleet-steps" class="steps"></ol>
+
+          <div class="sub" id="fleet-sups-box" hidden>
+            <h2>Supervisors</h2>
+            <ul id="fleet-sups" class="plain sups"></ul>
+          </div>
 
           <details class="sub" id="fleet-notes-box" hidden>
             <summary>Not applied here <span id="fleet-notes-count"></span></summary>

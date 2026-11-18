@@ -769,23 +769,299 @@ test('run: a machine that stops answering fails the step at its deadline rather 
   assert.match(s.error, /not ready after 120s/);
 });
 
-test('format: a service health check is read and said, not applied: a page has no daemon to heal with', () => {
-  const file = F.parse(`[templates.a]
+test('format: a health check\'s keys are Go\'s', () => {
+  const go = goKeys();
+  assert.deepEqual([...F.HEALTH_KEYS].sort(), [...go.HealthSpec].sort());
+  assert.deepEqual([...F.HTTP_KEYS].sort(), [...go.HTTPSpec].sort());
+});
+
+const healthFile = `[templates.a]
 site = "python"
+[templates.a.health]
+cmd = "true"
+heal = "replace"
+[templates.b]
+site = "web"
 [services.s]
 template = "a"
-ports = ["80:80"]
-[services.s.health]
-interval = "10s"
-heal = "replace"
-[services.s.health.http]
+ports = ["80:8000"]
+[machines.m]
+template = "a"
+[machines.n]
+template = "b"
+[machines.n.health]
+interval = "5s"
+heal = "hook"
+heal_cmd = "restart-it"
+[machines.n.health.http]
 port = 8080
 path = "/healthz"
-status = "200-299"
-`);
-  assert.deepEqual({ ...file.services.s.health.http }, { port: 8080, path: '/healthz', status: '200-299' });
-  const p = F.plan(file, runtimes);
+status = "200,204"
+`;
+
+test('plan: health checks are applied, with the daemon\'s defaults, and a template\'s is its services\' and machines\'', () => {
+  const p = F.plan(F.parse(healthFile), runtimes);
   assert.deepEqual(p.problems, []);
-  assert.ok(p.notes.includes("services.s: health isn't applied"), p.notes.join('\n'));
-  assert.equal(p.steps.filter((s) => s.kind === 'service').length, 1);
+  const by = Object.fromEntries(p.steps.map((s) => [s.key, s]));
+  assert.deepEqual(by['service/s'].health, { http: null, cmd: 'true', intervalMs: 10000, timeoutMs: 2000, failures: 3, graceMs: 30000, heal: 'replace', healCmd: null, drainMs: 30000, waitReady: false });
+  assert.equal(by['machine/m'].health.heal, 'none', 'a machine heals by none or hook: its template\'s replace is for its services');
+  assert.deepEqual(by['machine/n'].health.http, { port: 8080, path: '/healthz', status: '200,204', ranges: [[200, 200], [204, 204]] });
+  assert.equal(by['machine/n'].health.timeoutMs, 2000);
+  assert.match(by['service/s'].summary, /checked by `true` every 10s/);
+  assert.match(by['machine/n'].summary, /GET :8080\/healthz \(200,204\) every 5s/);
+  assert.ok(!p.notes.some((n) => /health/.test(n)), p.notes.join('\n'));
+});
+
+test('plan: a health check the daemon refuses is a problem here', () => {
+  const svc = (h) => `[templates.a]\nsite = "python"\n[services.s]\ntemplate = "a"\nports = ["80:80"]\n[services.s.health]\n${h}\n`;
+  const mach = (h) => `[templates.a]\nsite = "python"\n[machines.m]\ntemplate = "a"\n[machines.m.health]\n${h}\n`;
+  for (const [file, want] of [
+    [svc(''), /one of http or cmd/],
+    [svc('cmd = "x"\n[services.s.health.http]\nport = 80'), /one of http or cmd/],
+    [svc('cmd = "x"\ninterval = "500ms"'), /interval 500ms: 1s or more/],
+    [svc('cmd = "x"\ninterval = "5s"\ntimeout = "6s"'), /timeout "6s": more than 0 and at most the interval \(5s\)/],
+    [svc('cmd = "x"\nheal = "hook"'), /needs heal_cmd/],
+    [svc('cmd = "x"\nheal = "reboot"'), /heal "reboot": none, drain, hook or replace/],
+    [svc('cmd = "x"\nretries = 2'), /health: unknown key retries/],
+    [svc('[services.s.health.http]\nport = 80\nstatus = "200-700"'), /codes \(100 to 599\)/],
+    [mach('cmd = "x"\nheal = "replace"'), /a machine heals by none or hook; put it under a supervisor/],
+    [`[templates.a]\nsite = "duckdb"\n[machines.m]\ntemplate = "a"\n[machines.m.health.http]\nport = 80`, /no network device on the page, so its HTTP check can't reach it/],
+  ]) {
+    const p = F.plan(F.parse(file), runtimes);
+    assert.match(p.problems.map((x) => x.message).join('\n'), want, file);
+  }
+  const drain = F.plan(F.parse(svc('cmd = "x"\nheal = "drain"')), runtimes);
+  assert.ok(drain.notes.some((n) => /heal drain only reports here/.test(n)));
+});
+
+const supFile = `[templates.db]
+site = "supabase"
+[templates.app]
+site = "python"
+[templates.web]
+site = "web"
+[machines.db]
+template = "db"
+[machines.db.health]
+cmd = "pg_isready"
+[services.app]
+template = "app"
+ports = ["80:8000"]
+[services.app.health]
+cmd = "app-ok"
+[machines.web]
+template = "web"
+[supervisors.inner]
+strategy = "rest_for_one"
+children = ["db", "app"]
+[supervisors.top]
+strategy = "one_for_all"
+children = ["inner", "web"]
+max_restarts = 1
+max_seconds = "30s"
+[supervisors.top.restart]
+web = "temporary"
+`;
+
+test('plan: supervisors are applied: their children\'s steps, restart types and nesting', () => {
+  const p = F.plan(F.parse(supFile), runtimes);
+  assert.deepEqual(p.problems, []);
+  const by = Object.fromEntries(p.supervisors.map((s) => [s.name, s]));
+  assert.deepEqual(by.inner.children.map((c) => [c.kind, c.key, c.restart]), [['machine', 'machine/db', 'permanent'], ['service', 'service/app', 'permanent']]);
+  assert.equal(by.inner.parent, 'top');
+  assert.equal(by.inner.maxRestarts, 3);
+  assert.equal(by.inner.maxMs, 60000);
+  assert.deepEqual(by.top.children.map((c) => [c.key, c.restart]), [['supervisor/inner', 'permanent'], ['machine/web', 'temporary']]);
+  assert.equal(by.top.maxRestarts, 1);
+  assert.equal(by.top.maxMs, 30000);
+  assert.equal(p.steps.find((s) => s.key === 'service/app').supervisor, 'inner');
+  assert.equal(p.steps.find((s) => s.key === 'machine/web').supervisor, 'top');
+  assert.ok(!p.notes.some((n) => /supervisors/.test(n)), p.notes.join('\n'));
+});
+
+test('plan: a supervisor the CLI refuses is a problem here, and one whose child can\'t run is left out', () => {
+  const base = '[templates.a]\nsite = "python"\n[machines.m]\ntemplate = "a"\n[machines.k]\ntemplate = "a"\n';
+  for (const [sup, want] of [
+    ['[supervisors.s]\nchildren = ["nope"]', /child nope: no service, machine or supervisor/],
+    ['[supervisors.s]\nchildren = ["m", "m"]', /child m twice/],
+    ['[supervisors.s]\nchildren = []', /children: at least one/],
+    ['[supervisors.s]\nchildren = ["m"]\nstrategy = "all_for_none"', /strategy "all_for_none"/],
+    ['[supervisors.s]\nchildren = ["m"]\n[supervisors.s.restart]\nk = "temporary"', /restart k: not one of its children/],
+    ['[supervisors.s]\nchildren = ["m"]\n[supervisors.s.restart]\nm = "sometimes"', /permanent, transient or temporary/],
+    ['[supervisors.s]\nchildren = ["m"]\n[supervisors.t]\nchildren = ["m"]', /child m is a child of supervisor s too/],
+    ['[supervisors.s]\nchildren = ["t"]\n[supervisors.t]\nchildren = ["s"]', /go round in a circle/],
+    ['[supervisors.m]\nchildren = ["k"]', /a machine has that name/],
+  ]) {
+    const p = F.plan(F.parse(base + sup), runtimes);
+    assert.match(p.problems.map((x) => x.message).join('\n'), want, sup);
+  }
+  const p = F.plan(F.parse('[templates.a]\nsite = "nowhere"\n[machines.m]\ntemplate = "a"\n[supervisors.s]\nchildren = ["m"]'), runtimes);
+  assert.ok(p.problems.some((x) => x.where === 'supervisors.s' && /machine m can't run here/.test(x.message)));
+  assert.deepEqual(p.supervisors, []);
+  const shared = F.plan(F.parse(base + '[supervisors.s]\nchildren = ["m", "k"]'), runtimes);
+  assert.ok(shared.notes.includes('supervisors.s: m, k run in python, so restarting one restarts them all'));
+});
+
+/** A run over the stand-in orchestrator with a clock of its own, health checks answered by `checks`
+ *  (runtime → { exit } / { status } / null), and the machines started fresh logged. */
+function healthRun(text, { checks = () => ({ exit: 0 }), status = () => 'awake' } = {}) {
+  const api = fakeApi();
+  let t = 0;
+  api.healthCheck = async (req) => { api.log.push(`check ${req.runtime}`); const r = checks(req); return r && { last: r.exit !== undefined ? `exit ${r.exit}` : `HTTP ${r.status}`, ...r }; };
+  api.startFresh = async (rt) => { api.log.push(`fresh ${rt}`); return true; };
+  api.status = async (rt) => ({ state: status(rt) });
+  const p = F.plan(F.parse(text), runtimes);
+  assert.deepEqual(p.problems, []);
+  const run = F.createRun(api, p, { ...fast, now: () => t });
+  return { api, run, plan: p, at: (ms) => { t = ms; }, later: (ms) => { t += ms; } };
+}
+const svcHealth = (h) => `[templates.a]\nsite = "python"\n[services.s]\ntemplate = "a"\nports = ["80:8000"]\n[services.s.health]\ninterval = "1s"\n${/grace/.test(h) ? '' : 'grace = "5s"\n'}${h}\n`;
+
+test('run: a check that fails within its grace doesn\'t count; after it, failures in a row make it unhealthy and it is replaced', async () => {
+  let ok = true;
+  const r = healthRun(svcHealth('cmd = "ok"'), { checks: () => ({ exit: ok ? 0 : 1 }) });
+  assert.equal(await r.run.runAll(), true);
+  assert.equal(r.run.health('service/s').state, 'starting');
+  ok = false;
+  for (let i = 0; i < 4; i++) { r.later(1000); await r.run.tick(); }
+  assert.equal(r.run.health('service/s').state, 'starting', 'within its grace a failed check doesn\'t count');
+  assert.equal(r.run.health('service/s').failures, 0);
+  for (let i = 0; i < 2; i++) { r.later(1000); await r.run.tick(); }
+  assert.equal(r.run.health('service/s').failures, 2);
+  r.api.log.length = 0;
+  r.later(1000); await r.run.tick();
+  ok = true; // the restart brings it back
+  assert.deepEqual(r.api.log.filter((l) => !l.startsWith('check')), ['fresh python', 'preview python:8000 (fleet)'], 'started from its image, its steps run again');
+  assert.equal(r.run.health('service/s').state, 'starting', 'checked over again, from a new grace');
+  assert.equal(r.run.health('service/s').heals, 1);
+  r.later(1000); await r.run.tick();
+  assert.equal(r.run.health('service/s').state, 'healthy');
+  assert.equal(r.run.health('service/s').heals, 0, 'a passed check ends the heals in a row');
+});
+
+test('run: a check never wakes a machine: asleep, it isn\'t checked', async () => {
+  const r = healthRun(svcHealth('cmd = "ok"'), { checks: () => null });
+  await r.run.runAll();
+  for (let i = 0; i < 20; i++) { r.later(1000); await r.run.tick(); }
+  assert.equal(r.run.health('service/s').state, 'starting');
+  assert.ok(!r.api.log.some((l) => l.startsWith('fresh')));
+});
+
+test('run: an HTTP check passes on a status in its range', async () => {
+  let status = 204;
+  const r = healthRun(svcHealth('[services.s.health.http]\nport = 8000\nstatus = "200,204"'), { checks: () => ({ status }) });
+  await r.run.runAll();
+  r.later(1000); await r.run.tick();
+  assert.equal(r.run.health('service/s').state, 'healthy');
+  status = 500;
+  r.later(6000);
+  for (let i = 0; i < 3; i++) { r.later(1000); await r.run.tick(); }
+  assert.ok(['healing', 'starting', 'unhealthy'].includes(r.run.health('service/s').state));
+  assert.ok(r.api.log.includes('fresh python'));
+});
+
+test('run: hook runs heal_cmd and checks again; unhealthy again, a service is replaced and a machine reports', async () => {
+  const r = healthRun(svcHealth('cmd = "ok"\nfailures = 1\nheal = "hook"\nheal_cmd = "fix-it"'), { checks: () => ({ exit: 1 }) });
+  await r.run.runAll();
+  r.later(6000); await r.run.tick();
+  assert.ok(r.api.log.some((l) => l.startsWith('run python fix-it')), r.api.log.join('\n'));
+  assert.match(r.run.health('service/s').last, /ran its heal command \(exit 0\), checking it again/);
+  assert.equal(r.run.health('service/s').state, 'checking');
+  r.later(500); await r.run.tick(); // its next check isn't due
+  assert.ok(!r.api.log.includes('fresh python'), 'not replaced before it is checked again');
+  r.later(500); await r.run.tick(); // checked again, failing: replaced, its hook tried
+  assert.ok(r.api.log.includes('fresh python'), r.api.log.join('\n'));
+
+  const m = healthRun('[templates.a]\nsite = "python"\n[machines.m]\ntemplate = "a"\n[machines.m.health]\ncmd = "ok"\ninterval = "1s"\ngrace = "0s"\nfailures = 1\nheal = "hook"\nheal_cmd = "fix-it"\n', { checks: () => ({ exit: 1 }) });
+  await m.run.runAll();
+  for (let i = 0; i < 10; i++) { m.later(1000); await m.run.tick(); }
+  assert.equal(m.api.log.filter((l) => l.startsWith('run python fix-it')).length, 1, 'one hook');
+  assert.ok(!m.api.log.includes('fresh python'), 'a machine no supervisor watches is never restarted');
+  assert.equal(m.run.health('machine/m').state, 'unhealthy');
+});
+
+test('run: after 5 heals in a row with no check passing it is degraded, and healing stops', async () => {
+  const r = healthRun(svcHealth('cmd = "ok"\nfailures = 1\ngrace = "0s"'), { checks: () => ({ exit: 1 }) });
+  await r.run.runAll();
+  for (let i = 0; i < 400; i++) { r.later(1000); await r.run.tick(); }
+  assert.equal(r.api.log.filter((l) => l === 'fresh python').length, 5);
+  assert.equal(r.run.health('service/s').state, 'degraded');
+  assert.match(r.run.health('service/s').why, /healed 5 times in a row/);
+});
+
+test('run: wait_ready holds the service step until it passes a check, within its grace', async () => {
+  let n = 0;
+  const r = healthRun(svcHealth('cmd = "ok"\nwait_ready = true'), { checks: () => ({ exit: ++n >= 3 ? 0 : 1 }) });
+  assert.equal(await r.run.runAll(), true);
+  assert.match(r.run.state('service/s').detail, /passed its check/);
+  assert.equal(n, 3);
+  const never = healthRun(svcHealth('cmd = "ok"\nwait_ready = true'), { checks: () => { never.later(1000); return { exit: 1 }; } });
+  assert.equal(await never.run.runAll(), false);
+  assert.match(never.run.state('service/s').error, /didn't pass its check within its grace \(5s\): exit 1/);
+});
+
+test('run: supervisors restart by strategy, leave temporary children alone, escalate, and degrade at the top', async () => {
+  const sick = new Set();
+  const file = supFile.replace('[machines.db.health]\ncmd = "pg_isready"', '[machines.db.health]\ncmd = "pg_isready"\ninterval = "1s"\ngrace = "0s"\nfailures = 1')
+    .replace('[services.app.health]\ncmd = "app-ok"', '[services.app.health]\ncmd = "app-ok"\ninterval = "1s"\ngrace = "0s"\nfailures = 1');
+  const r = healthRun(file, { checks: (req) => ({ exit: sick.has(req.runtime) ? 1 : 0 }) });
+  assert.equal(await r.run.runAll(), true);
+  const fresh = () => r.api.log.filter((l) => l.startsWith('fresh')).map((l) => l.slice(6));
+  // rest_for_one: app (after db) fails: only app restarted
+  sick.add('python');
+  r.later(1000); await r.run.tick();
+  sick.delete('python');
+  assert.deepEqual(fresh(), ['python']);
+  assert.match(r.run.supervisor('inner').last, /restarted app \(rest_for_one, restart 1 of 3/);
+  // db fails: db and app, app stopped first
+  r.api.log.length = 0;
+  sick.add('supabase');
+  r.later(1000); await r.run.tick();
+  sick.delete('supabase');
+  assert.deepEqual(fresh(), ['python', 'supabase']);
+  assert.deepEqual(r.api.log.filter((l) => /^(wake|preview)/.test(l)), ['wake supabase', 'preview python:8000 (fleet)'], 'started again in order');
+  // a third and a fourth restart in a minute: inner fails top, whose one_for_all restarts inner
+  // (and so db and app) but not web, temporary
+  r.api.log.length = 0;
+  for (let i = 0; i < 2; i++) { sick.add('python'); r.later(1000); await r.run.tick(); sick.delete('python'); }
+  assert.match(r.run.supervisor('inner').last, /it failed top/);
+  assert.match(r.run.supervisor('top').last, /restarted inner \(one_for_all/);
+  assert.ok(!fresh().includes('web'), 'web is temporary: left alone');
+  assert.equal(r.run.supervisor('inner').restarts.length, 0, 'inner, restarted, starts over');
+  // top's second restart in its 30s is more than its 1: degraded
+  for (let i = 0; i < 4; i++) { sick.add('python'); r.later(1000); await r.run.tick(); sick.delete('python'); }
+  assert.equal(r.run.supervisor('top').state, 'degraded');
+  r.api.log.length = 0;
+  for (let i = 0; i < 4; i++) { sick.add('python'); r.later(1000); await r.run.tick(); sick.delete('python'); }
+  assert.deepEqual(fresh(), [], 'degraded: nothing is restarted');
+  assert.equal(r.run.health('service/app').state, 'unhealthy');
+  await r.run.restartSupervisor('top');
+  assert.equal(r.run.supervisor('top').state, 'running');
+  assert.deepEqual(fresh().filter((x, i, a) => a.indexOf(x) === i).sort(), ['python', 'supabase'], 'restarted by hand: its children but the temporary one');
+});
+
+test('run: a supervised machine that stops by itself has ended: restarted when permanent, not when transient', async () => {
+  const file = (type) => `[templates.a]\nsite = "python"\n[machines.m]\ntemplate = "a"\n[supervisors.s]\nchildren = ["m"]\n[supervisors.s.restart]\nm = "${type}"\n`;
+  let state = 'awake';
+  const r = healthRun(file('permanent'), { status: () => state });
+  await r.run.runAll();
+  state = 'failed';
+  await r.run.tick();
+  state = 'awake';
+  assert.deepEqual(r.api.log.slice(-2), ['fresh python', 'wake python']);
+  const t = healthRun(file('transient'), { status: () => state });
+  await t.run.runAll();
+  state = 'failed';
+  await t.run.tick();
+  assert.ok(!t.api.log.includes('fresh python'));
+  assert.match(t.run.supervisor('s').last, /transient, so a normal exit/);
+});
+
+test('run: stop forgets health and supervisors\' restarts', async () => {
+  const r = healthRun(svcHealth('cmd = "ok"'));
+  await r.run.runAll();
+  r.later(1000); await r.run.tick();
+  assert.equal(r.run.health('service/s').state, 'healthy');
+  await r.run.stop();
+  assert.equal(r.run.health('service/s'), null);
 });
