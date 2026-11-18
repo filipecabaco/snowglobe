@@ -469,8 +469,17 @@ func runService(args []string) error {
 			return errors.New("service rm takes a service's name")
 		}
 		return c.RemoveService(args[1])
+	case "heal":
+		if len(args) != 2 {
+			return errors.New("service heal takes a service's name")
+		}
+		s, err := c.HealService(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s: healing started over (%s)\n", s.Name, s.ServiceHealth)
 	default:
-		return fmt.Errorf("service %s: add, ls or rm", args[0])
+		return fmt.Errorf("service %s: add, ls, heal or rm", args[0])
 	}
 	return nil
 }

@@ -23,6 +23,7 @@ type DaemonAPI interface {
 	Metrics(since time.Time) (*daemon.Metrics, error)
 	TemplateJob(name string, req control.JobRequest) (*control.JobResult, error)
 	ServiceJob(name string, req control.JobRequest) (*control.JobResult, error)
+	HealService(name string) (*daemon.ServiceStatus, error)
 	Builds() ([]daemon.Build, error)
 	StartBuild(daemon.BuildRequest) (*daemon.Build, error)
 	Build(id string) (*daemon.Build, error)
@@ -134,6 +135,7 @@ var daemonTools = []map[string]any{
 		"health": map[string]any{"type": "object", "description": "A health check on each running replica (never wakes a service at zero, never keeps one from stopping): http {port, path, status \"200-399\"} or cmd (exit 0); interval (10s), timeout (2s), failures (3), grace (30s); heal: replace (default), drain, hook (runs heal_cmd first) or none; drain (30s): time for connections to end; wait_ready: hold a new replica's first connection until it passes"},
 	}, "name", "template", "ports")),
 	tool("remove_service", "Remove a service and its replicas.", obj(map[string]any{"name": str("The service")}, "name")),
+	tool("heal_service", "Start a service's healing over after fixing what made it unhealthy: it is no longer degraded, its backoff is gone, hooks are tried again, and its unhealthy replicas are healed on the next tick.", obj(map[string]any{"name": str("The service")}, "name")),
 	tool("build", "Build a site from a Dockerfile directory on the daemon's host (full path), an image reference, or a Dockerfile's text, and make it a template. Waits for it unless wait is false.", obj(map[string]any{
 		"name": str("The template's name"), "source": str("A directory with a Dockerfile (full path) or an image reference"), "dockerfile": str("A Dockerfile's text (it can't COPY anything)"),
 		"network": str("fetch for a guest with a network (needed for ports), or none"), "memory_mb": num("Guest RAM"), "cpus": num("Guest CPUs"),
@@ -367,6 +369,9 @@ func (d *Daemon) do(name string, a args) (string, error) {
 		return asJSON(v), err
 	case "remove_service":
 		return "removed service " + a.str("name"), api.RemoveService(a.str("name"))
+	case "heal_service":
+		v, err := api.HealService(a.str("name"))
+		return asJSON(v), err
 	case "build":
 		b, err := api.StartBuild(daemon.BuildRequest{Name: a.str("name"), Source: a.str("source"), Dockerfile: a.str("dockerfile"), Network: a.str("network"),
 			Memory: int(a.num("memory_mb")), CPUs: int(a.num("cpus")), NoTemplate: a.bool("no_template", false)})

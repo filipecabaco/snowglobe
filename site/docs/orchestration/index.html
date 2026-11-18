@@ -130,7 +130,8 @@ snowglobe service rm web</pre>
             doesn't pass. A command in the guest passes when it exits 0.</p>
           <pre>snowglobe service add api --template api-ready -p 8080:8000 --health-http 8000/healthz
 snowglobe service add db --template pg --state keep --health-cmd 'pg_isready -q' --heal hook --heal-cmd 'pg_ctl restart'
-snowglobe service ls                              <span class="dim"># HEALTH: starting, healthy, unhealthy, idle or degraded</span></pre>
+snowglobe service ls                              <span class="dim"># HEALTH: starting, healthy, unhealthy, idle or degraded</span>
+snowglobe service heal api                        <span class="dim"># start healing over, once what broke it is fixed</span></pre>
           <pre>[services.api.health]
 interval = "10s"     <span class="dim"># how often each replica is checked</span>
 timeout = "2s"
@@ -151,7 +152,7 @@ status = "200-399"   <span class="dim"># or a list: "200,204"</span></pre>
                 <tr><td><code>replace</code></td><td>the default: taken out of service (nothing new goes to it, and it no longer counts towards <code>max</code>), given <code>drain</code> for its connections to end, then stopped. If the service is below <code>min</code> without it, another starts at once; otherwise the next connection starts one</td></tr>
                 <tr><td><code>drain</code></td><td>taken out of service and kept as it is, for you to look at (<code>snowglobe sh</code> its machine); it stops once it has been idle for <code>idle</code></td></tr>
                 <tr><td><code>hook</code></td><td>runs <code>heal_cmd</code> in the guest (restart the app, say) and checks it again from the start. If it is unhealthy again, it is replaced</td></tr>
-                <tr><td><code>none</code></td><td>only reported: the event and its health. Connections still go to it</td></tr>
+                <tr><td><code>none</code></td><td>only reported: the event and its health. It stays in service, but gets connections only when no other replica can take them</td></tr>
               </tbody>
             </table>
           </div>
@@ -160,15 +161,23 @@ status = "200-399"   <span class="dim"># or a list: "200,204"</span></pre>
             A replica that is being stopped, or is about to stop for being idle, isn't checked. A replica that failed
             its check is never saved: with <code>state = "keep"</code>, the next one starts from the last good save,
             and from the template if that one fails too.</p>
+          <p>Whatever the strategy, a replica that failed its check is the last choice for a connection, until it
+            is healed or passes again. A connection goes to a healthy replica, even a busier one, first. When every
+            replica is unhealthy and the service is below <code>max</code>, a new replica starts and takes it, unless
+            the service is degraded: a new one would fail too, so what there is is used.</p>
           <p>Heals are spaced out. Each heal of a service waits twice as long as the last one, starting at
             <code>interval</code> and capped at 5 minutes, so a dependency that every replica shares can't make the
             service replace them all at once. After 5 heals in a row with no replica passing a check, healing stops
-            and the service is <code>degraded</code> until one passes. <code>wait_ready</code> holds a new
+            and the service is <code>degraded</code> until one passes, or until you start healing over with
+            <code>snowglobe service heal NAME</code> (the <code>heal_service</code> tool, <code>POST /v1/services/{name}/heal</code>)
+            once you have fixed what broke it. That clears the backoff, tries hooks again and, with
+            <code>state = "keep"</code>, starts from the last save again. <code>wait_ready</code> holds a new
             replica's first connection until it passes a check (up to <code>grace</code>). It is off by default
             because it adds the first check's time to every start from zero. Events: <code>service.replica_healthy</code>,
             <code>service.replica_unhealthy</code>, <code>service.replica_healing</code>,
             <code>service.replica_draining</code>, <code>service.replica_drained</code>,
-            <code>service.replica_replaced</code>, <code>service.degraded</code>, <code>service.healthy</code>.</p>
+            <code>service.replica_replaced</code>, <code>service.degraded</code>, <code>service.healthy</code>,
+            <code>service.heal_reset</code>.</p>
 
           <h2 class="h3" id="fleets">Fleets: snowglobe apply</h2>
           <p>A <code>snowglobe.toml</code> says what the daemon should have, and <code>snowglobe apply</code> gets it
@@ -500,7 +509,7 @@ mkdir -p public/app &amp;&amp; tar --zstd -xf app.tar.zst -C public/app    <span
                 <tr><td><code>/v1/machines/{name}/jobs</code></td><td>a job on a machine</td></tr>
                 <tr><td><code>/v1/templates/{name}/jobs</code></td><td>a job on a fresh fork: <code>files</code>, <code>cmd</code>, <code>env</code>, <code>timeout</code>, and optionally <code>workdir</code>, the limits (<code>memory_limit_mb</code>, <code>cpus_limit</code>, <code>pids_limit</code>, <code>disk_limit_mb</code>, <code>max_rss_mb</code>, <code>cpu_time_s</code>, <code>output_limit</code>, <code>copy_limit_mb</code>, <code>read_only_in</code>), <code>egress</code> and <code>labels</code>; a limit it can't enforce (<code>memory_limit_mb</code> on a template built without <code>--memory-limits</code>, say) answers 200 with <code>error</code>, and the client disconnecting cancels it. A job connects to no Unix socket and writes nothing its template server shares with other jobs</td></tr>
                 <tr><td><code>POST /v1/runs</code>, <code>GET /v1/runs/{id}</code></td><td>fire-and-forget runs</td></tr>
-                <tr><td><code>/v1/services</code>, <code>/v1/services/{name}/jobs</code></td><td>services, and a job on a replica. Each replica has <code>health</code> (state, failures, last result) and each service <code>service_health</code> when it has a health check</td></tr>
+                <tr><td><code>/v1/services</code>, <code>/v1/services/{name}/jobs</code>, <code>POST /v1/services/{name}/heal</code></td><td>services, and a job on a replica. Each replica has <code>health</code> (state, failures, last result) and each service <code>service_health</code> when it has a health check</td></tr>
                 <tr><td><code>/v1/links</code>, <code>/v1/graph</code></td><td>links, and the graph of what reaches what</td></tr>
                 <tr><td><code>/v1/fleets</code></td><td>fleets and their instances</td></tr>
                 <tr><td><code>/v1/ports</code>, <code>/v1/ports/check?port=N&amp;ip=IP</code></td><td>host ports</td></tr>

@@ -78,7 +78,7 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `list_templates`, `add_template`, `remove_template`, `list_machines`, `up`, `stop_machine`,
   `run_command` (on a `machine`, a fresh fork of a `template`, or a `service`'s replica),
   `write_file`, `read_file`, `snapshot_machine`, `list_snapshots`, `remove_snapshot`,
-  `list_services`, `add_service`, `remove_service`, `build` (waits by default), `build_status`,
+  `list_services`, `add_service`, `remove_service`, `heal_service`, `build` (waits by default), `build_status`,
   `list_builds`, `cancel_build`, `submit_run`, `run_status` (`wait_seconds`), `list_runs`,
   `list_ports`, `check_port`, `recent_events`, `fleet_diff`, `fleet_plan`, `fleet_apply` (one
   `step` too), `graph`, `list_links`, `link`, `unlink`, and fleets kept like compose projects:
@@ -171,16 +171,18 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `--min 0` scales to zero: replicas idle for `--idle` stop, and the next request forks one (about
   20 ms to the first answer when the template is a snapshot with its server listening).
   `--state keep` saves the replica before it stops and the next one carries on (max 1);
-  `discard` starts each from the template. `service ls`, `service rm <name>`; API
-  `/v1/services`, `/v1/services/{name}/jobs`.
+  `discard` starts each from the template. `service ls`, `service rm <name>`, `service heal <name>`; API
+  `/v1/services`, `/v1/services/{name}/jobs`, `POST /v1/services/{name}/heal`.
   A health check on each running replica: `--health-http PORT[/PATH]` (a GET whose status must be in
   `--health-status`, 200-399 by default) or `--health-cmd CMD` (exit 0), every `--health-interval`
   (10s), unhealthy after `--health-failures` (3) in a row once `--health-grace` (30s) is over.
   `--heal replace` (the default) takes it out of service, gives connections `--drain` (30s) and
   stops it unsaved (another starts at once below `--min`, else on the next use); `drain` takes it
   out of service and keeps it until idle; `hook` runs `--heal-cmd` in the guest first; `none` only
-  reports. Checks never wake a service at zero nor count as use; heals back off and stop after 5 in
-  a row (degraded). `--wait-ready` holds a new replica's first connection until it passes. Each
+  reports. Whatever the strategy, an unhealthy replica gets a connection only when no other can (below
+  `--max` and not degraded, a new replica starts instead). Checks never wake a service at zero nor
+  count as use; heals back off and stop after 5 in a row (degraded) until a replica passes or
+  `service heal <name>` starts them over. `--wait-ready` holds a new replica's first connection until it passes. Each
   replica's `health` (state, failures, last result) and the service's `service_health` are in
   `/v1/services`.
 - `snowglobe daemon --detach` starts the daemon in the background, in a session of its own so it
@@ -215,7 +217,7 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   one is free or what holds it (exit 1 when taken). API: `/v1/ports`, `/v1/ports/check?port=N`.
 - `snowglobe events [--json] [--after SEQ]` streams the daemon's events (kind, subject, message:
   machine.up, machine.stopped, machine.expired, service.replica_up, service.replica_unhealthy,
-  service.replica_replaced, service.degraded, template.asleep,
+  service.replica_replaced, service.degraded, service.heal_reset, template.asleep,
   template.awake, snapshot.saved, admission.refused, ...), the last 200 first; `snowglobe top
   [--once]` shows it live (memory and budget, templates, services, machines, recent events). API:
   `/v1/events` (server-sent events, `?after=SEQ`), `/v1/stats`.

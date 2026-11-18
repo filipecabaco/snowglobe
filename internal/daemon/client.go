@@ -421,6 +421,11 @@ func (c *Client) Service(name string) (*ServiceStatus, error) {
 	return &s, c.call("GET", "/v1/services/"+url.PathEscape(name), nil, &s)
 }
 
+func (c *Client) HealService(name string) (*ServiceStatus, error) {
+	var s ServiceStatus
+	return &s, c.call("POST", "/v1/services/"+url.PathEscape(name)+"/heal", nil, &s)
+}
+
 func (c *Client) RemoveService(name string) error {
 	return c.call("DELETE", "/v1/services/"+url.PathEscape(name), nil, nil)
 }

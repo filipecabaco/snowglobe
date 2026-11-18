@@ -69,6 +69,7 @@ GET    /v1/snapshots                 DELETE /v1/snapshots/{s}
 GET    /v1/services                  POST /v1/services {name, template, ports?, min, max, idle,
                                                         concurrency, state, labels?}
 GET    /v1/services/{s}              DELETE /v1/services/{s}
+POST   /v1/services/{s}/heal         start healing over (no longer degraded, no backoff)
 POST   /v1/services/{s}/jobs         a job on one of its replicas (started if at zero)
 ```
 
@@ -104,12 +105,15 @@ stopped or within one interval of their idle deadline are left alone. After `fai
 `grace` is over), a replica is unhealthy and `heal` applies: `replace` takes it out of service
 (skipped by `pickReplica`, not counted towards `max` or `min`), lets connections drain and stops it;
 `drain` keeps it out of service until idle; `hook` runs `heal_cmd` and checks it again, then
-replaces it; `none` only reports. A replacement starts at once only below `min`; above it, the next
+replaces it; `none` only reports. `pickReplica` puts an unhealthy replica last whatever the strategy
+(still in service until healed): below `max` and not degraded, a new replica starts rather than use
+one; at `max`, or degraded, it is used rather than refuse the connection. A replacement starts at once only below `min`; above it, the next
 use starts one, so healing never keeps a service from zero. An unhealthy replica is never saved
 (`state keep` would carry a broken state on); after a second heal in a row the next replica starts
 from the template. Heals of one service are serial with exponential backoff from `interval` (capped
 at 5 minutes), so a shared dependency's outage doesn't replace every replica at once; after 5 in a
-row with no replica passing, the service is `degraded` and healing stops until one passes.
+row with no replica passing, the service is `degraded` and healing stops until one passes or
+`HealService` (`service heal`, `heal_service`) drops its heal record and its replicas' hook marks.
 `wait_ready` holds a new replica's first connection until it passes (up to `grace`); it is off by
 default because it adds a check to every start from zero.
 

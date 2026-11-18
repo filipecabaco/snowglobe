@@ -68,6 +68,9 @@ func (f *fakeDaemon) AddService(s daemon.Service) (*daemon.ServiceStatus, error)
 	return &st, nil
 }
 func (f *fakeDaemon) RemoveService(string) error { return nil }
+func (f *fakeDaemon) HealService(name string) (*daemon.ServiceStatus, error) {
+	return &daemon.ServiceStatus{Service: daemon.Service{Name: name}}, nil
+}
 func (f *fakeDaemon) Up(u daemon.Up) (*daemon.Machine, error) {
 	if u.Template == "" {
 		return nil, fmt.Errorf("no template called %q", u.Template)

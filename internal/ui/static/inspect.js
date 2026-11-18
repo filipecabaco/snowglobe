@@ -77,7 +77,8 @@ export function Inspector({ where }) {
         const check = h.http ? `GET :${h.http.port}${h.http.path} (${h.http.status})` : `cmd ${h.cmd}`;
         figures.push(["Health", s.service_health || "–"], ["Checked by", `${check} every ${dur(h.interval)}`], ["Heals by", h.heal]);
       }
-      buttons = [["Remove", () => confirm(`Remove service ${s.name} and its replicas?`) && run(() => actions.api(`/v1/services/${s.name}`, { method: "DELETE" }), `Removed ${s.name}`)]];
+      if (s.service_health === "degraded") buttons.push(["Start healing over", () => run(() => actions.api(`/v1/services/${s.name}/heal`, { method: "POST" }), `Healing ${s.name} again`)]);
+      buttons.push(["Remove", () => confirm(`Remove service ${s.name} and its replicas?`) && run(() => actions.api(`/v1/services/${s.name}`, { method: "DELETE" }), `Removed ${s.name}`)]);
     }
   } else if (sel.kind === "link") {
     const l = (state.links || []).find((v) => v.name === sel.name);
