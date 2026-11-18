@@ -44,6 +44,18 @@ each acknowledged by a value the shell computes; and the command's output goes s
 serial line (with echo and newline translation off) between a start line carrying the nonce and
 the marker, rather than to a file. stdout and stderr are therefore one stream.
 
+Sites with no kernel (`--kernel none`, armless's user mode) have no serial shell, so their jobs
+are shells spawned beside the program instead (`vm.spawn`, armless 0.23; natively
+`internal/tools/runtime/src/user.rs` `start_job`). `SpawnJob` in `agent.js` spawns `/bin/sh -s`,
+writes a script to its stdin that puts the command and the files in `/sgjob/<id>` (base64, as the
+serial protocol types them) and execs the command with no stdin and stderr on stdout, then polls.
+The status and the kill come from the machine (`poll()`'s exit status), so there is no nonce or
+marker to forge. Out of time or cancelled, the shell's process group gets TERM, then KILL after
+the grace. The image needs `/bin/sh` and `base64` (any image with BusyBox has them), `--agent` and
+the `snowglobe.agent` label are no longer refused with `--kernel none`, and a job's
+view and states are the same. `runtimes.json` carries such a site's process (`user_state`, and
+`user_saved_at`) for the machine to restore, as the site's own page does.
+
 Not yet: `readFile` and `writeFile` (typing base64 works for small files; larger ones want a
 transfer channel), `cwd` and `env`, separate stderr, saving only between
 jobs, and session ids that change on restore. A save taken mid-job and restored later leaves the

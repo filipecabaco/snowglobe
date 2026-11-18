@@ -450,6 +450,184 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
     }
   }
 
+  /**
+   * A job on a machine with no kernel (armless's user mode), where there is no serial shell: the
+   * command runs in a shell spawned beside the program (`vm.spawn`, armless 0.23), as natively
+   * (internal/tools/runtime/src/user.rs `start_job`). Its script goes in on the shell's stdin: it
+   * writes the command and the files into the job's workspace, as the serial protocol does, and
+   * execs the command with no stdin of its own and its stderr on its stdout. What the serial
+   * protocol needs a nonce and a marker for (the status, whether it was killed) the machine says
+   * out of band: `poll()`'s exit status, which a command can't forge. Same view and states as `Job`.
+   * Stopped (cancel, timeout), the shell's process group is sent TERM, and KILL after the grace.
+   */
+  class SpawnJob {
+    constructor({ id, command, timeoutS, now, files = {}, maxOutput = MAX_OUTPUT }) {
+      this.id = id;
+      this.command = command;
+      this.timeoutS = timeoutS;
+      this.ws = `/sgjob/${id}`;
+      this.maxOutput = maxOutput;
+      this.script = bootstrap(this.ws, scripts(id, this.ws, command).cmd, files);
+      this.startedAt = now;
+      this.endedAt = null;
+      this.state = "running";
+      this.exitStatus = null;
+      this.killed = false;
+      this.error = null;
+      this.out = "";
+      this.dropped = 0;
+      this.stopReason = null;
+      this.shellBusy = false; // (a spawned shell is its own process: never holds anything up)
+      this.phase = "starting"; // starting, running, killing, done
+      this.deadline = now + timeoutS * 1000;
+      this.handle = null;
+      this.decoder = new TextDecoder();
+    }
+
+    /** Spawn the shell on `vm` and give it the script; resolves once it runs (or the job failed). */
+    async begin(vm, now = () => Date.now()) {
+      try {
+        const handle = await vm.spawn({ argv: ["/bin/sh", "-s"], env: ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"], cwd: "/" });
+        if (this.phase === "done") {
+          // Stopped while its files were on their way
+          handle.kill(9);
+          handle.release();
+          return;
+        }
+        this.handle = handle;
+        handle.write(this.script);
+        handle.closeInput();
+        this.phase = "running";
+      } catch (e) {
+        if (this.phase !== "done") this._fail(`the job's shell: ${e?.message ?? e}`, now());
+      }
+    }
+
+    _end(state, now, extra = {}) {
+      Object.assign(this, extra);
+      this.state = state;
+      this.phase = "done";
+      this.endedAt = now;
+      this.deadline = Infinity;
+      this.out += this.decoder.decode();
+    }
+
+    _fail(message, now) {
+      this._end("failed", now, { error: message });
+      this._let_go(true);
+    }
+
+    /** Done with the spawned shell: released, and its group killed when `kill` (one that ended by itself leaves what it started running, as natively) */
+    _let_go(kill = false) {
+      const h = this.handle;
+      this.handle = null;
+      if (!h) return;
+      try {
+        if (kill) h.kill(9);
+        h.release();
+      } catch {}
+    }
+
+    _append(text) {
+      this.out += text;
+      if (this.out.length > this.maxOutput + 4096) {
+        const cut = this.out.length - this.maxOutput;
+        this.dropped += cut;
+        this.out = this.out.slice(cut);
+      }
+    }
+
+    /** Ask the machine to stop it: why is "timeout" or "cancel". Nothing is typed (as `Job.stop` returns). */
+    stop(why, now) {
+      if (this.phase === "done" || this.stopReason) return [];
+      this.stopReason = why;
+      if (!this.handle) {
+        // Not started: nothing to kill (begin() lets go of the shell once it has come)
+        this._end(why === "cancel" ? "cancelled" : "timed_out", now);
+        return [];
+      }
+      this.phase = "killing";
+      this.deadline = now + KILL_GRACE_MS;
+      this.handle.kill(15);
+      return [];
+    }
+
+    /** Take what it printed, look at its end and its time. Nothing is typed (as `Job.tick`). */
+    tick(now) {
+      if (this.phase === "done" || !this.handle) return [];
+      let r;
+      try {
+        r = this.handle.poll();
+      } catch (e) {
+        this._fail(`the job's shell: ${e?.message ?? e}`, now);
+        return [];
+      }
+      this._append(this.decoder.decode(r.stdout, { stream: true }));
+      this._append(this.decoder.decode(r.stderr, { stream: true }));
+      if (r.exit !== null) {
+        // Stopped: what it started goes with it, even what ignores TERM, as the launcher's kill of its session
+        const stopped = this.stopReason;
+        this._let_go(!!stopped);
+        if (stopped) this._end(stopped === "cancel" ? "cancelled" : "timed_out", now, { killed: true });
+        else this._end("exited", now, { exitStatus: r.exit });
+        return [];
+      }
+      if (now >= this.deadline) {
+        if (this.phase === "running") this.stop("timeout", now);
+        else if (!this.hardKilled) {
+          // TERM was ignored: KILL; its end shows at the next tick
+          this.hardKilled = true;
+          this.handle.kill(9);
+          this.deadline = now + KILL_GRACE_MS;
+        } else {
+          // Not even KILL ended it in the time: let go of it
+          this._let_go(true);
+          this._end(this.stopReason === "cancel" ? "cancelled" : "timed_out", now, { killed: true });
+        }
+      }
+      return [];
+    }
+
+    feed() { return []; }
+
+    output() {
+      return { text: this.out.slice(Math.max(0, this.out.length - this.maxOutput)), dropped: this.dropped + Math.max(0, this.out.length - this.maxOutput) };
+    }
+
+    view() {
+      const out = this.output();
+      return {
+        jobId: this.id,
+        command: this.command,
+        state: this.state,
+        exitStatus: this.exitStatus,
+        killed: this.killed,
+        error: this.error,
+        output: plain(out.text),
+        truncated: out.dropped > 0,
+        droppedChars: out.dropped,
+        startedAt: this.startedAt,
+        endedAt: this.endedAt,
+        timeoutSeconds: this.timeoutS,
+      };
+    }
+  }
+
+  /** The script a spawned shell reads on its stdin: the job's command and files written into its
+   *  workspace (base64, as the serial protocol types them), then the command exec'd with no stdin
+   *  and its stderr on its stdout. */
+  function bootstrap(ws, cmd, files = {}) {
+    const names = Object.keys(files);
+    const lines = [`mkdir -p ${ws}/.sg ${ws}/in ${ws}/out || exit 1`];
+    for (const [file, b] of [[".sg/cmd.b64", base64(cmd)], ...names.map((n) => [`in/${n}.b64`, base64Bytes(files[n])])]) {
+      lines.push(`: >${ws}/${file}`);
+      for (let i = 0; i < b.length; i += 4096) lines.push(`printf %s ${b.slice(i, i + 4096)} >>${ws}/${file}`);
+    }
+    lines.push(`base64 -d ${ws}/.sg/cmd.b64 >${ws}/.sg/cmd` + names.map((n) => ` && base64 -d ${ws}/in/${n}.b64 >${ws}/in/${n} && rm ${ws}/in/${n}.b64`).join("") + " || exit 1");
+    lines.push(`exec sh ${ws}/.sg/cmd </dev/null 2>&1`);
+    return lines.join("\n") + "\n";
+  }
+
   /** The text a finished (or running) job reads as, as `snowglobe mcp`'s run_command has it. */
   function jobText(v) {
     let out = v.output;
@@ -602,6 +780,18 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
       if (st.state !== "ready") throw new Error(`not ready: the machine is ${st.state}${st.reason ? ` (${st.reason})` : ""}`);
 
       const now = this.now();
+      // No kernel (user mode): no serial shell, the command is a shell spawned beside the program
+      if (this.m.emulator?.user) {
+        const job = new SpawnJob({ id: token(), command, timeoutS, now, files });
+        this._keep(job);
+        if (requestId !== undefined) this.requests.set(requestId, { jobId: job.id, command, timeoutS });
+        this.current = job;
+        job.begin(this.m.emulator, this.now).then(() => {
+          if (job.phase === "done" && this.current === job) this._finished();
+        });
+        this._schedule();
+        return { jobId: job.id };
+      }
       const job = new Job({ id: token(), nonce: token(), ack: token(), command, timeoutS, now, files,
         window: input.uploadWindow ?? this.uploadWindow ?? 1 });
       this._keep(job);
@@ -704,7 +894,7 @@ printf '\\nSGDONE_%s_%s_%s_%s\\n' ${id} "$n" "$s" "$k"
     return api;
   }
 
-  const SnowglobeAgent = { attach, Controller, Job, scripts, uploadLines, checkFiles, parseMarker, hasLine, jobText, timeoutSeconds, plain,
+  const SnowglobeAgent = { attach, Controller, Job, SpawnJob, bootstrap, scripts, uploadLines, checkFiles, parseMarker, hasLine, jobText, timeoutSeconds, plain,
     base64Bytes, quote, token,
     limits: { DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S, MAX_OUTPUT, MAX_COMMAND, MAX_FILES_BYTES, KILL_GRACE_MS, SYNC_WAIT_MS } };
   if (typeof module === "object" && module.exports) module.exports = SnowglobeAgent;
