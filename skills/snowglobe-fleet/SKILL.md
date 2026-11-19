@@ -1,6 +1,6 @@
 ---
 name: snowglobe-fleet
-description: Use when writing, reading or applying a `snowglobe.toml` fleet file: `snowglobe diff`, `apply`, `down`, `top`, templates, snapshots, services, machines, `[links.*]`, `[network]` modes, instances, and running the same file in a browser at /fleet/. Link and egress semantics are in snowglobe-networking.
+description: Use when writing, reading or applying a `snowglobe.toml` fleet file: `snowglobe diff`, `apply`, `down`, `top`, templates, snapshots, services, machines, health checks, `[supervisors.*]`, `[links.*]`, `[network]` modes, instances, and running the same file in a browser at /fleet/. Link and egress semantics are in snowglobe-networking.
 ---
 
 # Fleet files (`snowglobe.toml`)
@@ -77,7 +77,7 @@ A fleet runs as instances, like `docker compose -p`: templates and snapshots are
 
 ## The same file at /fleet/ (a browser tab)
 
-https://filipecabaco.github.io/snowglobe/fleet/ reads the file in the page and turns it into steps, each with its own Run, or Run all: a snapshot's `run` and `ready`, a link, a machine wake, a service opened in a frame. Stop ends the run and sends the machines back to their image; a graph shows the machines and links. A `run` command can be a multi-line string (three single quotes; heredoc terminators at column 0). Small fleets to try: `examples/fleet/templates/`. A link can load one: `/fleet/#tcp-echo` (a template's file name without `.toml`; `#live-data` is the example).
+https://filipecabaco.github.io/snowglobe/fleet/ reads the file in the page and turns it into steps, each with its own Run, or Run all: a snapshot's `run` and `ready`, a link, a machine wake, a service opened in a frame. Stop ends the run and sends the machines back to their image; a graph shows the machines and links. A `run` command can be a multi-line string (three single quotes; heredoc terminators at column 0). Starting a command may take up to 3 minutes (it wakes a sleeping machine); a machine that then stops answering is given up after 30s. Small fleets to try: `examples/fleet/templates/`. A link can load one: `/fleet/#tcp-echo` (a template's file name without `.toml`; `#live-data` is the example).
 
 | File | In the tab |
 |---|---|

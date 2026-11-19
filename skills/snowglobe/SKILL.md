@@ -21,7 +21,7 @@ The CLI and daemon are the main way to work. The browser pages are one more plac
 |---|---|
 | Turn an image, Dockerfile or directory into a site; flags and `LABEL snowglobe.*` | snowglobe-build |
 | Run a site: `serve`, `run`, `sh`, `cp`, daemon, `up`, `snowglobe ui`, saving | snowglobe-run |
-| Write or operate `snowglobe.toml`: `diff`, `apply`, `down`, `top`, templates, services, links | snowglobe-fleet |
+| Write or operate `snowglobe.toml`: `diff`, `apply`, `down`, `top`, templates, services, links, health checks, supervisors | snowglobe-fleet |
 | `--network fetch`, egress, `--tunnel`, links between machines, WebSockets | snowglobe-networking |
 | Let an agent drive it: `snowglobe mcp`, the `/agent/` page, WebMCP tools | snowglobe-agents |
 | Accounts, saves, team images, `/run/<token>/` | snowglobe-hosted |

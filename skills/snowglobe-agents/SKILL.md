@@ -30,7 +30,7 @@ snowglobe agent-pages dist          # dist/agent/runtimes.json, scripts, service
 
 Labels: `snowglobe.agent-purpose` (one line), `snowglobe.agent-sample` (a command to try), `snowglobe.agent-watch=DIR` (page shows files each command changed, with diffs), `snowglobe.agent-name`, `snowglobe.agent-exposed-to` (JSON array of https origins that may also use the WebMCP tools; default none).
 
-Runtimes today: `web` (React on Supabase in `/root/app`), `supabase` (Postgres, Auth, Data API on port 54321), `python` (pip install works), `duckdb`, `postgres`, `conduit`.
+Runtimes today: `web` (React on Supabase in `/root/app`), `supabase` (Postgres, Auth, Data API on port 54321), `python` (pip install works), `duckdb`, `postgres`, `conduit`, `bun` (Bun on 160 MB: JavaScript and TypeScript, `Bun.serve`, fetch and WebSocket).
 
 ## WebMCP tools (registered where the browser has `document.modelContext`)
 
