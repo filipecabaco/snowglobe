@@ -7,7 +7,7 @@ Agent skills in the SKILL.md format (a directory per skill, YAML `name` and `des
 | `snowglobe` | What it is, the three places things run, which skill to load, the happy path |
 | `snowglobe-build` | `snowglobe build`, flags, `LABEL snowglobe.*`, what a site contains |
 | `snowglobe-run` | `serve`, `run`, `sh`, `cp`, the daemon, `up`, snapshots, `snowglobe ui`, saving |
-| `snowglobe-fleet` | `snowglobe.toml`, `diff` / `apply` / `down` / `top`, instances, the same file at /fleet/ |
+| `snowglobe-fleet` | `snowglobe.toml`, `diff` / `apply` / `down` / `top`, health checks, supervisors, instances, the same file at /fleet/ |
 | `snowglobe-networking` | `--network fetch`, tunnels, egress, links, WebSockets, what is refused |
 | `snowglobe-agents` | `snowglobe mcp`, the /agent/ page and its WebMCP tools, limits |
 | `snowglobe-hosted` | The handoff server: what works today and what does not |

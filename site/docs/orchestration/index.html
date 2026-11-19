@@ -402,7 +402,9 @@ as = "db.internal"</pre>
             <li><b>The Templates menu</b> next to <q>Load the example</q> holds small fleets to try, which are
               <code>examples/fleet/templates/</code> in the repo.</li>
             <li><b>Steps.</b> A snapshot's <code>run</code> commands and <code>ready</code> check, each link, each machine
-              woken, each service opened in a frame.</li>
+              woken, each service opened in a frame. Starting a command wakes its machine if it sleeps, and may take up
+              to 3 minutes (a cold Supabase on a phone takes more than one); a machine that then stops answering is
+              given up after 30 seconds.</li>
             <li><b>Templates</b> name a site the page has: <code>build = "../python"</code> is the <code>python</code>
               machine. One site is one machine on the page, so templates of one site share its files and processes.</li>
             <li><b>Links</b> are real. A guest on port 80 or 443 makes HTTP(S) requests. Any other port
