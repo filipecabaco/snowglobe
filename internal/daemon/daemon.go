@@ -61,7 +61,18 @@ type Template struct {
 	// The trusted commands its site's JIT profile learned from before it started
 	// (AddTemplate.Warm)
 	Warm []string `json:"warm,omitempty"`
+	// Commands each of its machines runs as it comes up (AddTemplate.Start)
+	Start []StartCommand `json:"start,omitempty"`
 }
+
+// StartCommand is one of a template's start commands, with its time (DefaultStartTimeout if 0).
+type StartCommand struct {
+	Cmd     string   `json:"cmd"`
+	Timeout Duration `json:"timeout,omitempty"`
+}
+
+// DefaultStartTimeout is a start command's time when it gives none.
+const DefaultStartTimeout = 2 * time.Minute
 
 // Machine is a machine forked from a template, lasting until it is removed.
 type Machine struct {

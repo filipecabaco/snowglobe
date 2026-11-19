@@ -176,7 +176,7 @@ func daemonClient() (*daemon.Client, error) {
 	return c, nil
 }
 
-// runTemplate: template add <site> [--name T] [--max-machines N] [--warm CMD]... [--warm-runs N] | ls | rm <T>
+// runTemplate: template add <site> [--name T] [--max-machines N] [--warm CMD]... [--warm-runs N] [--start CMD]... | ls | rm <T>
 func runTemplate(args []string) error {
 	if len(args) == 0 {
 		return errors.New("template takes add, ls or rm")
@@ -202,6 +202,11 @@ func runTemplate(args []string) error {
 			return nil
 		})
 		fs.IntVar(&req.WarmRuns, "warm-runs", 0, "")
+		// Commands each machine runs as it comes up (a server's start, its own randomness)
+		fs.Func("start", "", func(v string) error {
+			req.Start = append(req.Start, daemon.StartCommand{Cmd: v})
+			return nil
+		})
 		// The health check its services and machines take when they have none of their own
 		hf := addHealthFlags(fs)
 		positional, err := parse(fs, args[1:])

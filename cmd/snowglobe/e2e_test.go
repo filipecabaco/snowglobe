@@ -193,6 +193,7 @@ func TestE2E(t *testing.T) {
 	t.Run("lifecycle", e.lifecycle)
 	t.Run("fleet", e.fleetApply)
 	t.Run("links", e.links)
+	t.Run("randomness", e.randomness)
 	if os.Getenv("SNOWGLOBE_E2E_BUILD") == "1" {
 		t.Run("build stall", e.buildStall)
 	}

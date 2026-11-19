@@ -605,7 +605,7 @@ func (p *Plan) create(api API, build Builder, o Object, logf func(string, ...any
 			}
 		}
 		_, err := api.AddTemplate(daemon.AddTemplate{Site: site, Name: o.Name, MaxMachines: s.MaxMachines,
-			Idle: durationOf(s.Idle), Snapshot: s.Snapshot, Egress: s.egress(), Labels: p.labels(o, nil), Health: s.Health.health()})
+			Idle: durationOf(s.Idle), Snapshot: s.Snapshot, Egress: s.egress(), Labels: p.labels(o, nil), Health: s.Health.health(), Start: s.start()})
 		return err
 	case SnapshotSpec:
 		return p.snapshot(api, o, s, logf)
@@ -702,6 +702,7 @@ func (p *Plan) snapshot(api API, o Object, s SnapshotSpec, logf func(string, ...
 		return err
 	}
 	defer api.RemoveMachine(setup)
+	before := processes(api, setup)
 	for i, c := range s.Run {
 		logf("  %s: %s", setup, brief(c.Cmd))
 		limit := s.Limit(c)
@@ -734,8 +735,53 @@ func (p *Plan) snapshot(api API, o Object, s SnapshotSpec, logf func(string, ...
 			}
 		}
 	}
+	if kept := keptRunning(before, processes(api, setup)); len(kept) > 0 {
+		logf("  ! %s keeps %s running: every machine made of it gets a copy with the same memory, so the same random state (Node's Math.random, crypto.randomBytes and randomUUID, Python's random...): their \"random\" tokens, keys and ids repeat from one machine to the next. Start servers in the template's start instead, where each machine starts its own",
+			o.Name, strings.Join(kept, ", "))
+	}
 	_, err = api.SnapshotWith(setup, o.Name, p.labels(o, nil))
 	return err
+}
+
+// processList prints each of the guest's processes by its command line (kernel threads have none).
+const processList = `for d in /proc/[0-9]*; do c=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null); [ -n "$c" ] && echo "$c"; done; true`
+
+// processes are the command lines of what runs in machine m (nil if it can't say).
+func processes(api API, m string) map[string]bool {
+	res, err := api.Job(m, control.JobRequest{Cmd: processList, Timeout: 30})
+	if err != nil || res.Status == nil || *res.Status != 0 {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, l := range strings.Split(string(res.Output), "\n") {
+		// A job's own processes (its runner's scripts, under .sg/) are each job's, not the machine's
+		if l = strings.TrimSpace(l); l != "" && !strings.Contains(l, ".sg/") {
+			out[l] = true
+		}
+	}
+	return out
+}
+
+// keptRunning are the processes in after that weren't in before: what a snapshot's commands left
+// running (the listing's own processes are in both). At most 5, each cut to 60 characters.
+func keptRunning(before, after map[string]bool) []string {
+	if before == nil || after == nil {
+		return nil
+	}
+	var kept []string
+	for p := range after {
+		if !before[p] {
+			if len(p) > 60 {
+				p = p[:57] + "..."
+			}
+			kept = append(kept, p)
+		}
+	}
+	sort.Strings(kept)
+	if len(kept) > 5 {
+		kept = append(kept[:5], fmt.Sprintf("and %d more", len(kept)-5))
+	}
+	return kept
 }
 
 // brief is a command for a log line or an error: a multi-line one (a script in a ”' string) by its first

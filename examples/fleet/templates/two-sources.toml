@@ -23,17 +23,18 @@ network = "fetch"
 template = "python"
 run = [
 '''
-mkdir -p /root/site && cd /root/site
-(while true; do
+mkdir -p /root/site
+cat > /root/site/readings.sh <<'SH'
+#!/bin/sh
+cd /root/site
+while true; do
   echo "{\"source\":\"alpha\",\"value\":$((RANDOM % 50 + 50))}" > reading.json.tmp && mv reading.json.tmp reading.json
   sleep 1
-done >/dev/null 2>&1 &)
-''',
-'''
-cd /root/site && python3 -m http.server 9000 --bind 0.0.0.0 >/tmp/alpha.log 2>&1 &
+done
+SH
+chmod +x /root/site/readings.sh
 ''',
 ]
-ready = "wget -q -O /dev/null http://127.0.0.1:9000/reading.json"
 timeout = "2m"
 
 # beta: a reading from a Postgres query on every request, answered by a script that socat runs per connection
@@ -50,10 +51,8 @@ body="{\"source\":\"beta\",\"value\":${v:-0}}"
 printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#body}" "$body"
 SH
 chmod +x /root/answer.sh
-(socat TCP-LISTEN:9000,reuseaddr,fork EXEC:/root/answer.sh >/tmp/beta.log 2>&1 &)
 ''',
 ]
-ready = "curl -sf http://127.0.0.1:9000/ >/dev/null"
 timeout = "4m"
 
 # the viewer: reads both on every request and says which it could reach
@@ -78,21 +77,51 @@ http.createServer(async (req, res) => {
 }).listen(8080, '0.0.0.0');
 JS
 ''',
-'''
-cd /root/app && node viewer.mjs >/tmp/viewer.log 2>&1 &
-''',
 ]
-ready = "wget -q -O /dev/null http://127.0.0.1:8080/health"
 timeout = "2m"
 
 [templates.alpha]
 snapshot = "alpha"
+start = [
+'''
+(/root/site/readings.sh >/dev/null 2>&1 &)
+cd /root/site && python3 -m http.server 9000 --bind 0.0.0.0 >/tmp/alpha.log 2>&1 &
+''',
+{ timeout = "1m", cmd = '''
+n=0
+until wget -q -O /dev/null http://127.0.0.1:9000/reading.json; do
+  n=$((n + 1)); [ "$n" -ge 50 ] && exit 1; sleep 1
+done
+''' },
+]
 
 [templates.beta]
 snapshot = "beta"
+start = [
+'''
+(socat TCP-LISTEN:9000,reuseaddr,fork EXEC:/root/answer.sh >/tmp/beta.log 2>&1 &)
+''',
+{ timeout = "1m", cmd = '''
+n=0
+until curl -sf http://127.0.0.1:9000/ >/dev/null; do
+  n=$((n + 1)); [ "$n" -ge 50 ] && exit 1; sleep 1
+done
+''' },
+]
 
 [templates.viewer]
 snapshot = "viewer"
+start = [
+'''
+cd /root/app && node viewer.mjs >/tmp/viewer.log 2>&1 &
+''',
+{ timeout = "1m", cmd = '''
+n=0
+until wget -q -O /dev/null http://127.0.0.1:8080/health; do
+  n=$((n + 1)); [ "$n" -ge 50 ] && exit 1; sleep 1
+done
+''' },
+]
 
 [machines.alpha]
 template = "alpha"

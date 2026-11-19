@@ -589,6 +589,14 @@ type AddTemplate struct {
 	WarmRuns int      `json:"warm_runs,omitempty"`
 	// The health check its services and machines have when they set none of their own
 	Health *Health `json:"health,omitempty"`
+	// Commands each of its machines runs, in order, as it comes up: after its links are set and
+	// before it is handed to anyone (a service's connection, a fleet's next step). Each must
+	// succeed in its time, or the machine goes. The place for a server: one a snapshot keeps
+	// running is copied into every machine of it with the same memory, so with the same random
+	// state (Math.random, OpenSSL's generator behind crypto.randomBytes, randomUUID's cache) and
+	// the same "random" tokens, keys and ids in each; one started here draws its own, from the
+	// guest kernel, which is reseeded at every restore
+	Start []StartCommand `json:"start,omitempty"`
 	// From another host (IsRemote): held to the daemon's Policy
 	remote bool
 }
@@ -672,6 +680,14 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 		}
 		req.Health = h
 	}
+	for i, c := range req.Start {
+		if strings.TrimSpace(c.Cmd) == "" {
+			return nil, errStatus(400, "start: command %d is empty", i+1)
+		}
+		if c.Timeout < 0 {
+			return nil, errStatus(400, "start: command %d: its timeout is 0 (the default, %s) or more", i+1, DefaultStartTimeout)
+		}
+	}
 	s.mu.Lock()
 	_, taken := s.st.Templates[name]
 	s.mu.Unlock()
@@ -686,7 +702,7 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 	t := &Template{
 		Name: name, Site: site, JobsRoot: filepath.Join(dir, "jobs"), Log: filepath.Join(dir, "log"),
 		MaxMachines: max, VM: s.o.VM, Idle: req.Idle, Labels: req.Labels, Started: time.Now(),
-		AllowPrivate: req.AllowPrivate, Egress: req.Egress, Health: req.Health,
+		AllowPrivate: req.AllowPrivate, Egress: req.Egress, Health: req.Health, Start: req.Start,
 	}
 	if snap != nil {
 		t.Snapshot = snap.Name
@@ -1225,8 +1241,66 @@ func (s *Server) up(req Up) (*Machine, error) {
 	s.mu.Unlock()
 	s.note("machine.up", "machine "+name, "up from %s (pid %d)", t.Name, m.Pid)
 	s.linkUp(m)
+	if err := s.startMachine(m, t.Start); err != nil {
+		s.note("machine.start_failed", "machine "+name, "%v", err)
+		if _, e := s.takeDown(name); e == nil {
+			s.dropLinks(KindMachine, name)
+		}
+		return nil, errStatus(422, "%s: %v", name, err)
+	}
 	return m, nil
 }
+
+// startMachine runs its template's start commands in machine m, in order, each to success in
+// its time.
+func (s *Server) startMachine(m *Machine, cmds []StartCommand) error {
+	if len(cmds) == 0 {
+		return nil
+	}
+	begun := time.Now()
+	for i, c := range cmds {
+		limit := time.Duration(c.Timeout)
+		if limit <= 0 {
+			limit = DefaultStartTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), limit+30*time.Second)
+		r, err := s.runJob(ctx, m.Socket, m.Name, control.JobRequest{Cmd: c.Cmd, Timeout: limit.Seconds()})
+		cancel()
+		what := fmt.Sprintf("start command %d of %d (%s)", i+1, len(cmds), firstLine(c.Cmd))
+		switch {
+		case err != nil:
+			return fmt.Errorf("%s: %v", what, err)
+		case r.TimedOut || r.Status == nil:
+			return fmt.Errorf("%s ran past its time (%s): %s", what, limit, outputTail(r.Output))
+		case *r.Status != 0:
+			return fmt.Errorf("%s exited %d: %s", what, *r.Status, outputTail(r.Output))
+		}
+	}
+	s.note("machine.started", "machine "+m.Name, "ran its %d start command(s) in %d ms", len(cmds), time.Since(begun).Milliseconds())
+	return nil
+}
+
+// outputTail is the end of what a command printed, for an error.
+func outputTail(out []byte) string {
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) > 5 {
+		lines = lines[len(lines)-5:]
+	}
+	if s := strings.Join(lines, "\n"); s != "" {
+		return s
+	}
+	return "(no output)"
+}
+
+// firstLine is a command by its first line, for an error.
+func firstLine(cmd string) string {
+	line, _, more := strings.Cut(strings.TrimSpace(cmd), "\n")
+	if more {
+		return line + " …"
+	}
+	return line
+}
+
 
 // RemoveMachine stops a machine and forgets it.
 func (s *Server) RemoveMachine(name string) error {

@@ -462,7 +462,7 @@
   // as not applied here. fleet.test.cjs checks both lists against the Go structs, so a key added to the
   // format has to be decided here too, and a file the CLI refuses is refused here.
   const KEYS = {
-    templates: { applied: ["site", "build", "snapshot", "network", "health"], said: ["idle", "max_machines", "allow_private", "egress", "expose"] },
+    templates: { applied: ["site", "build", "snapshot", "network", "health", "start"], said: ["idle", "max_machines", "allow_private", "egress", "expose"] },
     snapshots: { applied: ["template", "run", "ready", "timeout"], said: [] },
     services: { applied: ["template", "ports", "health"], said: ["min", "max", "idle", "concurrency", "state", "labels"] },
     machines: { applied: ["template", "health"], said: ["count", "ports", "ttl", "labels"] },
@@ -495,6 +495,32 @@
       out.push([a, b]);
     }
     return out;
+  }
+
+  /** A start command's time when it gives none (daemon.DefaultStartTimeout). */
+  const START_TIMEOUT_MS = 2 * 60 * 1000;
+
+  /**
+   * A template's start commands (fleet.TemplateSpec.Start): each a string or { cmd, timeout }.
+   * { commands: [{ cmd, timeoutMs }] } or { error }.
+   */
+  function startCommands(list) {
+    if (!Array.isArray(list)) return { error: "start: an array of commands (start = [...]), even for one" };
+    const commands = [];
+    for (const [i, c] of list.entries()) {
+      const table = c && typeof c === "object";
+      const cmd = table ? c.cmd : c;
+      if (typeof cmd !== "string" || !cmd.trim()) return { error: `start[${i}]: a command, as a string or { cmd, timeout }` };
+      const extra = table ? Object.keys(c).filter((k) => k !== "cmd" && k !== "timeout") : [];
+      if (extra.length) return { error: `start[${i}]: unknown key ${extra[0]} (a command is cmd and timeout)` };
+      let timeoutMs = START_TIMEOUT_MS;
+      if (table && c.timeout !== undefined) {
+        timeoutMs = duration(c.timeout);
+        if (!timeoutMs) return { error: `start[${i}]: timeout: a duration like "30s", not ${JSON.stringify(c.timeout)}` };
+      }
+      commands.push({ cmd, timeoutMs });
+    }
+    return { commands };
   }
 
   /**
@@ -582,12 +608,18 @@
 
     const templates = new Map();
     const templateHealth = new Map(); // a template's health check, its services' and machines' when they have none
+    const templateStart = new Map(); // a template's start commands, run in its machine before its service or machine step
     for (const [name, t] of tables(file.templates)) {
       if (!NAME.test(name)) { bad(`templates.${name}`, "a name is letters, digits, . _ or -"); continue; }
       if (isTable(t) && t.health !== undefined) {
         const h = normalHealth("template", t.health);
         if (h.error) { bad(`templates.${name}`, h.error); continue; }
         templateHealth.set(name, h.health);
+      }
+      if (isTable(t) && t.start !== undefined) {
+        const st = startCommands(t.start);
+        if (st.error) { bad(`templates.${name}`, st.error); continue; }
+        templateStart.set(name, st.commands);
       }
       templates.set(name, t);
     }
@@ -727,9 +759,10 @@
       }
       const needs = needsOf(r, where);
       if (!needs) continue;
+      const start = templateStart.get(sv.template) ?? [];
       steps.push({
-        key: `service/${name}`, kind: "service", name, runtime: r.runtime, needs, ports: guest, port: guest[0], health,
-        summary: `Open ${r.runtime}'s port ${guest[0]}${health ? `, checked by ${describeHealth(health)}` : ""}`,
+        key: `service/${name}`, kind: "service", name, runtime: r.runtime, needs, ports: guest, port: guest[0], health, start,
+        summary: `${start.length ? `Start ${r.runtime} (${start.length} command${start.length === 1 ? "" : "s"}), then open` : "Open"} ${r.runtime}'s port ${guest[0]}${health ? `, checked by ${describeHealth(health)}` : ""}`,
       });
       if (health?.heal === "drain") notes.push(`services.${name}: heal drain only reports here: the page has one machine for it, none to take out of service`);
       const scale = ["min", "max", "idle", "concurrency"].filter((k) => sv[k] !== undefined);
@@ -754,8 +787,9 @@
       if (health?.http && !r.network) { bad(where, `${r.runtime} has no network device on the page, so its HTTP check can't reach it`); continue; }
       const needs = needsOf(r, where);
       if (!needs) continue;
-      steps.push({ key: `machine/${name}`, kind: "machine", name, runtime: r.runtime, needs, health,
-        summary: `Wake ${r.runtime}${health ? `, checked by ${describeHealth(health)}` : ""}` });
+      const start = templateStart.get(m.template) ?? [];
+      steps.push({ key: `machine/${name}`, kind: "machine", name, runtime: r.runtime, needs, health, start,
+        summary: `Wake ${r.runtime}${start.length ? ` and start it (${start.length} command${start.length === 1 ? "" : "s"})` : ""}${health ? `, checked by ${describeHealth(health)}` : ""}` });
       if (m.ttl !== undefined) notes.push(`machines.${name}: ttl doesn't apply: the page's machine is kept until you clear its save`);
     }
 
@@ -936,7 +970,26 @@
 
     const tail = (s) => String(s).trim().split("\n").slice(-12).join("\n");
 
+    // The machines whose start commands ran in this run: once each, before its first service or machine step
+    const started = new Set();
+
+    /** A step's template's start commands, in its machine, each to success in its time (as the daemon's up). */
+    async function start(step) {
+      if (!step.start?.length || started.has(step.runtime)) return;
+      for (const [i, c] of step.start.entries()) {
+        set(step.key, { detail: `start command ${i + 1} of ${step.start.length}` });
+        const r = await exec(step.runtime, c.cmd, Math.ceil(c.timeoutMs / 1000));
+        if (r.exit !== 0) {
+          set(step.key, { output: tail(`$ ${c.cmd}\n${r.output}`) });
+          const how = r.exit === null ? (r.state === "timed_out" ? `ran past its time (${spoken(c.timeoutMs)})` : `ended ${r.state}`) : `exited ${r.exit}`;
+          throw new Error(`start command ${i + 1} of ${step.start.length} ${how}`);
+        }
+      }
+      started.add(step.runtime);
+    }
+
     async function execute(step) {
+      if (step.kind === "service" || step.kind === "machine") await start(step);
       if (step.kind === "snapshot") {
         let log = "";
         for (const [i, command] of step.run.entries()) {

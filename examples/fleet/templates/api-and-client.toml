@@ -17,11 +17,7 @@ run = [
 '''
 mkdir -p /root/site && cd /root/site && (while true; do echo "{\"time\":\"$(date +%T)\",\"n\":$RANDOM}" > data.json.tmp && mv data.json.tmp data.json; sleep 1; done >/dev/null 2>&1 &)
   ''',
-'''
-cd /root/site && python3 -m http.server 9000 --bind 0.0.0.0 >/tmp/api.log 2>&1 &
-  ''',
 ]
-ready = "wget -q -O /dev/null http://127.0.0.1:9000/data.json"
 timeout = "2m"
 
 [snapshots.client]
@@ -39,18 +35,36 @@ http.createServer(async (req, res) => {
 }).listen(8080, '0.0.0.0');
 JS
   ''',
-'''
-cd /root/app && node client.mjs >/tmp/client.log 2>&1 &
-  ''',
 ]
-ready = "wget -q -O /dev/null http://127.0.0.1:8080/health"
 timeout = "2m"
 
 [templates.api]
 snapshot = "api"
+start = [
+'''
+cd /root/site && python3 -m http.server 9000 --bind 0.0.0.0 >/tmp/api.log 2>&1 &
+''',
+{ timeout = "1m", cmd = '''
+n=0
+until wget -q -O /dev/null http://127.0.0.1:9000/data.json; do
+  n=$((n + 1)); [ "$n" -ge 50 ] && exit 1; sleep 1
+done
+''' },
+]
 
 [templates.client]
 snapshot = "client"
+start = [
+'''
+cd /root/app && node client.mjs >/tmp/client.log 2>&1 &
+''',
+{ timeout = "1m", cmd = '''
+n=0
+until wget -q -O /dev/null http://127.0.0.1:8080/health; do
+  n=$((n + 1)); [ "$n" -ge 50 ] && exit 1; sleep 1
+done
+''' },
+]
 
 [machines.api]
 template = "api"

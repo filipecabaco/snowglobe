@@ -31,11 +31,7 @@ class S(socketserver.ThreadingTCPServer):
 S(('0.0.0.0', 7000), H).serve_forever()
 PY
   ''',
-'''
-python3 /root/echo.py >/tmp/echo.log 2>&1 &
-  ''',
 ]
-ready = "python3 -c \"import socket; s = socket.create_connection(('127.0.0.1', 7000)); s.sendall(b'hi\\n'); assert s.recv(64)\""
 timeout = "2m"
 
 [snapshots.client]
@@ -62,18 +58,36 @@ http.createServer(async (req, res) => {
 }).listen(8080, '0.0.0.0');
 JS
   ''',
-'''
-cd /root/app && node client.mjs >/tmp/client.log 2>&1 &
-  ''',
 ]
-ready = "wget -q -O /dev/null http://127.0.0.1:8080/health"
 timeout = "2m"
 
 [templates.echo]
 snapshot = "echo"
+start = [
+'''
+python3 /root/echo.py >/tmp/echo.log 2>&1 &
+''',
+{ timeout = "1m", cmd = '''
+n=0
+until python3 -c "import socket; s = socket.create_connection(('127.0.0.1', 7000)); s.sendall(b'hi\n'); assert s.recv(64)"; do
+  n=$((n + 1)); [ "$n" -ge 50 ] && exit 1; sleep 1
+done
+''' },
+]
 
 [templates.client]
 snapshot = "client"
+start = [
+'''
+cd /root/app && node client.mjs >/tmp/client.log 2>&1 &
+''',
+{ timeout = "1m", cmd = '''
+n=0
+until wget -q -O /dev/null http://127.0.0.1:8080/health; do
+  n=$((n + 1)); [ "$n" -ge 50 ] && exit 1; sleep 1
+done
+''' },
+]
 
 [machines.echo]
 template = "echo"
