@@ -348,3 +348,81 @@ count = %d
 		t.Errorf("ps after down: %q", out)
 	}
 }
+
+// Links between real machines, each confined as a daemon confines them (no Unix socket reached
+// from a machine): to a machine of a snapshot, and to a service at zero, which the connection
+// wakes. A machine asks its daemon for each link connection on its link channel; connecting to
+// the link's socket itself, as machines once did, its sandbox refuses.
+func (e *e2e) links(t *testing.T) {
+	e.startDaemon(t)
+	file := filepath.Join(t.TempDir(), "snowglobe.toml")
+	os.WriteFile(file, []byte(fmt.Sprintf(`name = "e2e-links"
+
+[templates.base]
+site = %q
+
+[snapshots.echo]
+template = "base"
+# A server that always listens (-lk): each connection gets a line and ends
+run = [
+  'printf "#!/bin/sh\\necho from the link\\n" > /root/say && chmod +x /root/say',
+  '(nc -lk -p 7000 -e /root/say) >/dev/null 2>&1 &',
+]
+ready = "nc -z 127.0.0.1 7000"
+
+[templates.echo]
+snapshot = "echo"
+
+[machines.db]
+template = "echo"
+
+[services.wake]
+template = "echo"
+min = 0
+max = 1
+idle = "5m"
+
+[machines.app]
+template = "base"
+
+[links.app-db]
+from = "app"
+to = "db"
+port = 7000
+as = "db.internal"
+
+[links.app-wake]
+from = "app"
+to = "wake"
+port = 7000
+as = "wake.internal"
+`, e.site)), 0o644)
+	e.must(t, 0, "apply", "-f", file)
+	defer e.run(t, nil, "down", "-f", file)
+
+	through := func(host string) string {
+		var out string
+		for i := 0; i < 10; i++ {
+			out, _ = e.run(t, nil, "sh", "app", "nc -w 10 "+host+" 7000 </dev/null")
+			if strings.HasPrefix(out, "from ") {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		return out
+	}
+	if out := through("db.internal"); !strings.HasPrefix(out, "from ") {
+		t.Errorf("app to db over the link: %q", out)
+	}
+	// Many connections, one after another: every one handed over whole (the daemon keeps its copy
+	// until the machine has it, or the kernel may flush it on the way)
+	if out := e.must(t, 0, "sh", "app", "for i in $(seq 20); do nc -w 10 db.internal 7000 </dev/null; done | grep -c '^from '"); strings.TrimSpace(out) != "20" {
+		t.Errorf("20 connections over the link, whole: %q", out)
+	}
+	if out := through("wake.internal"); !strings.HasPrefix(out, "from ") {
+		t.Errorf("app to the service at zero over the link: %q", out)
+	}
+	if out := e.must(t, 0, "ps"); !strings.Contains(out, "wake-") {
+		t.Errorf("the link's connection woke no replica of wake: %q", out)
+	}
+}

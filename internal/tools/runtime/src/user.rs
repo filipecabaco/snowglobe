@@ -993,6 +993,13 @@ fn serve(shared: &Arc<Shared>, host: &Arc<armless::native::NativeHost>, stream: 
             let _ = writer.write_all(format!("{answer}\n").as_bytes());
             return;
         },
+        // The daemon's channel for the links' connections (linker.rs), held until it closes
+        "linker" => {
+            if reader.buffer().is_empty() {
+                crate::linker::serve(reader.into_inner());
+            }
+            return;
+        },
         // A connection to a guest port (a service's, a forwarded one's), as for a machine with a
         // kernel: the client waits for this answer before it sends
         "connect" => {

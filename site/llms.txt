@@ -225,7 +225,8 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   replicas, started if none runs) or a template's machines as `as:as_port`; `GET /v1/links`,
   `DELETE /v1/links/{name}`. Each source machine gets a Unix socket of its own per link (mode 0600,
   in its template's socket directory), so no TCP port opens on the host, and links work under egress
-  `none`. `GET /v1/graph` returns nodes (templates, services, machines, ports, snapshots, with fleet
+  `none`. The machine doesn't connect to that socket (its sandbox reaches no Unix socket): it asks
+  the daemon for each connection, which the daemon opens and hands over. `GET /v1/graph` returns nodes (templates, services, machines, ports, snapshots, with fleet
   and instance) and edges (fork, replica, serves, link, reach, port, saved, made). MCP: `graph`,
   `list_links`, `link`, `unlink`.
 - `snowglobe submit <template> '<cmd>' [--timeout S] [--env K=V]...` is fire and forget: the

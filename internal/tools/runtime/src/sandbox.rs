@@ -826,6 +826,8 @@ mod tests {
     fn a_confined_jobs_seatbelt_connects_to_no_unix_socket() {
         let p = Policy { read: vec![], write: vec![], socket_dir: None, bind: vec![], network: false, hidden: vec![] };
         assert!(!imp::profile(&p, None, false).contains("unix-socket"), "a server, a whole run: as before");
+        // Its link sockets included: a machine's links come over its daemon's channel (linker.rs),
+        // so nothing here opens up for them
         let job = imp::profile(&p, None, true);
         assert!(job.ends_with("(deny network-outbound (remote unix-socket))\n"), "{job}");
         // With a network, the system's resolver only (later rules win)

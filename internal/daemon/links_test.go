@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -26,6 +27,35 @@ func linksOf(t *testing.T, d *daemonUnderTest, machine string) []control.Link {
 	}
 	json.Unmarshal(data, &ls)
 	return ls
+}
+
+// dialAs has a fake machine ask its daemon, on its link channel, for a connection to the link
+// at url, and say what came back through it
+func dialAs(t *testing.T, d *daemonUnderTest, machine, url string) (string, error) {
+	t.Helper()
+	m, err := d.c.Machine(machine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.DialTimeout("unix", m.Socket, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	data, _ := json.Marshal(map[string]any{"mode": "dial", "url": url})
+	c.Write(append(data, '\n'))
+	c.SetReadDeadline(time.Now().Add(15 * time.Second))
+	var answer struct {
+		Echo  string `json:"echo"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(c).Decode(&answer); err != nil {
+		t.Fatal(err)
+	}
+	if answer.Error != "" {
+		return "", errors.New(answer.Error)
+	}
+	return answer.Echo, nil
 }
 
 func TestLinksLetMachinesReachEachOtherByNameOverSocketsOfTheirOwn(t *testing.T) {
@@ -72,6 +102,12 @@ func TestLinksLetMachinesReachEachOtherByNameOverSocketsOfTheirOwn(t *testing.T)
 	}
 	c.Close()
 
+	// As the machine itself reaches it: confined, it connects to no Unix socket, and asks its
+	// daemon for the connection on its link channel instead
+	if echo, err := dialAs(t, d, "app", got[0].URL); err != nil || echo != "ping" {
+		t.Errorf("through the link channel: %q %v", echo, err)
+	}
+
 	// The same name and port twice from the same side is refused
 	if _, err := d.c.AddLink(Link{From: "app", To: "db", Port: 6000, As: "db.internal", AsPort: 5432}); statusOf(err) != 409 {
 		t.Errorf("a second link to db.internal:5432: %v", err)
@@ -95,6 +131,13 @@ func TestLinksLetMachinesReachEachOtherByNameOverSocketsOfTheirOwn(t *testing.T)
 		if len(lateLinks) == 1 && a.URL == lateLinks[0].URL {
 			t.Errorf("app and late share a socket: %s", a.URL)
 		}
+	}
+	// and gets a connection to its own only: never to another machine's socket
+	if echo, err := dialAs(t, d, "late", lateLinks[0].URL); err != nil || echo != "ping" {
+		t.Errorf("late through its own link: %q %v", echo, err)
+	}
+	if _, err := dialAs(t, d, "late", got[0].URL); err == nil || !strings.Contains(err.Error(), "no link of its") {
+		t.Errorf("late asking for app's socket: %v", err)
 	}
 
 	// The graph shows them

@@ -8,7 +8,8 @@
 //! The control socket takes one JSON line, then: {"mode":"exec","command":...} answers with
 //! what the command printed; {"mode":"attach","rows":R,"cols":C} replays the screen and
 //! streams the session both ways; {"mode":"links","links":[{host,port,url}]} replaces the
-//! machine's links (names its guest reaches at a unix:// or tcp:// address the daemon chose).
+//! machine's links (names its guest reaches at a unix:// or tcp:// address the daemon chose);
+//! {"mode":"linker"} is the daemon's channel that opens the unix:// ones (linker.rs).
 
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::net::TcpListener;
@@ -700,6 +701,14 @@ fn serve(session: &Session, stream: UnixStream) {
                 Err(e) => json!({ "error": e }),
             };
             let _ = writer.write_all(format!("{answer}\n").as_bytes());
+        },
+        Some("linker") => {
+            // The daemon's channel for the links' connections (linker.rs): held until it closes.
+            // It waits for the answer before it asks, so nothing is in the reader's buffer
+            if reader.buffer().is_empty() {
+                crate::linker::serve(reader.into_inner());
+            }
+            return;
         },
         Some("connect") => {
 

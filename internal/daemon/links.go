@@ -21,9 +21,10 @@ import (
 // joins machines: without a link a machine reaches no other.
 //
 // Each machine on the From side gets a Unix socket of its own for each of its links, in its
-// template's socket directory (which only that template's machines and the daemon reach), and a
-// link to it: the daemon knows which machine connects, and no TCP port stays open on the host
-// for anyone else to use. Links change while machines run; new connections follow them.
+// template's socket directory, and a link to it: the daemon knows which machine connects, and no
+// TCP port stays open on the host for anyone else to use. The machine, which its sandbox lets
+// connect to no Unix socket, asks the daemon for each connection on its link channel (linker.go).
+// Links change while machines run; new connections follow them.
 //
 // Instance, when set, narrows a link to one instance of a fleet (InstanceLabel): only the From
 // side's machines of it take the link, and a template target means its machines of the same
@@ -357,6 +358,11 @@ func (s *Server) relinkMachines(which func(*Machine) bool) {
 	}
 	s.mu.Unlock()
 	for _, p := range todo {
+		// The channel the links' connections are asked for on first: a connection the guest
+		// opens once it has them finds it
+		if len(p.links) > 0 {
+			s.openLinker(p.name, p.sock)
+		}
 		if err := control.SetLinks(p.sock, p.links); err != nil {
 			s.note("link.error", "machine "+p.name, "its links: %v", err)
 		}
@@ -373,6 +379,10 @@ func (s *Server) unlinkMachine(name string) {
 	}
 	delete(s.linkSocks, name)
 	delete(s.linked, name)
+	if c := s.linkers[name]; c != nil {
+		c.Close()
+		delete(s.linkers, name)
+	}
 }
 
 // RemoveLink removes a link: the machines it was for lose it.
