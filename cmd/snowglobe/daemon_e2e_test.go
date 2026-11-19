@@ -486,6 +486,11 @@ count = 2
 			t.Errorf("%s and %s drew the same first bytes: %q", pair[0], pair[1], a)
 		}
 	}
+	// touch makes a file that isn't there (user mode said yes to utimensat for any path, so busybox's
+	// touch made nothing, before armless 0.25.1)
+	if out := draw("f-1", "touch /tmp/made && ls /tmp/made"); out != "/tmp/made" {
+		t.Errorf("touch made no file: %q", out)
+	}
 	// The kernel's: each its own
 	if a, b := draw("r-1", "head -c 16 /dev/urandom | od -An -tx1"), draw("r-2", "head -c 16 /dev/urandom | od -An -tx1"); a == b || a == "" {
 		t.Errorf("/dev/urandom is the same in both machines: %q", a)
