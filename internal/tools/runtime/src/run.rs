@@ -9,7 +9,9 @@
 //! what the command printed; {"mode":"attach","rows":R,"cols":C} replays the screen and
 //! streams the session both ways; {"mode":"links","links":[{host,port,url}]} replaces the
 //! machine's links (names its guest reaches at a unix:// or tcp:// address the daemon chose);
-//! {"mode":"linker"} is the daemon's channel that opens the unix:// ones (linker.rs).
+//! {"mode":"linker"} is the daemon's channel that opens the unix:// ones (linker.rs);
+//! {"mode":"restart_app"} starts the site's app again (a template's restart_app), answered with
+//! {"restarted":true} once it printed its ready text, or {"error"}.
 
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::net::TcpListener;
@@ -131,6 +133,8 @@ pub(crate) struct Session {
     /// The console output saved with the snapshot
     persisted: Vec<u8>,
     exec_lock: Mutex<()>,
+    /// The site's ready text, which its app prints again once a restart_app has started it
+    ready: Option<String>,
 }
 
 impl Session {
@@ -143,6 +147,7 @@ impl Session {
             activity,
             persisted: site.file("system/console.bin").map(|c| c.into_owned()).unwrap_or_default(),
             exec_lock: Mutex::new(()),
+            ready: ready_text(site),
         })
     }
 
@@ -215,6 +220,53 @@ impl Session {
             *self.prompt.lock().unwrap() = new_prompt;
         }
         output
+    }
+}
+
+/// The site's ready text (run.json's `ready`), which its app prints once it is up
+pub(crate) fn ready_text(site: &Site) -> Option<String> {
+    let info = site_spec(site).ok()?.0;
+    info["ready"].as_str().filter(|r| !r.is_empty()).map(String::from)
+}
+
+/// How long a restarted app may take to be ready again
+pub(crate) const RESTART_LIMIT: Duration = Duration::from_secs(100);
+
+/// Ends the app's console session: what holds hvc0 (the app, logged in by the getty init
+/// respawns) and every process of its session, so init starts the app again. Fails when nothing
+/// holds the console. (The session is field 6 of /proc/N/stat, the 4th after the last ")".)
+const END_APP: &str = r#"s=; for d in /proc/[0-9]*; do [ "$(readlink "$d/fd/0" 2>/dev/null)" = /dev/hvc0 ] || continue; t=$(cat "$d/stat" 2>/dev/null) || continue; t=${t##*) }; set -- $t; s=$4; break; done
+[ -n "$s" ] || { echo "nothing runs on the app's console"; exit 3; }
+for d in /proc/[0-9]*; do t=$(cat "$d/stat" 2>/dev/null) || continue; t=${t##*) }; set -- $t; [ "$4" = "$s" ] && kill -9 "${d#/proc/}" 2>/dev/null; done; true"#;
+
+/// A template's restart_app on a machine with a kernel: the app's console session ended
+/// (`END_APP`), and the app init starts again waited for until it printed the site's ready text
+/// (or, without one, printed something and went quiet), within `limit`. The new app is a process
+/// of its own, its random state with it, not the copy every machine of the snapshot has.
+pub(crate) fn restart_app(board: &Board, activity: &Arc<Activity>, ready: Option<&str>, limit: Duration) -> Result<(), String> {
+    let from = activity.screen.lock().unwrap().total();
+    let req = job::Request { command: END_APP.into(), timeout: Duration::from_secs(30), home: true, instance: true, ..Default::default() };
+    let done = job::run(board, activity, &req)?;
+    if done.status != Some(0) {
+        return Err(format!("restart_app: ending the app failed ({:?}): {}", done.status, String::from_utf8_lossy(&done.output).trim()));
+    }
+    let begun = Instant::now();
+    loop {
+        {
+            let screen = activity.screen.lock().unwrap();
+            let _ = activity.screen_cv.wait_timeout(screen, POLL).unwrap();
+        }
+        let out = text::plain(activity.screen.lock().unwrap().since(from));
+        let up = match ready {
+            Some(t) => out.windows(t.len()).any(|w| w == t.as_bytes()),
+            None => !out.is_empty() && activity.idle_for() >= QUIET,
+        };
+        if up {
+            return Ok(());
+        }
+        if begun.elapsed() >= limit {
+            return Err(format!("restart_app: the app wasn't ready again within {}s", limit.as_secs()));
+        }
     }
 }
 
@@ -643,6 +695,16 @@ fn serve(session: &Session, stream: UnixStream) {
             };
             let _ = writer.write_all(format!("{answer}\n").as_bytes());
         },
+        // A template's restart_app: the app started again, answered once it is ready
+        Some("restart_app") => {
+            let _one_at_a_time = session.exec_lock.lock().unwrap();
+            let answer = match restart_app(&session.board, &session.activity, session.ready.as_deref(), RESTART_LIMIT) {
+                Ok(()) => json!({ "restarted": true }),
+                Err(e) => json!({ "error": e }),
+            };
+            *session.prompt.lock().unwrap() = None;
+            let _ = writer.write_all(format!("{answer}\n").as_bytes());
+        },
         Some("attach") => {
             if let (Some(rows), Some(cols)) = (request["rows"].as_u64(), request["cols"].as_u64()) {
                 session.board.console_resize(cols as u16, rows as u16);
@@ -1055,6 +1117,7 @@ mod tests {
             activity: activity.clone(),
             persisted: persisted.to_vec(),
             exec_lock: Mutex::new(()),
+            ready: None,
         });
         std::thread::spawn(move || {
             let mut typed = 0;

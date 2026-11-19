@@ -1072,3 +1072,36 @@ func TestKeptRunningIsWhatIsNewAndSaysLittle(t *testing.T) {
 		t.Errorf("user mode: %v", got)
 	}
 }
+
+func TestATemplatesRestartAppGoesToTheDaemonAndChangesItsHash(t *testing.T) {
+	file := `
+name = "s"
+
+[templates.app]
+site = "/sites/app"
+restart_app = true
+`
+	f := load(t, file)
+	api := newFake()
+	var got daemon.AddTemplate
+	api.onAddTemplate = func(r daemon.AddTemplate) { got = r }
+	p, err := f.Plan(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Apply(api, nil, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if !got.RestartApp {
+		t.Errorf("restart_app didn't reach the daemon: %+v", got)
+	}
+	// Turning it on or off is another template; off hashes as a template always did
+	off := load(t, strings.Replace(file, "restart_app = true", "", 1))
+	h := func(f *File) string { return hash(KindTemplate, withoutHealth(f.Templates["app"]), nil) }
+	if h(f) == h(off) {
+		t.Error("restart_app on hashes as off")
+	}
+	if data, _ := json.Marshal(off.Templates["app"]); strings.Contains(string(data), "restart_app") {
+		t.Errorf("a template without restart_app keeps the JSON (and hash) it always had: %s", data)
+	}
+}

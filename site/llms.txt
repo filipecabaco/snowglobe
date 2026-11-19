@@ -250,14 +250,14 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `Math.random`, `crypto.randomBytes`, `randomUUID`; Erlang's `:crypto`; Python's `random`): the same
   tokens, keys and ids in each. Start servers in a template's `start` (`snowglobe template add --start
   CMD`, the fleet file's `start`), not in a snapshot's `run`; `apply` warns when a snapshot's commands
-  leave a process running (not one the site's own processes started, as Postgres its backends). A site whose image runs its server before it is built: restart it in `start`.
+  leave a process running (not one the site's own processes started, as Postgres its backends). A site whose image runs its server before it is built (its Dockerfile's command, held running by its snapshot): `restart_app = true` on the template (`snowglobe template add --restart-app`) starts the site's app again in each machine as it comes up, after its links and before `start`, handed over once it prints the site's ready text (100 s, or the machine goes); or restart it yourself in `start`.
 - `snowglobe apply [-f snowglobe.toml]` gets the daemon to what a fleet file says (`name` = the fleet's
   name, default its directory's): `[templates.N]`
   (`site`, or `build` = a Dockerfile directory built first with optional `network`, or `snapshot`;
   `idle`, `max_machines`, `allow_private`, `egress` = none (the default) | internet | private, `expose` = guest ports
   the others reach under mode all, `start` = commands each of its machines runs as it comes up, after its
   links and before it is used, each a string or `{ cmd, timeout }` (2m) that must succeed or the machine
-  goes), `[network]` (`mode` = exclusive (the default: each instance
+  goes, `restart_app` = true to start the site's app again in each machine first), `[network]` (`mode` = exclusive (the default: each instance
   reaches only its own machines) | inclusive (every machine of a template reaches the target's
   template's, across instances) | all (as inclusive, plus every template reaches every other's
   `expose`d ports by its name)), `[links.N]` (`from`, `to` = a template, service or machine of the

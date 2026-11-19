@@ -63,6 +63,8 @@ type Template struct {
 	Warm []string `json:"warm,omitempty"`
 	// Commands each of its machines runs as it comes up (AddTemplate.Start)
 	Start []StartCommand `json:"start,omitempty"`
+	// Each of its machines starts the site's app again as it comes up (AddTemplate.RestartApp)
+	RestartApp bool `json:"restart_app,omitempty"`
 }
 
 // StartCommand is one of a template's start commands, with its time (DefaultStartTimeout if 0).

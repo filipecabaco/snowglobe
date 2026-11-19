@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -85,5 +86,63 @@ func TestAMachineWhoseStartCommandFailsGoesAndSaysWhy(t *testing.T) {
 			t.Errorf("%s: %v", what, err)
 			d.c.RemoveTemplate("bad")
 		}
+	}
+}
+
+func TestATemplatesMachinesStartTheAppAgainBeforeTheirStartCommands(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	d := startDaemon(t, shortTemp(t), Options{})
+	defer d.stop(t)
+	if _, err := d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "app", RestartApp: true, Start: []StartCommand{{Cmd: "first"}}}); err != nil {
+		t.Fatal(err)
+	}
+	defer d.c.RemoveTemplate("app")
+	if tpl, err := d.c.Templates(); err != nil || len(tpl) != 1 || !tpl[0].RestartApp {
+		t.Fatalf("the template keeps restart_app: %+v %v", tpl, err)
+	}
+	events, cancel := collect(t, d.c, 0)
+	defer cancel()
+	m, err := d.c.Up(Up{Template: "app", Name: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Restarted before any job, so before its start command, which ran after
+	if data, err := os.ReadFile(m.Socket + ".restarted"); err != nil || string(data) != "0" {
+		t.Errorf("jobs before the restart: %q %v", data, err)
+	}
+	if out := output(t)(d.c.Job("m", control.JobRequest{Cmd: "x"})); out != "x: 2\n" {
+		t.Errorf("a job after the start command: %q", out)
+	}
+	waitFor(t, func() bool { return has(events(), "machine.restarted_app", "machine m") })
+
+	// Without it, nothing is restarted
+	if _, err := d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "plain"}); err != nil {
+		t.Fatal(err)
+	}
+	defer d.c.RemoveTemplate("plain")
+	p, err := d.c.Up(Up{Template: "plain", Name: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p.Socket + ".restarted"); err == nil {
+		t.Error("a machine of a template without restart_app was restarted")
+	}
+}
+
+func TestAMachineWhoseAppDoesntStartAgainGoesAndSaysWhy(t *testing.T) {
+	t.Setenv("SNOWGLOBE_FAKE_VM", "serve")
+	t.Setenv("SNOWGLOBE_FAKE_RESTART", "fail")
+	d := startDaemon(t, shortTemp(t), Options{})
+	defer d.stop(t)
+	if _, err := d.c.AddTemplate(AddTemplate{Site: fakeSite(t), Name: "app", RestartApp: true}); err != nil {
+		t.Fatal(err)
+	}
+	defer d.c.RemoveTemplate("app")
+	_, err := d.c.Up(Up{Template: "app", Name: "m"})
+	if statusOf(err) != 422 || !strings.Contains(err.Error(), "wasn't ready again") {
+		t.Fatalf("up with an app that doesn't start again: %v", err)
+	}
+	if ms, _ := d.c.Machines(nil); len(ms) != 0 {
+		t.Errorf("machines after its restart failed: %+v", ms)
 	}
 }

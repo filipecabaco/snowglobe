@@ -404,7 +404,7 @@ fn user_child(
     }
     let activity = Activity::new(false);
     let host = Arc::new(machine::host(&board, site, &spec.network, net, &activity));
-    let shared = Arc::new(crate::user::Shared::default());
+    let shared = Arc::new(crate::user::Shared::for_site(site));
     match (spawn, ask) {
         (Some(s), _) => {
             let listener = listener.ok_or("no socket")?;

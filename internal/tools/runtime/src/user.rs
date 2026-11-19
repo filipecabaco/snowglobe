@@ -107,6 +107,9 @@ pub fn snapshot(args: &Args, system: &Path, spec: &Spec, ready: Option<&str>, ar
     eprintln!("\nApp ready after {boot_seconds:.2}s (user mode)");
     let process = p.save(&vm.cpus[0]);
     std::fs::write(system.join("user.bin"), &process).map_err(|e| format!("user.bin: {e}"))?;
+    // How it was started, for a machine that starts it afresh (`fresh`: a template's restart_app)
+    let start = json!({ "argv": argv, "env": env, "cwd": cwd, "hostname": opts.hostname });
+    std::fs::write(system.join(START), start.to_string()).map_err(|e| format!("{START}: {e}"))?;
     // The site's CPUs only: the others ran threads that are back in the process, and are off
     let machine = vm.cpus[0].machine.clone();
     for c in ship..spec.cpus {
@@ -225,7 +228,26 @@ fn run_until_ready<H: armless::Host>(smp: &Smp, cpu: &mut armless::cpu::Cpu<H>, 
 pub struct Shared {
     io: Mutex<Io>,
     changed: Condvar,
+    /// The site whose program a restart_app starts afresh (`fresh`), and its ready text
+    app: Option<(Site, Option<String>)>,
 }
+
+impl Shared {
+    /// For a machine of `site`, which a restart_app can start its program again in
+    pub fn for_site(site: &Site) -> Shared {
+        Shared { app: Some((site.clone(), crate::run::ready_text(site))), ..Shared::default() }
+    }
+}
+
+/// Why the program's CPUs stopped short of its end: a save asked for (its path and where the answer
+/// goes), or a restart_app (where the answer goes)
+enum Pause {
+    Save(PathBuf, SaveReply),
+    Restart(RestartReply),
+}
+
+/// Where a restart_app's answer goes
+type RestartReply = std::sync::mpsc::Sender<Result<(), String>>;
 
 /// A place the program's output goes as it comes: false when it is gone
 type Watcher = Box<dyn FnMut(&[u8]) -> bool + Send>;
@@ -250,6 +272,8 @@ struct Io {
     jobs: Vec<Asked>,
     /// A save asked for (`snapshot save`): the machine and the process, to this path
     saves: Vec<(PathBuf, SaveReply)>,
+    /// Restarts of the program asked for (a template's restart_app)
+    restarts: Vec<RestartReply>,
 }
 
 /// A job asked for, and where its answer goes
@@ -391,6 +415,58 @@ pub fn restore(site: &Site, spec: &Spec, image: Option<image::Image>, saved: Opt
     Ok((vm, p, asleep))
 }
 
+/// The site's program started afresh on `vm`, a machine restored from the site's snapshot or a
+/// machine saved of it (its filesystem as that left it; armless gives the program memory that is
+/// zero), as the snapshot started it (`START`), and run until it printed the site's ready text
+/// (`ready`), with what it printed. A process with nothing of the saved one's memory, so a random
+/// state of its own: a template's restart_app. A site built before `START` was recorded is
+/// refused.
+pub fn fresh(vm: &mut Vm<NativePlatform>, site: &Site, ready: Option<&str>) -> Result<(Process, Vec<u8>), String> {
+    let start = site
+        .file(&format!("system/{START}"))
+        .ok_or("restart_app: the site was built before snowglobe recorded how its program starts: build it again")?;
+    let start: serde_json::Value = serde_json::from_slice(&start).map_err(|e| format!("{START}: {e}"))?;
+    let strings = |k: &str| -> Vec<String> {
+        start[k].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
+    };
+    let (argv, env) = (strings("argv"), strings("env"));
+    if argv.is_empty() {
+        return Err(format!("{START}: no program"));
+    }
+    let cwd = start["cwd"].as_str().unwrap_or("/");
+    let opts = ExecOptions { std: StdStreams::Terminal, hostname: start["hostname"].as_str().map(String::from) };
+    let started = Instant::now();
+    let mut p = loop {
+        match Process::exec_with(&mut vm.cpus[0], vm.board.clone(), &argv, &env, cwd, &opts) {
+            Ok(p) => break p,
+            Err(ExecError::Need(_)) if started.elapsed() < BUILD_TIMEOUT => std::thread::sleep(Duration::from_millis(5)),
+            Err(e) => return Err(format!("{}: {e}", argv[0])),
+        }
+    };
+    p.reap_orphans = true;
+    let mut console = Vec::new();
+    let smp = Smp::new(&mut p);
+    let (first, others) = vm.cpus.split_at_mut(1);
+    let workers = others.len();
+    let cpu = &mut first[0];
+    std::thread::scope(|s| -> Result<(), String> {
+        for (i, c) in others.iter_mut().enumerate() {
+            let smp = &smp;
+            s.spawn(move || smp.serve(i + 1, c));
+        }
+        let up = run_until_ready(&smp, cpu, ready, &argv, started, &mut console);
+        smp.pause(workers);
+        smp.stop();
+        up
+    })?;
+    drop(smp);
+    Ok((p, console))
+}
+
+/// Where a site with no kernel says how its program was started (argv, env, cwd, hostname), in
+/// its system directory beside user.bin
+const START: &str = "user-start.json";
+
 /// Where a saved machine's process goes, beside the machine's state
 fn user_path(machine: &Path) -> PathBuf {
     let mut p = machine.as_os_str().to_owned();
@@ -453,7 +529,7 @@ pub fn run(args: &Args, site: &Site, spec: &Spec, title: &str, image: Option<ima
         eprintln!("timing: restored in {:.0} ms (user mode)", started.elapsed().as_secs_f64() * 1e3);
     }
 
-    let shared = Arc::new(Shared::default());
+    let shared = Arc::new(Shared::for_site(site));
 
     // A job (--workspace, a bundle as a job runner): the workspace in, the command run beside the
     // program, out/ back and its status the run's, as with a kernel
@@ -604,7 +680,7 @@ pub fn drive(vm: &mut Vm<NativePlatform>, p: &mut Process, shared: &Arc<Shared>)
     let board = vm.board.clone();
     let mut running: Vec<Running> = Vec::new();
     loop {
-        let (ended, save) = stretch(vm, p, &board, shared, &mut running);
+        let (ended, pause) = stretch(vm, p, &board, shared, &mut running);
         if let Some(ended) = ended {
             // The jobs still running end with it
             for j in running {
@@ -615,17 +691,26 @@ pub fn drive(vm: &mut Vm<NativePlatform>, p: &mut Process, shared: &Arc<Shared>)
             for (_, answer) in io.saves.drain(..) {
                 let _ = answer.send(Err(format!("the program stopped: {ended}")));
             }
+            for answer in io.restarts.drain(..) {
+                let _ = answer.send(Err(format!("the program stopped: {ended}")));
+            }
             shared.changed.notify_all();
             return ended;
         }
-        if let Some((path, answer)) = save {
-            let _ = answer.send(save_machine(vm, p, &path));
+        match pause {
+            Some(Pause::Save(path, answer)) => {
+                let _ = answer.send(save_machine(vm, p, &path));
+            },
+            Some(Pause::Restart(answer)) => {
+                let _ = answer.send(restart(vm, p, shared, &mut running));
+            },
+            None => {},
         }
     }
 }
 
-/// The program on every CPU until it ends (Some: what with) or a save is asked for (its path and
-/// where the answer goes, every thread back in the process).
+/// The program on every CPU until it ends (Some: what with) or a save or a restart is asked for
+/// (every thread back in the process).
 #[allow(clippy::type_complexity)]
 fn stretch(
     vm: &mut Vm<NativePlatform>,
@@ -633,7 +718,7 @@ fn stretch(
     board: &Arc<armless::Board>,
     shared: &Arc<Shared>,
     running: &mut Vec<Running>,
-) -> (Option<String>, Option<(PathBuf, std::sync::mpsc::Sender<Result<(u64, u64), String>>)>) {
+) -> (Option<String>, Option<Pause>) {
     let smp = Smp::new(p);
     let (first, others) = vm.cpus.split_at_mut(1);
     let workers = others.len();
@@ -646,8 +731,11 @@ fn stretch(
         let out = loop {
             {
                 let mut io = shared.io.lock().unwrap();
-                if let Some(save) = (!io.saves.is_empty()).then(|| io.saves.remove(0)) {
-                    break (None, Some(save));
+                if let Some((path, answer)) = (!io.saves.is_empty()).then(|| io.saves.remove(0)) {
+                    break (None, Some(Pause::Save(path, answer)));
+                }
+                if let Some(answer) = (!io.restarts.is_empty()).then(|| io.restarts.remove(0)) {
+                    break (None, Some(Pause::Restart(answer)));
                 }
                 let resize = io.resize.take();
                 let pending: Vec<u8> = io.input.drain(..).collect();
@@ -726,7 +814,7 @@ fn stretch(
                     // not in 50; a job running is looked at every 10
                     let most = Duration::from_millis(if blobs { 1 } else if running.is_empty() { 50 } else { 10 });
                     let wait = wake.map_or(most, |w| w.saturating_duration_since(Instant::now())).min(most);
-                    if io.input.is_empty() && io.resize.is_none() && io.jobs.is_empty() && io.saves.is_empty() {
+                    if io.input.is_empty() && io.resize.is_none() && io.jobs.is_empty() && io.saves.is_empty() && io.restarts.is_empty() {
                         let _ = shared.changed.wait_timeout(io, wait);
                     }
                 },
@@ -738,6 +826,29 @@ fn stretch(
         smp.stop();
         out
     })
+}
+
+/// A restart_app: the site's program started afresh in place of `p` (`fresh`), what it printed as
+/// it started going where its output goes. Jobs still running were the old program's: they end.
+fn restart(vm: &mut Vm<NativePlatform>, p: &mut Process, shared: &Arc<Shared>, running: &mut Vec<Running>) -> Result<(), String> {
+    let (site, ready) = shared.app.clone().ok_or("restart_app: this machine doesn't know its site")?;
+    for j in running.drain(..) {
+        let _ = j.answer.send(Err("the app was restarted".into()));
+    }
+    let (fresh, printed) = fresh(vm, &site, ready.as_deref())?;
+    *p = fresh;
+    let mut io = shared.io.lock().unwrap();
+    if !printed.is_empty() {
+        io.output.extend_from_slice(&printed);
+        if let Some(l) = crate::log::get() {
+            l.console(&printed);
+        }
+        io.last_output = Some(Instant::now());
+        io.waiting = false;
+        io.watchers.retain_mut(|w| w(&printed));
+    }
+    shared.changed.notify_all();
+    Ok(())
 }
 
 /// A job as a process of its own beside the program (`Process::spawn`), a shell running the job's
@@ -961,6 +1072,19 @@ fn serve(shared: &Arc<Shared>, host: &Arc<armless::native::NativeHost>, stream: 
         return;
     }
     match mode {
+        // A template's restart_app: the program started afresh, answered once it is ready
+        "restart_app" => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            shared.io.lock().unwrap().restarts.push(tx);
+            shared.changed.notify_all();
+            let answer = match rx.recv() {
+                Ok(Ok(())) => json!({ "restarted": true }),
+                Ok(Err(e)) => json!({ "error": e }),
+                Err(_) => json!({ "error": "the program stopped" }),
+            };
+            let _ = writer.write_all(format!("{answer}\n").as_bytes());
+            return;
+        },
         // The whole machine, and the process, to a file (and its .user beside it), from which a
         // fork server starts a machine again
         "save" => {

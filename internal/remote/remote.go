@@ -344,6 +344,8 @@ var siteFiles = []struct {
 	{"system/tls.json", true},
 	// A site with no kernel: its program's process
 	{"system/user.bin", true},
+	// ... and how that program was started, for a template's restart_app
+	{"system/user-start.json", true},
 }
 
 func mirror(c *http.Client, source, dir string) error {

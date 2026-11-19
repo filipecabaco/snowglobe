@@ -263,6 +263,16 @@ func fakeMachine(sock string) {
 			jobs++
 			send(c, control.JobResult{Status: new(int), Output: fmt.Appendf(nil, "%s: %d\n", req["cmd"], jobs)})
 			c.Close()
+		case "restart_app":
+			// The jobs it ran before, kept beside the socket for the test to read. With
+			// SNOWGLOBE_FAKE_RESTART=fail, an app that never gets ready again
+			if os.Getenv("SNOWGLOBE_FAKE_RESTART") == "fail" {
+				send(c, map[string]any{"error": "restart_app: the app wasn't ready again within 100s"})
+			} else {
+				os.WriteFile(sock+".restarted", fmt.Append(nil, jobs), 0o600)
+				send(c, map[string]any{"restarted": true})
+			}
+			c.Close()
 		case "save":
 			path, _ := req["path"].(string)
 			os.WriteFile(sock+".saved", []byte(path), 0o600)

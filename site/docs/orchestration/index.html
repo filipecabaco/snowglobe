@@ -304,7 +304,14 @@ ttl = "24h"</pre>
               site's own processes start meanwhile (a backend its Postgres forks for a query) is the site's, and
               not named.</li>
             <li>A site whose image starts its server before it is built (its Dockerfile's command) holds that
-              server too: restart it in <code>start</code>, as <code>examples/todo-fleet</code> does with its app.</li>
+              server too. Set the template's <code>restart_app = true</code> (<code>snowglobe template add
+              --restart-app</code>): each machine then starts the site's app again as it comes up, after its links
+              are set and before its <code>start</code>, and is handed over once the app prints the site's ready
+              text again (it goes if the app isn't ready in 100 s). With a kernel, the app's console session ends
+              (the app and what it started in its session) and init starts it again; with none, the program starts
+              afresh as the build started it, on the machine's own files. A site built before snowglobe 0.28 needs
+              building again for this. Or restart it yourself in <code>start</code>, as
+              <code>examples/todo-fleet</code> does with its app.</li>
           </ul>
           <p>The daemon keeps a list of fleets, like compose projects. <code>/v1/fleets</code> adds a file from where
             it is, or writes a new one in the daemon's own directory (checked before it is saved). It plans, applies
