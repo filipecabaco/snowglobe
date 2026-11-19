@@ -428,7 +428,8 @@ as = "wake.internal"
 }
 
 // Randomness across machines of one snapshot, on real machines: the guest kernel is reseeded at each
-// restore, a process the snapshot kept running is copied with its random state (ash keeps $RANDOM's
+// restore, before anything draws (a start command's first read differs, in machines of a fleet's
+// snapshot and of the site's own), a process the snapshot kept running is copied with its random state (ash keeps $RANDOM's
 // in its memory, as Node keeps crypto's), apply says so, and one started by the template's start
 // draws its own.
 func (e *e2e) randomness(t *testing.T) {
@@ -450,12 +451,24 @@ run = [
 
 [templates.kept]
 snapshot = "kept"
-start = ['(sh /root/draw /tmp/go2 /tmp/out2 >/dev/null 2>&1 &)']
+# The first thing each machine does, right after its restore: draw from the kernel
+start = [
+  'head -c 16 /dev/urandom | od -An -tx1 > /tmp/first',
+  '(sh /root/draw /tmp/go2 /tmp/out2 >/dev/null 2>&1 &)',
+]
+
+[templates.fresh]
+site = %q
+start = ['head -c 16 /dev/urandom | od -An -tx1 > /tmp/first']
 
 [machines.r]
 template = "kept"
 count = 2
-`, e.site)), 0o644)
+
+[machines.f]
+template = "fresh"
+count = 2
+`, e.site, e.site)), 0o644)
 	out := e.must(t, 0, "apply", "-f", file)
 	defer e.run(t, nil, "down", "-f", file)
 	// (A child of it that runs as the list is taken, its sleep, may be named too)
@@ -465,6 +478,13 @@ count = 2
 
 	draw := func(m, cmd string) string {
 		return strings.TrimSpace(e.must(t, 0, "sh", m, cmd))
+	}
+	// The first draw each machine made, in its start, right after its restore: of a fleet's
+	// snapshot, and of the site's own
+	for _, pair := range [][2]string{{"r-1", "r-2"}, {"f-1", "f-2"}} {
+		if a, b := draw(pair[0], "cat /tmp/first"), draw(pair[1], "cat /tmp/first"); a == b || a == "" {
+			t.Errorf("%s and %s drew the same first bytes: %q", pair[0], pair[1], a)
+		}
 	}
 	// The kernel's: each its own
 	if a, b := draw("r-1", "head -c 16 /dev/urandom | od -An -tx1"), draw("r-2", "head -c 16 /dev/urandom | od -An -tx1"); a == b || a == "" {

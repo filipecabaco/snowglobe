@@ -250,7 +250,7 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
   `Math.random`, `crypto.randomBytes`, `randomUUID`; Erlang's `:crypto`; Python's `random`): the same
   tokens, keys and ids in each. Start servers in a template's `start` (`snowglobe template add --start
   CMD`, the fleet file's `start`), not in a snapshot's `run`; `apply` warns when a snapshot's commands
-  leave a process running. A site whose image runs its server before it is built: restart it in `start`.
+  leave a process running (not one the site's own processes started, as Postgres its backends). A site whose image runs its server before it is built: restart it in `start`.
 - `snowglobe apply [-f snowglobe.toml]` gets the daemon to what a fleet file says (`name` = the fleet's
   name, default its directory's): `[templates.N]`
   (`site`, or `build` = a Dockerfile directory built first with optional `network`, or `snapshot`;

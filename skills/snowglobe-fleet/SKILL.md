@@ -22,7 +22,7 @@ Changed entries are replaced along with everything made from them; entries gone 
 Every machine of a template is a copy of one saved machine. The guest kernel is reseeded at each restore, so `/dev/urandom` and processes started afterwards are fine. A process that was already running in the snapshot is copied with its random state into every machine: Node's `Math.random`, `crypto.randomBytes` and `randomUUID`, Erlang's `:crypto`, Python's `random` give the same values in each (same session tokens, keys, ids).
 
 - Write files and install in `[snapshots.N] run`; launch servers in `[templates.N] start` (each machine runs its own; a wait loop as the last command makes it ready before use).
-- `apply` prints `! S keeps … running` when a snapshot's commands leave a process running: move it to `start`.
+- `apply` prints `! S keeps … running` when a snapshot's commands leave a process running: move it to `start`. Processes the site's own processes start (Postgres backends) aren't named.
 - A site that runs its server before it is built (Dockerfile CMD): restart it in `start` (examples/todo-fleet does).
 
 ## Keys
