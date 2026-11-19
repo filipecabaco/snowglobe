@@ -28,8 +28,9 @@ const trailer = 3*8 + len(Magic)
 
 // systemFiles are what a run reads from the site's system directory, besides blobs.
 // user.bin: a site with no kernel's process (without it, its machine is taken for one with a
-// kernel, and runs nothing)
-var systemFiles = []string{"state.bin.zst", "filesystem.json", "console.bin", "jit-profile.bin", "tls.json", "user.bin"}
+// kernel, and runs nothing); user-start.json: how its program was started, for a machine that
+// starts it afresh (a template's restart_app)
+var systemFiles = []string{"state.bin.zst", "filesystem.json", "console.bin", "jit-profile.bin", "tls.json", "user.bin", "user-start.json"}
 
 // Stats describe a bundle written.
 type Stats struct {

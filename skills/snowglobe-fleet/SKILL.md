@@ -23,14 +23,14 @@ Every machine of a template is a copy of one saved machine. The guest kernel is 
 
 - Write files and install in `[snapshots.N] run`; launch servers in `[templates.N] start` (each machine runs its own; a wait loop as the last command makes it ready before use).
 - `apply` prints `! S keeps … running` when a snapshot's commands leave a process running: move it to `start`. Processes the site's own processes start (Postgres backends) aren't named.
-- A site that runs its server before it is built (Dockerfile CMD): restart it in `start` (examples/todo-fleet does).
+- A site that runs its server before it is built (Dockerfile CMD): `restart_app = true` on the template starts the site's app again in each machine (after links, before `start`, handed over once it prints the site's ready text; sites built before snowglobe 0.28 need a rebuild), or restart it yourself in `start` (examples/todo-fleet does).
 
 ## Keys
 
 | Table | Keys |
 |---|---|
 | (top) | `name` (default: the file's directory) |
-| `[templates.N]` | exactly one source: `site` (a site or URL), `build` (a Dockerfile directory, built first), or `snapshot` (a `[snapshots.*]` name); also `network` (`fetch`), `idle`, `max_machines`, `egress` (`none` default, `internet`, `private`), `allow_private` (same as `egress = "private"`; a conflicting `egress` is an error), `expose` (guest ports others reach under mode `all`), `start` (commands each machine runs as it comes up, before it is used: strings or `{ cmd, timeout }`, 2m default; one failing removes the machine) |
+| `[templates.N]` | exactly one source: `site` (a site or URL), `build` (a Dockerfile directory, built first), or `snapshot` (a `[snapshots.*]` name); also `network` (`fetch`), `idle`, `max_machines`, `egress` (`none` default, `internet`, `private`), `allow_private` (same as `egress = "private"`; a conflicting `egress` is an error), `expose` (guest ports others reach under mode `all`), `start` (commands each machine runs as it comes up, before it is used: strings or `{ cmd, timeout }`, 2m default; one failing removes the machine), `restart_app` (true: each machine starts the site's app again first; not applied on the browser page) |
 | `[snapshots.N]` | `template`, `run` (commands that must succeed), `ready` (command retried until it succeeds), `timeout` (default 2m). Saved once ready. Prepare files here; start servers in the template's `start` (below). |
 | `[services.N]` | `template`, `ports` (`"HOST:GUEST"`), `min`, `max`, `idle`, `concurrency`, `state` (`discard` or `keep`), `labels` |
 | `[services.N.health]` | one of `cmd` (exit 0 passes) or a `[services.N.health.http]` table (`port`, `path` default `/`, `status` default `"200-399"` or a list `"200,204"`); `interval` (10s), `timeout` (2s), `failures` (3 in a row), `grace` (30s after start), `heal` (`replace` default, `drain`, `hook` with `heal_cmd`, `none`), `drain` (30s), `wait_ready` (false). Write `http` as a sub-table, not inline: the /fleet/ page reads no inline tables |

@@ -107,8 +107,9 @@ var daemonTools = []map[string]any{
 	tool("add_template", "Restore a built site once as a template (a directory, a tarball, or a deployed site's URL), or make one from a snapshot.", obj(map[string]any{
 		"site": str("The built site (omit with snapshot)"), "name": str("Its name"), "snapshot": str("Start it from this snapshot instead"),
 		"idle": str("Stop its server after this long without a machine, e.g. 30m"), "max_machines": num("Most machines at once"), "labels": labels(),
-		"health": map[string]any{"type": "object", "description": "The health check its services and machines take when they have none of their own (as add_service's health)"},
-		"start":  strs("Commands each machine runs as it comes up, before it is used (each must succeed in 2 minutes): start servers here, not in a snapshot, so each machine draws its own randomness"),
+		"health":      map[string]any{"type": "object", "description": "The health check its services and machines take when they have none of their own (as add_service's health)"},
+		"start":       strs("Commands each machine runs as it comes up, before it is used (each must succeed in 2 minutes): start servers here, not in a snapshot, so each machine draws its own randomness"),
+		"restart_app": boolean("Each machine starts the site's app again as it comes up, before start: a server the site's image runs (its Dockerfile's command) is otherwise the same copy, random state and all, in every machine"),
 	})),
 	tool("remove_template", "Remove a template and every machine forked from it.", obj(map[string]any{"name": str("The template")}, "name")),
 	tool("list_machines", "Machines: lasting forks of templates, with their ports, labels and expiry.", obj(map[string]any{"labels": labels()})),
@@ -323,7 +324,7 @@ func (d *Daemon) do(name string, a args) (string, error) {
 		for _, c := range a.strs("start") {
 			start = append(start, daemon.StartCommand{Cmd: c})
 		}
-		v, err := api.AddTemplate(daemon.AddTemplate{Site: a.str("site"), Name: a.str("name"), Snapshot: a.str("snapshot"), Idle: idle, MaxMachines: int(a.num("max_machines")), Labels: a.labels("labels"), Health: health, Start: start})
+		v, err := api.AddTemplate(daemon.AddTemplate{Site: a.str("site"), Name: a.str("name"), Snapshot: a.str("snapshot"), Idle: idle, MaxMachines: int(a.num("max_machines")), Labels: a.labels("labels"), Health: health, Start: start, RestartApp: a.bool("restart_app", false)})
 		return asJSON(v), err
 	case "remove_template":
 		return "removed template " + a.str("name"), api.RemoveTemplate(a.str("name"))

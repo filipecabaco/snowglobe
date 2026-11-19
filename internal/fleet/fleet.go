@@ -84,6 +84,11 @@ type TemplateSpec struct {
 	// randomness rather than the copy a snapshot kept of one already running. Each a string or
 	// { cmd, timeout } (default daemon.DefaultStartTimeout)
 	Start []Command `toml:"start" json:"start,omitempty"`
+	// Each of its machines starts the site's app again as it comes up, before start
+	// (daemon.AddTemplate.RestartApp): for a site whose image runs its server (its Dockerfile's
+	// command), which its snapshot holds running and every machine would otherwise share, random
+	// state and all
+	RestartApp bool `toml:"restart_app" json:"restart_app,omitempty"`
 	// What the build saw of its directory (a hash of its files' names, sizes and times): a change
 	// rebuilds
 	Source string `toml:"-" json:"source,omitempty"`

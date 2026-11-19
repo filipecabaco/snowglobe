@@ -606,7 +606,7 @@ func (p *Plan) create(api API, build Builder, o Object, logf func(string, ...any
 			}
 		}
 		_, err := api.AddTemplate(daemon.AddTemplate{Site: site, Name: o.Name, MaxMachines: s.MaxMachines,
-			Idle: durationOf(s.Idle), Snapshot: s.Snapshot, Egress: s.egress(), Labels: p.labels(o, nil), Health: s.Health.health(), Start: s.start()})
+			Idle: durationOf(s.Idle), Snapshot: s.Snapshot, Egress: s.egress(), Labels: p.labels(o, nil), Health: s.Health.health(), Start: s.start(), RestartApp: s.RestartApp})
 		return err
 	case SnapshotSpec:
 		return p.snapshot(api, o, s, logf)

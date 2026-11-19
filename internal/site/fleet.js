@@ -462,7 +462,7 @@
   // as not applied here. fleet.test.cjs checks both lists against the Go structs, so a key added to the
   // format has to be decided here too, and a file the CLI refuses is refused here.
   const KEYS = {
-    templates: { applied: ["site", "build", "snapshot", "network", "health", "start"], said: ["idle", "max_machines", "allow_private", "egress", "expose"] },
+    templates: { applied: ["site", "build", "snapshot", "network", "health", "start"], said: ["idle", "max_machines", "allow_private", "egress", "expose", "restart_app"] },
     snapshots: { applied: ["template", "run", "ready", "timeout"], said: [] },
     services: { applied: ["template", "ports", "health"], said: ["min", "max", "idle", "concurrency", "state", "labels"] },
     machines: { applied: ["template", "health"], said: ["count", "ports", "ttl", "labels"] },

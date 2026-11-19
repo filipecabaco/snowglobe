@@ -597,6 +597,11 @@ type AddTemplate struct {
 	// the same "random" tokens, keys and ids in each; one started here draws its own, from the
 	// guest kernel, which is reseeded at every restore
 	Start []StartCommand `json:"start,omitempty"`
+	// Each of its machines starts the site's app again as it comes up, before its start commands
+	// (and after its links are set): the app a site's snapshot holds running (its Dockerfile's
+	// command, a REPL, a server) is copied into every machine with its random state, and one
+	// started again draws its own. Waited for until it prints the site's ready text
+	RestartApp bool `json:"restart_app,omitempty"`
 	// From another host (IsRemote): held to the daemon's Policy
 	remote bool
 }
@@ -703,6 +708,7 @@ func (s *Server) AddTemplate(req AddTemplate) (*Template, error) {
 		Name: name, Site: site, JobsRoot: filepath.Join(dir, "jobs"), Log: filepath.Join(dir, "log"),
 		MaxMachines: max, VM: s.o.VM, Idle: req.Idle, Labels: req.Labels, Started: time.Now(),
 		AllowPrivate: req.AllowPrivate, Egress: req.Egress, Health: req.Health, Start: req.Start,
+		RestartApp: req.RestartApp,
 	}
 	if snap != nil {
 		t.Snapshot = snap.Name
@@ -1241,7 +1247,17 @@ func (s *Server) up(req Up) (*Machine, error) {
 	s.mu.Unlock()
 	s.note("machine.up", "machine "+name, "up from %s (pid %d)", t.Name, m.Pid)
 	s.linkUp(m)
-	if err := s.startMachine(m, t.Start); err != nil {
+	err = nil
+	if t.RestartApp {
+		begun := time.Now()
+		if err = control.RestartApp(m.Socket); err == nil {
+			s.note("machine.restarted_app", "machine "+name, "started its site's app again in %d ms", time.Since(begun).Milliseconds())
+		}
+	}
+	if err == nil {
+		err = s.startMachine(m, t.Start)
+	}
+	if err != nil {
 		s.note("machine.start_failed", "machine "+name, "%v", err)
 		if _, e := s.takeDown(name); e == nil {
 			s.dropLinks(KindMachine, name)
@@ -1300,7 +1316,6 @@ func firstLine(cmd string) string {
 	}
 	return line
 }
-
 
 // RemoveMachine stops a machine and forgets it.
 func (s *Server) RemoveMachine(name string) error {

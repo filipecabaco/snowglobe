@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -504,5 +505,72 @@ count = 2
 	fresh := ": > /tmp/go2; sleep 1; cat /tmp/out2"
 	if a, b := draw("r-1", fresh), draw("r-2", fresh); a == b || a == "" {
 		t.Errorf("processes started by start drew the same: %q", a)
+	}
+}
+
+// A template's restart_app on real machines: the site's app (the curl site's shell, which its
+// snapshot holds running) is every machine's same process, unless each machine starts it again
+// before it is used, which the daemon logs. With a kernel the app's pid tells them apart: the
+// snapshot's in every copy, a new one in each restarted machine. (Its $RANDOM can't: ash seeds it
+// on first use, after the restore.) The restarted app answers at its console.
+func (e *e2e) restartApp(t *testing.T) {
+	e.startDaemon(t)
+	file := filepath.Join(t.TempDir(), "snowglobe.toml")
+	os.WriteFile(file, []byte(fmt.Sprintf(`name = "e2e-restart"
+
+[templates.kept]
+site = %q
+
+[templates.fresh]
+site = %q
+restart_app = true
+
+[machines.k]
+template = "kept"
+count = 2
+
+[machines.f]
+template = "fresh"
+count = 2
+`, e.site, e.site)), 0o644)
+	e.must(t, 0, "apply", "-f", file)
+	defer e.run(t, nil, "down", "-f", file)
+
+	log, _ := os.ReadFile(filepath.Join(os.Getenv("SNOWGLOBE_DAEMON_DIR"), "daemon.log"))
+	for _, m := range []string{"f-1", "f-2"} {
+		if !strings.Contains(string(log), "machine "+m+": started its site's app again") {
+			t.Errorf("%s didn't start its app again:\n%s", m, log)
+		}
+	}
+	if strings.Contains(string(log), "machine k-1: started its site's app again") {
+		t.Error("a machine of a template without restart_app started its app again")
+	}
+
+	var info struct {
+		Kernel string `json:"kernel"`
+	}
+	data, _ := os.ReadFile(filepath.Join(e.site, "run.json"))
+	json.Unmarshal(data, &info)
+	pid := func(m string) string {
+		out := e.must(t, 0, "exec", m, "echo P$$")
+		for _, w := range strings.Fields(out) {
+			if strings.HasPrefix(w, "P") && len(w) > 1 && w != "P$$" {
+				return w
+			}
+		}
+		t.Fatalf("%s's app said no pid: %q", m, out)
+		return ""
+	}
+	if info.Kernel != "none" {
+		k1, k2, f1 := pid("k-1"), pid("k-2"), pid("f-1")
+		if k1 != k2 {
+			t.Errorf("the snapshot's app has pids %s and %s in two copies", k1, k2)
+		}
+		if f1 == k1 {
+			t.Errorf("the restarted app is still the snapshot's (%s)", f1)
+		}
+	}
+	if out := e.must(t, 0, "exec", "f-1", "echo still-$((6*7))"); !strings.Contains(out, "still-42") {
+		t.Errorf("the restarted app doesn't answer: %q", out)
 	}
 }

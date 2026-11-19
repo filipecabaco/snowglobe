@@ -441,6 +441,32 @@ func Linker(sock string) (*net.UnixConn, *bufio.Reader, error) {
 	return uc, r, nil
 }
 
+// RestartApp starts the site's app again in the machine whose control socket is sock (a
+// template's restart_app), and returns once the app printed its ready text: a process of its own,
+// with a random state of its own, not the copy of the snapshot's every machine of it has.
+func RestartApp(sock string) error {
+	var answer struct {
+		Restarted bool   `json:"restarted"`
+		Error     string `json:"error"`
+	}
+	conn, _, err := ask(sock, map[string]any{"mode": "restart_app"}, &answer, 2*time.Minute)
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) {
+		return errors.New("restart_app: this machine's snowglobe-vm can't (update it)")
+	}
+	if err != nil {
+		return fmt.Errorf("restart_app: %w", err)
+	}
+	conn.Close()
+	if answer.Error != "" {
+		return errors.New(answer.Error)
+	}
+	if !answer.Restarted {
+		return errors.New("restart_app: this machine's snowglobe-vm can't (update it)")
+	}
+	return nil
+}
+
 // SetLinks replaces the links of the machine whose control socket is sock: its new connections
 // follow them at once.
 func SetLinks(sock string, links []Link) error {
