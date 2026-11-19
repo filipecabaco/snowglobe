@@ -365,7 +365,7 @@ site = %q
 template = "base"
 # A server that always listens (-lk): each connection gets a line and ends
 run = [
-  'printf "#!/bin/sh\\necho from \\$(hostname)\\n" > /root/say && chmod +x /root/say',
+  'printf "#!/bin/sh\\necho from the link\\n" > /root/say && chmod +x /root/say',
   '(nc -lk -p 7000 -e /root/say) >/dev/null 2>&1 &',
 ]
 ready = "nc -z 127.0.0.1 7000"
