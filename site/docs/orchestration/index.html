@@ -300,7 +300,9 @@ ttl = "24h"</pre>
               uses it (a service's first connection, the fleet's next step); each command must succeed in its time
               (<code>{ cmd, timeout }</code>, 2 minutes by default), or the machine goes.
               <code>snowglobe template add --start CMD</code> does the same.</li>
-            <li><code>apply</code> warns when a snapshot's commands leave something running, and names it.</li>
+            <li><code>apply</code> warns when a snapshot's commands leave something running, and names it. What the
+              site's own processes start meanwhile (a backend its Postgres forks for a query) is the site's, and
+              not named.</li>
             <li>A site whose image starts its server before it is built (its Dockerfile's command) holds that
               server too: restart it in <code>start</code>, as <code>examples/todo-fleet</code> does with its app.</li>
           </ul>

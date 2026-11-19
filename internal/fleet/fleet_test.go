@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -981,7 +982,7 @@ func TestASnapshotThatKeepsAProcessRunningIsWarnedAbout(t *testing.T) {
 	api.readyAfter["wget -q -O- localhost:8000"] = 0
 	// Before its commands: a shell; after: the server they left running too
 	// Each listing is a job of its own: its runner's scripts (under .sg/) differ and don't count
-	api.procs = []string{"/bin/sh -l\nsh /sgjob/aaa/.sg/job.sh\nsh .sg/cmd\n", "/bin/sh -l\nsh /sgjob/bbb/.sg/job.sh\nsh .sg/cmd\npython3 -m http.server 8000\n"}
+	api.procs = []string{"1 0 /bin/sh -l\n7 1 sh /sgjob/aaa/.sg/job.sh\n8 7 sh .sg/cmd\n", "1 0 /bin/sh -l\n20 1 python3 -m http.server 8000\n21 1 sh /sgjob/bbb/.sg/job.sh\n22 21 sh .sg/cmd\n"}
 	p, err := f.Plan(api)
 	if err != nil {
 		t.Fatal(err)
@@ -1002,7 +1003,7 @@ func TestASnapshotThatKeepsAProcessRunningIsWarnedAbout(t *testing.T) {
 
 	// Nothing left running: no warning
 	api = newFake()
-	api.procs = []string{"/bin/sh -l\n", "/bin/sh -l\n"}
+	api.procs = []string{"1 0 /bin/sh -l\n", "1 0 /bin/sh -l\n"}
 	p, _ = f.Plan(api)
 	log = nil
 	if err := p.Apply(api, b.build, logf); err != nil {
@@ -1014,10 +1015,21 @@ func TestASnapshotThatKeepsAProcessRunningIsWarnedAbout(t *testing.T) {
 }
 
 func TestKeptRunningIsWhatIsNewAndSaysLittle(t *testing.T) {
-	set := func(ps ...string) map[string]bool {
-		m := map[string]bool{}
-		for _, p := range ps {
-			m[p] = true
+	// A listing: "pid ppid cmd" lines
+	list := func(lines ...string) map[int]proc {
+		m := map[int]proc{}
+		for _, l := range lines {
+			f := strings.SplitN(l, " ", 3)
+			pid, _ := strconv.Atoi(f[0])
+			ppid, _ := strconv.Atoi(f[1])
+			m[pid] = proc{ppid, f[2]}
+		}
+		return m
+	}
+	set := func(cmds ...string) map[int]proc {
+		m := map[int]proc{}
+		for i, c := range cmds {
+			m[100+i] = proc{1, c}
 		}
 		return m
 	}
@@ -1036,5 +1048,27 @@ func TestKeptRunningIsWhatIsNewAndSaysLittle(t *testing.T) {
 		if len(p) > 60 {
 			t.Errorf("not cut: %d", len(p))
 		}
+	}
+	if got := keptRunning(set(), set("node a", "node a")); len(got) != 1 {
+		t.Errorf("one command line twice is said once: %v", got)
+	}
+
+	// A kernel's machine: init, the site's Postgres, and the job that lists
+	before := list("1 0 /init", "40 1 postgres -D /data", "41 40 postgres: checkpointer", "90 1 sh /x/.sg/job.sh", "91 90 tr")
+	after := list("1 0 /init", "40 1 postgres -D /data", "41 40 postgres: checkpointer",
+		// What the commands made Postgres start: the site's
+		"60 40 postgres: autovacuum worker", "61 40 postgres: supa app idle",
+		// What they left running, handed to init when their shell ended
+		"70 1 node server.js", "71 70 node worker.js",
+		"95 1 sh /x/.sg/job.sh", "96 95 tr")
+	if got := keptRunning(before, after); !reflect.DeepEqual(got, []string{"node server.js", "node worker.js"}) {
+		t.Errorf("a kernel's machine: %v", got)
+	}
+	// User mode: a job's runner runs beside the first process (1000), which is handed what is
+	// left running
+	before = list("1000 1 /bin/sh", "1003 0 /bin/sh /x/.sg/cmd")
+	after = list("1000 1 /bin/sh", "1005 1000 sh /root/draw", "1006 1005 sleep 0.1", "1011 0 /bin/sh /y/.sg/cmd", "1012 1011 tr")
+	if got := keptRunning(before, after); !reflect.DeepEqual(got, []string{"sh /root/draw", "sleep 0.1"}) {
+		t.Errorf("user mode: %v", got)
 	}
 }

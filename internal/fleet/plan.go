@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -743,39 +744,97 @@ func (p *Plan) snapshot(api API, o Object, s SnapshotSpec, logf func(string, ...
 	return err
 }
 
-// processList prints each of the guest's processes by its command line (kernel threads have none).
-const processList = `for d in /proc/[0-9]*; do c=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null); [ -n "$c" ] && echo "$c"; done; true`
+// processList prints each of the guest's processes as its pid, its parent's and its command line
+// (kernel threads have none). The parent is the field after the state, after the last ")" of
+// /proc/N/stat (a command's name may have spaces and parentheses).
+const processList = `for d in /proc/[0-9]*; do c=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null); [ -n "$c" ] || continue; s=$(cat "$d/stat" 2>/dev/null) || continue; s=${s##*) }; set -- $s; echo "${d#/proc/} $2 $c"; done; true`
 
-// processes are the command lines of what runs in machine m (nil if it can't say).
-func processes(api API, m string) map[string]bool {
+// proc is a process of a listing: its parent and its command line.
+type proc struct {
+	ppid int
+	cmd  string
+}
+
+// processes are what runs in machine m, by pid (nil if it can't say).
+func processes(api API, m string) map[int]proc {
 	res, err := api.Job(m, control.JobRequest{Cmd: processList, Timeout: 30})
 	if err != nil || res.Status == nil || *res.Status != 0 {
 		return nil
 	}
-	out := map[string]bool{}
+	out := map[int]proc{}
 	for _, l := range strings.Split(string(res.Output), "\n") {
-		// A job's own processes (its runner's scripts, under .sg/) are each job's, not the machine's
-		if l = strings.TrimSpace(l); l != "" && !strings.Contains(l, ".sg/") {
-			out[l] = true
+		f := strings.SplitN(strings.TrimSpace(l), " ", 3)
+		if len(f) < 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		ppid, err2 := strconv.Atoi(f[1])
+		if err1 == nil && err2 == nil {
+			out[pid] = proc{ppid, strings.TrimSpace(f[2])}
 		}
 	}
 	return out
 }
 
+// jobs is whether a command line is a job's own: its runner's scripts, under .sg/.
+func jobs(cmd string) bool { return strings.Contains(cmd, ".sg/") }
+
 // keptRunning are the processes in after that weren't in before: what a snapshot's commands left
-// running (the listing's own processes are in both). At most 5, each cut to 60 characters.
-func keptRunning(before, after map[string]bool) []string {
+// running. Not a job's own (each listing is a job), and not one a process that ran before started
+// (Postgres's backends, forked by a postmaster the site runs: the site's, not the commands'),
+// unless that process is init or another that starts the jobs or is handed a process left running
+// when its shell ends. (So in user mode, whose first process is handed them, what that one starts
+// is named too.) At most 5, each cut to 60 characters.
+func keptRunning(before, after map[int]proc) []string {
 	if before == nil || after == nil {
 		return nil
 	}
-	var kept []string
-	for p := range after {
-		if !before[p] {
-			if len(p) > 60 {
-				p = p[:57] + "..."
-			}
-			kept = append(kept, p)
+	was := map[string]bool{}
+	for _, p := range before {
+		was[p.cmd] = true
+	}
+	// What the jobs run under, or what is handed what is left running: init, the first process
+	// of each tree (one with no parent listed: user mode's first process, which a job's runner
+	// runs beside), and every ancestor of a job's runner
+	system := map[int]bool{1: true}
+	for pid, p := range after {
+		if _, ok := after[p.ppid]; !ok {
+			system[pid] = true
 		}
+		if jobs(p.cmd) {
+			for q, seen := p.ppid, 0; q > 0 && seen < len(after); q, seen = after[q].ppid, seen+1 {
+				system[q] = true
+			}
+		}
+	}
+	// Whose a process is: a job's, the site's (a process from before, not the system), or none
+	owned := func(p proc) bool {
+		for q, seen := p.ppid, 0; q > 0 && seen < len(after); q, seen = after[q].ppid, seen+1 {
+			a, ok := after[q]
+			if !ok {
+				return false
+			}
+			if jobs(a.cmd) {
+				return true
+			}
+			if b, ok := before[q]; ok && b.cmd == a.cmd && !system[q] {
+				return true
+			}
+		}
+		return false
+	}
+	seen := map[string]bool{}
+	var kept []string
+	for _, p := range after {
+		if was[p.cmd] || jobs(p.cmd) || seen[p.cmd] || owned(p) {
+			continue
+		}
+		seen[p.cmd] = true
+		c := p.cmd
+		if len(c) > 60 {
+			c = c[:57] + "..."
+		}
+		kept = append(kept, c)
 	}
 	sort.Strings(kept)
 	if len(kept) > 5 {
