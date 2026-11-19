@@ -426,3 +426,58 @@ as = "wake.internal"
 		t.Errorf("the link's connection woke no replica of wake: %q", out)
 	}
 }
+
+// Randomness across machines of one snapshot, on real machines: the guest kernel is reseeded at each
+// restore, a process the snapshot kept running is copied with its random state (ash keeps $RANDOM's
+// in its memory, as Node keeps crypto's), apply says so, and one started by the template's start
+// draws its own.
+func (e *e2e) randomness(t *testing.T) {
+	e.startDaemon(t)
+	file := filepath.Join(t.TempDir(), "snowglobe.toml")
+	os.WriteFile(file, []byte(fmt.Sprintf(`name = "e2e-random"
+
+[templates.base]
+site = %q
+
+[snapshots.kept]
+template = "base"
+# A draw each time the file \$1 appears (no fifo: a site with no kernel has none)
+run = [
+  'printf "while true; do if [ -e \$1 ]; then rm -f \$1; echo \$RANDOM-\$RANDOM-\$RANDOM > \$2; fi; sleep 0.1; done\n" > /root/draw',
+  '(sh /root/draw /tmp/go /tmp/out >/dev/null 2>&1 &)',
+  ': > /tmp/go; sleep 1; cat /tmp/out',
+]
+
+[templates.kept]
+snapshot = "kept"
+start = ['(sh /root/draw /tmp/go2 /tmp/out2 >/dev/null 2>&1 &)']
+
+[machines.r]
+template = "kept"
+count = 2
+`, e.site)), 0o644)
+	out := e.must(t, 0, "apply", "-f", file)
+	defer e.run(t, nil, "down", "-f", file)
+	// (A child of it that runs as the list is taken, its sleep, may be named too)
+	if !strings.Contains(out, "! kept keeps ") || !strings.Contains(out, "sh /root/draw /tmp/go /tmp/out") || !strings.Contains(out, "start") {
+		t.Errorf("apply says nothing of the process the snapshot keeps: %q", out)
+	}
+
+	draw := func(m, cmd string) string {
+		return strings.TrimSpace(e.must(t, 0, "sh", m, cmd))
+	}
+	// The kernel's: each its own
+	if a, b := draw("r-1", "head -c 16 /dev/urandom | od -An -tx1"), draw("r-2", "head -c 16 /dev/urandom | od -An -tx1"); a == b || a == "" {
+		t.Errorf("/dev/urandom is the same in both machines: %q", a)
+	}
+	// The kept process's: the same in both (what the warning is about)
+	kept := ": > /tmp/go; sleep 1; cat /tmp/out"
+	if a, b := draw("r-1", kept), draw("r-2", kept); a != b || a == "" {
+		t.Errorf("the kept process drew %q and %q: if it now differs, the warning and the docs say too much", a, b)
+	}
+	// Started by start: each its own
+	fresh := ": > /tmp/go2; sleep 1; cat /tmp/out2"
+	if a, b := draw("r-1", fresh), draw("r-2", fresh); a == b || a == "" {
+		t.Errorf("processes started by start drew the same: %q", a)
+	}
+}

@@ -17,13 +17,21 @@ snowglobe down  -f snowglobe.toml    # remove everything of the fleet (or: down 
 
 Changed entries are replaced along with everything made from them; entries gone from the file are removed. Everything a fleet makes carries labels `snowglobe.fleet` and `snowglobe.spec`. Names something else uses are refused.
 
+## Randomness: start servers in `start`, not in a snapshot
+
+Every machine of a template is a copy of one saved machine. The guest kernel is reseeded at each restore, so `/dev/urandom` and processes started afterwards are fine. A process that was already running in the snapshot is copied with its random state into every machine: Node's `Math.random`, `crypto.randomBytes` and `randomUUID`, Erlang's `:crypto`, Python's `random` give the same values in each (same session tokens, keys, ids).
+
+- Write files and install in `[snapshots.N] run`; launch servers in `[templates.N] start` (each machine runs its own; a wait loop as the last command makes it ready before use).
+- `apply` prints `! S keeps … running` when a snapshot's commands leave a process running: move it to `start`.
+- A site that runs its server before it is built (Dockerfile CMD): restart it in `start` (examples/todo-fleet does).
+
 ## Keys
 
 | Table | Keys |
 |---|---|
 | (top) | `name` (default: the file's directory) |
-| `[templates.N]` | exactly one source: `site` (a site or URL), `build` (a Dockerfile directory, built first), or `snapshot` (a `[snapshots.*]` name); also `network` (`fetch`), `idle`, `max_machines`, `egress` (`none` default, `internet`, `private`), `allow_private` (same as `egress = "private"`; a conflicting `egress` is an error), `expose` (guest ports others reach under mode `all`) |
-| `[snapshots.N]` | `template`, `run` (commands that must succeed), `ready` (command retried until it succeeds), `timeout` (default 2m). Saved once ready. |
+| `[templates.N]` | exactly one source: `site` (a site or URL), `build` (a Dockerfile directory, built first), or `snapshot` (a `[snapshots.*]` name); also `network` (`fetch`), `idle`, `max_machines`, `egress` (`none` default, `internet`, `private`), `allow_private` (same as `egress = "private"`; a conflicting `egress` is an error), `expose` (guest ports others reach under mode `all`), `start` (commands each machine runs as it comes up, before it is used: strings or `{ cmd, timeout }`, 2m default; one failing removes the machine) |
+| `[snapshots.N]` | `template`, `run` (commands that must succeed), `ready` (command retried until it succeeds), `timeout` (default 2m). Saved once ready. Prepare files here; start servers in the template's `start` (below). |
 | `[services.N]` | `template`, `ports` (`"HOST:GUEST"`), `min`, `max`, `idle`, `concurrency`, `state` (`discard` or `keep`), `labels` |
 | `[services.N.health]` | one of `cmd` (exit 0 passes) or a `[services.N.health.http]` table (`port`, `path` default `/`, `status` default `"200-399"` or a list `"200,204"`); `interval` (10s), `timeout` (2s), `failures` (3 in a row), `grace` (30s after start), `heal` (`replace` default, `drain`, `hook` with `heal_cmd`, `none`), `drain` (30s), `wait_ready` (false). Write `http` as a sub-table, not inline: the /fleet/ page reads no inline tables |
 | `[machines.N]` | `template`, `count`, `ports`, `ttl`, `labels` (named N, or N-1 to N-count) |
@@ -86,6 +94,7 @@ https://filipecabaco.github.io/snowglobe/fleet/ reads the file in the page and t
 | `[links.*]` | real; both ends need a network; a machine reads its links when it wakes |
 | `[services.*]` ports | first guest port only, shown in a frame; the host port is not opened |
 | `health` (services, machines, templates) | applied once a step is done: never wakes a sleeping machine; `replace` = the machine from its image and its steps run again; `hook` then check again; `drain` only reports; degraded after 5 heals; `wait_ready` holds the service step |
+| `start` (templates) | runs once in the site's machine, before its first service or machine step |
 | `[supervisors.*]` | applied as the daemon does (strategies, restart types, intensity, escalation, a Restart button when degraded); a child restarts by its machine starting from its image, so children of one site restart together |
 | `min`, `max`, `idle`, `concurrency`; `ttl`; `egress`; `network.mode`; labels | read, not applied (one instance; a machine's network is what its site was built with) |
 

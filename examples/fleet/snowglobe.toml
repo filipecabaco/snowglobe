@@ -14,6 +14,10 @@
 #
 # Both have a health check: the database's passes while rows keep coming, the viewer's while it is
 # subscribed. Each is healed by starting its process again.
+#
+# The snapshots write the files; each template's start runs the process, in every machine as it comes
+# up. A process a snapshot kept running would be copied into every machine of it, its random state
+# with it (crypto.randomBytes, randomUUID, Math.random): the same "random" values in each.
 name = "live-data"
 
 [templates.supabase]
@@ -27,7 +31,8 @@ build = "../bun"
 network = "fetch"
 egress = "internet"
 
-# The database, set up once: the table, published to Realtime, and the Bun process that adds a row a second
+# The database, set up once: the table, published to Realtime, and the Bun process that adds a row a
+# second written (its template starts it)
 [snapshots.db]
 template = "supabase"
 # Each command has a time limit of its own (timeout), so a slow one on a phone is cut off and named
@@ -110,16 +115,14 @@ cat > /root/rows/start.sh <<'EOF'
 cd /root/rows && (BUN_BE_BUN=1 nohup supabase run /root/rows/rows.ts >/tmp/rows.log 2>&1 & echo $! > /tmp/rows.pid)
 EOF
 chmod +x /root/rows/start.sh
-/root/rows/start.sh
-echo "a row a second, from one Bun process"
+echo "a row a second, from one Bun process, once its template starts it"
   ''' },
 ]
-ready = "curl -sf -o /dev/null http://127.0.0.1:8080/healthz"
 timeout = "4m"
 
-# The viewer, set up once: Preact and htm fetched, the web machine's Vite watcher stopped, and the
-# server written and started. It isn't subscribed yet (the link comes after): it keeps trying, and
-# its health check waits for it
+# The viewer, set up once: Preact and htm fetched and the server written (its template starts it). It
+# isn't subscribed when it starts if the link isn't there yet: it keeps trying, and its health check
+# waits for it
 [snapshots.viewer]
 template = "bun"
 run = [
@@ -266,25 +269,29 @@ cat > /root/viewer/start.sh <<'EOF'
 cd /root/viewer && (nohup bun viewer.ts >/tmp/viewer.log 2>&1 & echo $! > /tmp/viewer.pid)
 EOF
 chmod +x /root/viewer/start.sh
-/root/viewer/start.sh
+echo "the viewer is written, for its template to start"
+  ''' },
+]
+
+# Each machine of these starts its own process as it comes up, before it is used
+[templates.db]
+snapshot = "db"
+start = ["/root/rows/start.sh"]
+
+[templates.viewer]
+snapshot = "viewer"
+start = [
+"/root/viewer/start.sh",
 # Until it listens, up to 50s, and if it never does, what Bun printed
+{ timeout = "1m", cmd = '''
 n=0
 until wget -q -T 2 -O /dev/null http://127.0.0.1:8080/up 2>/dev/null; do
   n=$((n + 1))
   if [ "$n" -ge 50 ]; then echo "the viewer did not listen in 50s; what Bun printed:"; tail -n 20 /tmp/viewer.log; exit 1; fi
   sleep 1
 done
-echo "the viewer listens on 8080"
-  ''' },
+''' },
 ]
-ready = "wget -q -O /dev/null http://127.0.0.1:8080/up"
-timeout = "30s"
-
-[templates.db]
-snapshot = "db"
-
-[templates.viewer]
-snapshot = "viewer"
 
 # The database: one machine, up. Its check passes while rows keep coming; failing, the Bun process is
 # started again (a machine heals by a hook or not at all)

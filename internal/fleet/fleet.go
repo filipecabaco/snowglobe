@@ -79,9 +79,24 @@ type TemplateSpec struct {
 	// The health check its services and machines have when they set none of their own (changed
 	// in place: not part of its hash)
 	Health *HealthSpec `toml:"health" json:"health,omitempty"`
+	// Commands each of its machines runs as it comes up, before it is handed to anyone
+	// (daemon.AddTemplate.Start): where a server starts, so that each machine's draws its own
+	// randomness rather than the copy a snapshot kept of one already running. Each a string or
+	// { cmd, timeout } (default daemon.DefaultStartTimeout)
+	Start []Command `toml:"start" json:"start,omitempty"`
 	// What the build saw of its directory (a hash of its files' names, sizes and times): a change
 	// rebuilds
 	Source string `toml:"-" json:"source,omitempty"`
+}
+
+// start is the template's start commands as the daemon takes them.
+func (t TemplateSpec) start() []daemon.StartCommand {
+	var out []daemon.StartCommand
+	for _, c := range t.Start {
+		d, _ := time.ParseDuration(c.Timeout)
+		out = append(out, daemon.StartCommand{Cmd: c.Cmd, Timeout: daemon.Duration(d)})
+	}
+	return out
 }
 
 // SnapshotSpec is a machine of a template set up by commands (each must succeed), saved once
@@ -308,6 +323,12 @@ func Load(path string) (*File, error) {
 	// A file saved with CRLF line endings (a Windows editor, or git's autocrlf) keeps them inside a
 	// multi-line string, and a \r at the end of a shell line is part of its last word: the commands
 	// get LF endings, as the browser page's reader gives them
+	for n, t := range f.Templates {
+		for i, c := range t.Start {
+			t.Start[i].Cmd = strings.ReplaceAll(c.Cmd, "\r\n", "\n")
+		}
+		f.Templates[n] = t
+	}
 	for n, s := range f.Snapshots {
 		run := make([]Command, len(s.Run))
 		for i, c := range s.Run {
@@ -372,6 +393,12 @@ func (f *File) check() error {
 			}
 		}
 		duration("template "+n+": idle", t.Idle)
+		for i, c := range t.Start {
+			if strings.TrimSpace(c.Cmd) == "" {
+				bad("template %s: start[%d]: an empty command", n, i)
+			}
+			duration(fmt.Sprintf("template %s: start[%d]: timeout", n, i), c.Timeout)
+		}
 		f.checkHealth("template "+n, daemon.KindService, t.Health, bad, duration)
 	}
 	for n, s := range f.Snapshots {

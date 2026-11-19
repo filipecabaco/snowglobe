@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,8 @@ type fake struct {
 	// The time limit each command was given, and commands that run out of it
 	limits   map[string]float64
 	timesOut map[string]bool
+	// What the guest's process list says, each time it is asked (then "out of ..." as any job)
+	procs []string
 }
 
 func newFake() *fake {
@@ -218,6 +221,11 @@ func (f *fake) RemoveMachine(n string) error {
 func (f *fake) Job(n string, r control.JobRequest) (*control.JobResult, error) {
 	f.calls = append(f.calls, "job "+n+": "+r.Cmd)
 	f.limits[r.Cmd] = r.Timeout
+	if r.Cmd == processList && len(f.procs) > 0 {
+		out := f.procs[0]
+		f.procs = f.procs[1:]
+		return &control.JobResult{Status: new(int), Output: []byte(out)}, nil
+	}
 	if f.timesOut[r.Cmd] {
 		return &control.JobResult{TimedOut: true, Output: []byte("still going")}, nil
 	}
@@ -367,7 +375,7 @@ func TestApplyMakesTheFleetInOrderAndThenHasNothingToDo(t *testing.T) {
 	calls := strings.Join(api.calls, "\n")
 	for _, c := range []string{
 		"add template py " + f.BuildDir("py"),
-		"up ready-setup of py\njob ready-setup: pip install httpx\njob ready-setup: python3 -m http.server 8000 &",
+		"up ready-setup of py\njob ready-setup: " + processList + "\njob ready-setup: pip install httpx\njob ready-setup: python3 -m http.server 8000 &",
 		"snapshot ready-setup as ready\nrm machine ready-setup",
 		"add template py-ready  ready",
 		"add service web",
@@ -912,6 +920,121 @@ func TestABadSupervisorIsRefused(t *testing.T) {
 		_, err := Load(write(t, example+bad))
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v, want %q", bad, err, want)
+		}
+	}
+}
+
+func TestATemplatesStartCommandsGoToTheDaemonAndChangeItsHash(t *testing.T) {
+	file := `
+name = "s"
+
+[templates.py]
+site = "/sites/py"
+start = ["python3 -m http.server 8000 &", { cmd = "until wget -q -O- localhost:8000; do sleep 1; done", timeout = "30s" }]
+`
+	f := load(t, file)
+	api := newFake()
+	var got daemon.AddTemplate
+	api.onAddTemplate = func(r daemon.AddTemplate) { got = r }
+	p, err := f.Plan(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Apply(api, nil, quiet); err != nil {
+		t.Fatal(err)
+	}
+	want := []daemon.StartCommand{
+		{Cmd: "python3 -m http.server 8000 &"},
+		{Cmd: "until wget -q -O- localhost:8000; do sleep 1; done", Timeout: daemon.Duration(30 * time.Second)},
+	}
+	if !reflect.DeepEqual(got.Start, want) {
+		t.Errorf("start: %+v", got.Start)
+	}
+	// Another start is another template; none hashes as a template always did
+	other := load(t, strings.Replace(file, "8000 &", "9000 &", 1))
+	none := load(t, strings.Replace(file, "start = [", "# start = [", 1))
+	h := func(f *File) string { return hash(KindTemplate, withoutHealth(f.Templates["py"]), nil) }
+	if h(f) == h(other) {
+		t.Error("a changed start hashes the same")
+	}
+	if data, _ := json.Marshal(none.Templates["py"]); strings.Contains(string(data), "start") {
+		t.Errorf("a template without start keeps the JSON (and hash) it always had: %s", data)
+	}
+
+	for what, bad := range map[string]string{
+		"an empty command": `start = ["  "]`,
+		"a bad timeout":    `start = [{ cmd = "x", timeout = "soon" }]`,
+	} {
+		text := "name = \"s\"\n[templates.py]\nsite = \"/sites/py\"\n" + bad + "\n"
+		dir := t.TempDir()
+		path := filepath.Join(dir, "snowglobe.toml")
+		os.WriteFile(path, []byte(text), 0o644)
+		if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "start[0]") {
+			t.Errorf("%s: %v", what, err)
+		}
+	}
+}
+
+func TestASnapshotThatKeepsAProcessRunningIsWarnedAbout(t *testing.T) {
+	f := load(t, example)
+	api := newFake()
+	api.readyAfter["wget -q -O- localhost:8000"] = 0
+	// Before its commands: a shell; after: the server they left running too
+	// Each listing is a job of its own: its runner's scripts (under .sg/) differ and don't count
+	api.procs = []string{"/bin/sh -l\nsh /sgjob/aaa/.sg/job.sh\nsh .sg/cmd\n", "/bin/sh -l\nsh /sgjob/bbb/.sg/job.sh\nsh .sg/cmd\npython3 -m http.server 8000\n"}
+	p, err := f.Plan(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log []string
+	logf := func(format string, a ...any) { log = append(log, fmt.Sprintf(format, a...)) }
+	var b builds
+	if err := p.Apply(api, b.build, logf); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(log, "\n")
+	if !strings.Contains(all, "! ready keeps python3 -m http.server 8000 running") || !strings.Contains(all, "start") {
+		t.Errorf("no warning about the server it keeps:\n%s", all)
+	}
+	if strings.Contains(all, "/bin/sh -l running") || strings.Contains(all, "sgjob") {
+		t.Errorf("warned about what ran before its commands:\n%s", all)
+	}
+
+	// Nothing left running: no warning
+	api = newFake()
+	api.procs = []string{"/bin/sh -l\n", "/bin/sh -l\n"}
+	p, _ = f.Plan(api)
+	log = nil
+	if err := p.Apply(api, b.build, logf); err != nil {
+		t.Fatal(err)
+	}
+	if all := strings.Join(log, "\n"); strings.Contains(all, "keeps") {
+		t.Errorf("a warning with nothing kept:\n%s", all)
+	}
+}
+
+func TestKeptRunningIsWhatIsNewAndSaysLittle(t *testing.T) {
+	set := func(ps ...string) map[string]bool {
+		m := map[string]bool{}
+		for _, p := range ps {
+			m[p] = true
+		}
+		return m
+	}
+	if got := keptRunning(nil, set("a")); got != nil {
+		t.Errorf("no list before: %v", got)
+	}
+	if got := keptRunning(set("sh"), set("sh", "node server.js")); !reflect.DeepEqual(got, []string{"node server.js"}) {
+		t.Errorf("one new: %v", got)
+	}
+	long := strings.Repeat("x", 100)
+	got := keptRunning(set(), set("a", "b", "c", "d", "e", "f", "g", long))
+	if len(got) != 6 || got[5] != "and 3 more" {
+		t.Errorf("many: %v", got)
+	}
+	for _, p := range keptRunning(set(), set(long)) {
+		if len(p) > 60 {
+			t.Errorf("not cut: %d", len(p))
 		}
 	}
 }

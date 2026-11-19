@@ -421,7 +421,14 @@ test('plan: the repository example is Supabase and a small Bun viewer, joined by
   const rows = byKey['snapshot/db'].run[3];
   assert.match(rows, /BUN_BE_BUN=1 nohup supabase run \/root\/rows\/rows\.ts/);
   assert.doesNotMatch(byKey['snapshot/db'].run.join('\n'), /socat|while true; do psql/);
-  assert.match(byKey['snapshot/db'].ready, /127\.0\.0\.1:8080\/healthz/);
+  // Written by the snapshot, started by each machine of its template: no process kept running in it
+  assert.equal(byKey['snapshot/db'].ready, null);
+  assert.deepEqual(byKey['machine/db'].start, [{ cmd: '/root/rows/start.sh', timeoutMs: 120000 }]);
+  assert.doesNotMatch(byKey['snapshot/db'].run.join('\n'), /^\/root\/rows\/start\.sh$/m);
+  assert.equal(byKey['service/viewer'].start[0].cmd, '/root/viewer/start.sh');
+  assert.match(byKey['service/viewer'].start[1].cmd, /until wget .*8080\/up/);
+  assert.equal(byKey['service/viewer'].start[1].timeoutMs, 60000);
+  assert.doesNotMatch(byKey['snapshot/viewer'].run.join('\n'), /^\/root\/viewer\/start\.sh$/m);
   // The viewer: Preact and htm fetched as three files, Realtime over Bun's own WebSocket through the link
   const viewer = byKey['snapshot/viewer'].run.join('\n');
   assert.match(viewer, /preact@11\.2\.0\/dist\/preact\.mjs/);
@@ -498,7 +505,11 @@ test('run: all of the linked template, in order', async () => {
   const run = F.createRun(api, F.plan(F.parse(live), runtimes), fast);
   assert.equal(await run.runAll(), true);
   const kinds = api.log.map((l) => l.split(' ')[0] + ' ' + l.split(' ')[1]);
-  assert.deepEqual(kinds.slice(-2), ['wake python', 'preview web:8080']);
+  // Each machine starts its server (its template's start), then the client's preview opens
+  assert.equal(kinds.at(-1), 'preview web:8080');
+  const at = (re) => api.log.findIndex((l) => re.test(l));
+  assert.ok(at(/^run python .*http\.server 9000/) > -1 && at(/^wake python/) > at(/^run python .*http\.server 9000/), api.log.join('\n'));
+  assert.ok(at(/^run web .*node client\.mjs/) > at(/^wake python/), api.log.join('\n'));
   assert.equal(run.state('service/client').status, 'done');
 });
 
@@ -1070,4 +1081,50 @@ test('run: stop forgets health and supervisors\' restarts', async () => {
   assert.equal(r.run.health('service/s').state, 'healthy');
   await r.run.stop();
   assert.equal(r.run.health('service/s'), null);
+});
+
+// The example with its server started by the serving template, not kept by the snapshot
+const started = example
+  .replace(`       "cd /srv && python3 -m http.server 8000 >/dev/null 2>&1 &"]`, `       "true"]`)
+  .replace(`ready = "wget -q -O /dev/null http://127.0.0.1:8000/"\n`, '')
+  .replace(`[templates.serving]\nsnapshot = "serving"`, `[templates.serving]\nsnapshot = "serving"\nstart = ["cd /srv && python3 -m http.server 8000 >/dev/null 2>&1 &", { cmd = "wget -q -O /dev/null http://127.0.0.1:8000/", timeout = "30s" }]`);
+
+test('plan: a template\'s start commands go with its services\' and machines\' steps, each with its time', () => {
+  const p = F.plan(F.parse(started), runtimes);
+  assert.deepEqual(p.problems, []);
+  const web = p.steps.find((s) => s.key === 'service/web');
+  assert.deepEqual(web.start, [
+    { cmd: 'cd /srv && python3 -m http.server 8000 >/dev/null 2>&1 &', timeoutMs: 120000 },
+    { cmd: 'wget -q -O /dev/null http://127.0.0.1:8000/', timeoutMs: 30000 },
+  ]);
+  assert.match(web.summary, /^Start python \(2 commands\), then open python's port 8000/);
+  // The scratch machine's template (py) has none
+  assert.deepEqual(p.steps.find((s) => s.key === 'machine/scratch').start, []);
+  for (const [bad, said] of [
+    ['start = "one"', /start: an array of commands/],
+    ['start = [""]', /start\[0\]: a command/],
+    ['start = [{ cmd = "x", when = "now" }]', /start\[0\]: unknown key when/],
+    ['start = [{ cmd = "x", timeout = "soon" }]', /start\[0\]: timeout: a duration/],
+  ]) {
+    const q = F.plan(F.parse(example.replace('[templates.serving]\nsnapshot = "serving"', `[templates.serving]\nsnapshot = "serving"\n${bad}`)), runtimes);
+    assert.ok(q.problems.some((x) => x.where === 'templates.serving' && said.test(x.message)), `${bad}: ${JSON.stringify(q.problems)}`);
+  }
+});
+
+test('run: start commands run in the machine before its service opens, once, and one that fails fails the step', async () => {
+  const api = fakeApi();
+  const run = F.createRun(api, F.plan(F.parse(started), runtimes), fast);
+  assert.equal(await run.runAll(), true);
+  const at = (re) => api.log.findIndex((l) => re.test(l));
+  assert.ok(at(/http\.server/) > at(/run python true/), api.log.join('\n'));
+  assert.ok(at(/preview python:8000/) > at(/run python wget .*\(30s, fleet\)/), api.log.join('\n'));
+  assert.match(api.log[at(/http\.server/)], /\(120s, fleet\)/);
+  assert.equal(api.log.filter((l) => /http\.server/.test(l)).length, 1);
+
+  const failing = fakeApi({ exits: (c) => (/wget/.test(c) ? 1 : 0) });
+  const broken = F.createRun(failing, F.plan(F.parse(started), runtimes), fast);
+  const r = await broken.runStep('snapshot/serving').then(() => broken.runStep('service/web'));
+  assert.equal(r.status, 'failed');
+  assert.match(r.error, /start command 2 of 2 exited 1/);
+  assert.ok(!failing.log.some((l) => /^preview/.test(l)), 'the service is not opened');
 });

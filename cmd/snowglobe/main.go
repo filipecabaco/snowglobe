@@ -193,11 +193,15 @@ Usage:
                      [--max-machines N]              from; template ls lists them, template rm T
                      [--snapshot S] [--idle 30m]     removes one and its machines. --snapshot
                      [--warm CMD]... [--warm-runs N] restores a saved machine instead of the site;
-                                                     --idle stops its server after that long with
+                     [--start CMD]...                --idle stops its server after that long with
                                                      no machine, and the next use restores it.
                                                      --warm runs CMD on the site N times (3) first,
                                                      one-shot and trusted, so the JIT profile its
-                                                     jobs start from (read only) has it compiled
+                                                     jobs start from (read only) has it compiled.
+                                                     --start runs CMD in each machine as it comes
+                                                     up, before it is used: start servers there, so
+                                                     each draws its own randomness (one a snapshot
+                                                     kept running repeats it in every machine)
   snowglobe up <template> [--name N] [-p PORT]...    a machine forked from a template in tens of
                 [--label K=V]...                     milliseconds, sharing its memory: it lasts
                                                      until stopped, keeps what it writes, and its

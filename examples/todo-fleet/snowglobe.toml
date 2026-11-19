@@ -19,6 +19,14 @@ network = "fetch"       # a network device: for the link's connections and the s
 [templates.app]
 build = "app"
 network = "fetch"
+# The image's snapshot holds the app already running: the same process, so the same random state
+# (Erlang's :crypto, Ecto's ids), in every machine of it. Each machine starts its own instead
+start = [{ timeout = "2m", cmd = '''
+pkill -f beam.smp
+while pgrep -f beam.smp >/dev/null; do sleep 0.1; done
+/app/bin/todo daemon
+until wget -q -O /dev/null http://127.0.0.1:4000/ 2>/dev/null; do sleep 0.2; done
+''' }]
 
 # One database machine: its data lives in its memory, so it stays up
 [services.db]

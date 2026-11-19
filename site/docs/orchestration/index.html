@@ -241,7 +241,8 @@ worker = "transient"          <span class="dim"># permanent (the default), trans
           <ul>
             <li>templates: a built site, a URL, or a Dockerfile directory built first;</li>
             <li>snapshots: a machine of a template set up by commands, saved once a readiness command succeeds. A command is a string, or <code>{ cmd = "...", timeout = "90s" }</code> for one with a time limit of its own; one without gets the snapshot's <code>timeout</code>, or 10 minutes;</li>
-            <li>templates of those snapshots;</li>
+            <li>templates of those snapshots. A template's <code>start</code> commands run in each of its machines as it
+              comes up, before it is used: servers start there (<a href="#randomness">why</a>);</li>
             <li>services, each with an optional health check (<a href="#health">below</a>), and machines;</li>
             <li>supervisors over those services and machines (<a href="#supervisors">above</a>);</li>
             <li>links, a network mode, and each template's egress (<a href="#links">below</a>).</li>
@@ -255,12 +256,15 @@ network = "fetch"
 template = "py"
 run = [
   { cmd = "pip install httpx", timeout = "3m" },   <span class="dim"># a time limit of its own</span>
-  "cd /srv &amp;&amp; python3 -m http.server 8000 &gt;/dev/null 2&gt;&amp;1 &amp;",
+  "mkdir -p /srv &amp;&amp; echo hello &gt; /srv/index.html",
 ]
-ready = "wget -q -O /dev/null http://127.0.0.1:8000/"
 
 [templates.serving]
 snapshot = "serving"
+start = [                          <span class="dim"># in each machine as it comes up: its own server</span>
+  "cd /srv &amp;&amp; python3 -m http.server 8000 &gt;/dev/null 2&gt;&amp;1 &amp;",
+  "until wget -q -O /dev/null http://127.0.0.1:8000/; do sleep 0.2; done",
+]
 
 [services.web]
 template = "serving"
@@ -281,6 +285,25 @@ ttl = "24h"</pre>
             <li>An entry that changed is replaced, with what is made from it. One gone from the file is removed.
               Names something else uses are refused.</li>
           </ul>
+          <h3 id="randomness">Randomness after a restore</h3>
+          <p>Every machine of a template is a copy of one saved machine. The guest kernel's random generator is
+            reseeded at each restore (a new VM generation id, as Firecracker gives), so <code>/dev/urandom</code>,
+            <code>getrandom</code> and every process started after the restore draw their own. A process that was
+            already running when the machine was saved is copied with its memory, and its random state with it:
+            Node's <code>Math.random</code>, <code>crypto.randomBytes</code> and <code>crypto.randomUUID</code>,
+            Erlang's <code>:crypto</code> (OpenSSL keeps its generator in the process), Python's <code>random</code>.
+            Each copy then makes the same "random" tokens, keys and ids as the others. A process forked after the
+            restore (a Postgres backend) reseeds itself.</p>
+          <ul>
+            <li>Start servers in the template's <code>start</code>, not in a snapshot's <code>run</code>. Each machine
+              then starts its own. <code>start</code> runs after the machine's links are set and before anything
+              uses it (a service's first connection, the fleet's next step); each command must succeed in its time
+              (<code>{ cmd, timeout }</code>, 2 minutes by default), or the machine goes.
+              <code>snowglobe template add --start CMD</code> does the same.</li>
+            <li><code>apply</code> warns when a snapshot's commands leave something running, and names it.</li>
+            <li>A site whose image starts its server before it is built (its Dockerfile's command) holds that
+              server too: restart it in <code>start</code>, as <code>examples/todo-fleet</code> does with its app.</li>
+          </ul>
           <p>The daemon keeps a list of fleets, like compose projects. <code>/v1/fleets</code> adds a file from where
             it is, or writes a new one in the daemon's own directory (checked before it is saved). It plans, applies
             (all of it, or one step at a time by its key) and removes each by name.</p>
@@ -291,7 +314,7 @@ ttl = "24h"</pre>
             <li><code>examples/fleet/</code>: Supabase and a small Bun viewer, joined by a link. A Bun process (the one
               inside the Supabase CLI) inserts a row every second; the viewer, on the 160 MB bun machine, follows the table
               over Supabase Realtime through the link and streams it to a Preact page. Each has a health check healed by a
-              hook. It <a href="#fleet-page">runs in a browser tab</a> too, phones included: the viewer is small, so most
+              hook, and each template starts its process in <code>start</code>. It <a href="#fleet-page">runs in a browser tab</a> too, phones included: the viewer is small, so most
               of the tab's memory goes to Supabase.</li>
           </ul>
           <p>Run one, see it, and give it to an agent:</p>
@@ -425,6 +448,8 @@ as = "db.internal"</pre>
               fails its parent, and a top-level one is degraded until you press its Restart. A child is restarted by
               starting its machine from its image and running that machine's steps again, so children of one site
               restart together. A supervised machine that stops by itself has ended.</li>
+            <li><b>Start:</b> a template's <code>start</code> commands run once in its machine, before its first
+              service or machine step, each in its time.</li>
             <li><b>Read, not applied:</b> <code>min</code>, <code>max</code>, <code>idle</code>, <code>concurrency</code>,
               <code>ttl</code>, <code>egress</code>, <code>network.mode</code>, labels and host ports. The page lists them.</li>
           </ul>
