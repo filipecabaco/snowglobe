@@ -415,6 +415,32 @@ type Link struct {
 	URL  string `json:"url"`
 }
 
+// Linker opens the link channel of the machine whose control socket is sock: a machine its
+// sandbox lets connect to no Unix socket asks on it for each connection its guest opens to a
+// link, {"open":ID,"url":URL} (a URL SetLinks gave), and is answered {"id":ID} with the
+// connection as a descriptor (SCM_RIGHTS), or {"id":ID,"error":"..."} without one. The machine
+// keeps one channel, the newest.
+func Linker(sock string) (*net.UnixConn, *bufio.Reader, error) {
+	var answer struct {
+		Linker bool `json:"linker"`
+	}
+	conn, r, err := ask(sock, map[string]any{"mode": "linker"}, &answer, 10*time.Second)
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) {
+		// "snowglobe: unknown request": a snowglobe-vm from before link channels
+		return nil, nil, errors.New("link channel: this machine's snowglobe-vm has none (update it)")
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("link channel: %w", err)
+	}
+	uc, ok := conn.(*net.UnixConn)
+	if !answer.Linker || !ok {
+		conn.Close()
+		return nil, nil, errors.New("link channel: this machine's snowglobe-vm has none (update it)")
+	}
+	return uc, r, nil
+}
+
 // SetLinks replaces the links of the machine whose control socket is sock: its new connections
 // follow them at once.
 func SetLinks(sock string, links []Link) error {

@@ -46,7 +46,7 @@ as = "db.internal"    # name the source uses
 # as_port = 15432     # port the source connects to (default: port)
 ```
 
-- Each source machine gets its own Unix socket per link: no host TCP port opens, and links work under egress `none`.
+- Each source machine gets its own Unix socket per link: no host TCP port opens, and links work under egress `none`. The machine never connects to it (its sandbox reaches no Unix socket): the daemon opens each connection and hands it over.
 - The guest's ports 80 and 443 are HTTP and HTTPS (the machine ends them itself), not raw TCP: a link whose `as_port` (default `port`) is 80 or 443 carries HTTP requests. For raw TCP to the target's port 80, set `as_port` to another number. The fleet page prints this as a note.
 - Other ports are raw TCP bytes both ways.
 - Outside a file, links exist only through the daemon API, `snowglobe ui` (drag one node onto another) and the MCP tools `link`, `unlink`, `list_links`, `graph`.

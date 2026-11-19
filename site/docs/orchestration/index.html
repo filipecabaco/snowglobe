@@ -328,7 +328,10 @@ claude mcp add snowglobe -- snowglobe mcp --daemon   <span class="dim"># fleets,
 curl --unix-socket "$SOCK" localhost/v1/graph      <span class="dim"># nodes and edges: forks, replicas, links, reaches, ports</span></pre>
           <p>Each machine gets a Unix socket of its own for each of its links, in its template's socket directory.
             Only that template's machines and the daemon reach it. So the daemon knows which machine connects, and
-            no TCP port stays open on the host for anything else to use. A link is the host's own: it needs no
+            no TCP port stays open on the host for anything else to use. The machine never connects to that socket
+            itself: its sandbox lets it reach no Unix socket at all, so it can't reach another machine's or its
+            server's. Instead it asks the daemon for each connection, and the daemon connects and hands the
+            connection over. A link is the host's own: it needs no
             <code>allow_private</code>, and works when the machine's egress is <code>none</code>.</p>
 
           <h2 class="h3" id="instances">Fleet instances and the network</h2>

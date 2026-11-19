@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -281,6 +282,32 @@ func fakeMachine(sock string) {
 			}
 			send(c, map[string]any{"links": n})
 			c.Close()
+		case "linker":
+			// The daemon's link channel, kept for "dial". With SOCK.nolinker, a snowglobe-vm from
+			// before channels: an unknown request
+			if _, err := os.Stat(sock + ".nolinker"); err == nil {
+				fmt.Fprintln(c, "snowglobe: unknown request")
+				c.Close()
+				continue
+			}
+			send(c, map[string]any{"linker": true})
+			linkerMu.Lock()
+			if linker != nil {
+				linker.Close()
+			}
+			linker = c.(*net.UnixConn)
+			linkerMu.Unlock()
+		case "dial":
+			// The test's: as a guest's connection to a link, asked for on the channel (as a
+			// confined machine does), then a round trip through it
+			url, _ := req["url"].(string)
+			echo, err := dialOverLinker(url, "ping")
+			if err != nil {
+				send(c, map[string]any{"error": err.Error()})
+			} else {
+				send(c, map[string]any{"echo": echo})
+			}
+			c.Close()
 		case "connect":
 			send(c, map[string]any{"connected": req["port"]})
 			if port, _ := req["port"].(float64); port == 8080 {
@@ -309,6 +336,71 @@ func fakeMachine(sock string) {
 			c.Close()
 		}
 	}
+}
+
+// A fake machine's link channel, from its daemon
+var (
+	linkerMu sync.Mutex
+	linker   *net.UnixConn
+	linkerID int
+)
+
+// dialOverLinker asks the daemon for a connection to the link at url on the machine's channel,
+// sends what through it and reads as much back.
+func dialOverLinker(url, what string) (string, error) {
+	linkerMu.Lock()
+	defer linkerMu.Unlock()
+	if linker == nil {
+		return "", fmt.Errorf("no link channel")
+	}
+	linkerID++
+	data, _ := json.Marshal(map[string]any{"open": linkerID, "url": url})
+	if _, err := linker.Write(append(data, '\n')); err != nil {
+		return "", err
+	}
+	linker.SetReadDeadline(time.Now().Add(10 * time.Second))
+	buf, oob := make([]byte, 512), make([]byte, 64)
+	n, oobn, _, _, err := linker.ReadMsgUnix(buf, oob)
+	if err != nil {
+		return "", err
+	}
+	var answer struct {
+		ID    int    `json:"id"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(buf[:n], &answer); err != nil || answer.ID != linkerID {
+		return "", fmt.Errorf("answer %q: %v", buf[:n], err)
+	}
+	if answer.Error != "" {
+		return "", fmt.Errorf("%s", answer.Error)
+	}
+	msgs, err := syscall.ParseSocketControlMessage(oob[:oobn])
+	if err != nil || len(msgs) != 1 {
+		return "", fmt.Errorf("no descriptor with the answer: %v", err)
+	}
+	fds, err := syscall.ParseUnixRights(&msgs[0])
+	if err != nil || len(fds) != 1 {
+		return "", fmt.Errorf("no descriptor with the answer: %v", err)
+	}
+	f := os.NewFile(uintptr(fds[0]), "link")
+	conn, err := net.FileConn(f)
+	f.Close()
+	if err != nil {
+		return "", err
+	}
+	// Got it: the daemon may let go of its copy
+	got, _ := json.Marshal(map[string]any{"got": linkerID})
+	linker.Write(append(got, '\n'))
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := conn.Write([]byte(what)); err != nil {
+		return "", err
+	}
+	back := make([]byte, len(what))
+	if _, err := io.ReadFull(conn, back); err != nil {
+		return "", err
+	}
+	return string(back), nil
 }
 
 // delay sleeps for the duration in environment variable v, if any.

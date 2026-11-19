@@ -465,7 +465,7 @@ pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, a
     let e = if network == "fetch" { net.egress() } else { Egress_::None };
     EGRESS.store(e as u8, std::sync::atomic::Ordering::SeqCst);
     let a = activity.clone();
-    NativeHost::spawn(
+    let host = NativeHost::spawn(
         board.clone(),
         HostOptions {
             blobs: None,
@@ -477,7 +477,11 @@ pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, a
             tunnels: net.tunnels,
         },
         Box::new(move |e| a.observe(e)),
-    )
+    );
+    // A daemon's links: opened by the daemon over its channel, as a confined machine connects
+    // to no Unix socket itself
+    host.set_link_dialer(crate::linker::dialer());
+    host
 }
 
 /// Whether the guest's CPUs are working: a command that computes without printing is not done

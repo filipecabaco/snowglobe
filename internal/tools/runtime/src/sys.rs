@@ -498,6 +498,81 @@ pub fn on_terminal(cmd: &mut std::process::Command, tty: BorrowedFd) {
     }
 }
 
+// ---------------------------------------------------------------- descriptors over a socket
+
+/// Read what comes on the Unix socket `fd` into `buf`, and push the descriptors that come with it
+/// (SCM_RIGHTS, each close-on-exec) onto `fds`: recvmsg(2), retried when interrupted.
+pub fn recv_fds(fd: BorrowedFd, buf: &mut [u8], fds: &mut std::collections::VecDeque<std::os::fd::OwnedFd>) -> io::Result<usize> {
+    use std::os::fd::FromRawFd;
+    let mut iov = libc::iovec { iov_base: buf.as_mut_ptr().cast(), iov_len: buf.len() };
+    // Room for a few descriptors, aligned as a cmsghdr wants
+    let mut control = [0u64; 32];
+    loop {
+        // SAFETY: msghdr is plain C data (integers and pointers): all zeroes is a valid value
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control.as_mut_ptr().cast();
+        msg.msg_controllen = std::mem::size_of_val(&control) as _;
+        // SAFETY: fd is open (borrowed for the call); msg points at iov and control, live buffers
+        // of the lengths it gives, which recvmsg only writes into
+        let n = unsafe { libc::recvmsg(fd.as_raw_fd(), &mut msg, 0) };
+        if n < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        // SAFETY: recvmsg left well-formed headers in control, msg_controllen bytes of them, which
+        // the CMSG_ macros walk without going past; an SCM_RIGHTS one's data is that many fds,
+        // each new to this process and owned by nothing else yet
+        unsafe {
+            let mut c = libc::CMSG_FIRSTHDR(&msg);
+            while !c.is_null() {
+                if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
+                    let data = libc::CMSG_DATA(c) as *const libc::c_int;
+                    let len = (*c).cmsg_len as usize - libc::CMSG_LEN(0) as usize;
+                    for i in 0..len / std::mem::size_of::<libc::c_int>() {
+                        let got = data.add(i).read_unaligned();
+                        libc::fcntl(got, libc::F_SETFD, libc::FD_CLOEXEC);
+                        fds.push_back(std::os::fd::OwnedFd::from_raw_fd(got));
+                    }
+                }
+                c = libc::CMSG_NXTHDR(&msg, c);
+            }
+        }
+        return Ok(n as usize);
+    }
+}
+
+/// Send `data` on the Unix socket `fd` in one sendmsg(2), with `pass` as SCM_RIGHTS if given.
+#[cfg(test)]
+pub fn send_fd(fd: BorrowedFd, data: &[u8], pass: Option<BorrowedFd>) -> io::Result<usize> {
+    let mut iov = libc::iovec { iov_base: data.as_ptr() as *mut _, iov_len: data.len() };
+    let mut control = [0u64; 8];
+    // SAFETY: msghdr is plain C data (integers and pointers): all zeroes is a valid value
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    if let Some(p) = pass {
+        msg.msg_control = control.as_mut_ptr().cast();
+        // SAFETY: CMSG_SPACE and CMSG_LEN only compute sizes; control has room for one fd's header
+        // and data, which CMSG_FIRSTHDR points at (msg_control is set and long enough)
+        unsafe {
+            msg.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<libc::c_int>() as u32) as _;
+            let c = libc::CMSG_FIRSTHDR(&msg);
+            (*c).cmsg_level = libc::SOL_SOCKET;
+            (*c).cmsg_type = libc::SCM_RIGHTS;
+            (*c).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<libc::c_int>() as u32) as _;
+            (libc::CMSG_DATA(c) as *mut libc::c_int).write_unaligned(p.as_raw_fd());
+        }
+    }
+    // SAFETY: fd is open (borrowed for the call); msg points at live buffers sendmsg only reads
+    let n = unsafe { libc::sendmsg(fd.as_raw_fd(), &msg, 0) };
+    if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

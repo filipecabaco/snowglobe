@@ -20,6 +20,7 @@ mod image;
 mod job;
 mod lifeline;
 mod limits;
+mod linker;
 mod log;
 mod machine;
 mod profile;

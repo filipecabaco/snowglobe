@@ -106,6 +106,8 @@ type Server struct {
 	// Each machine's link sockets, by link, and whether it was given links (guarded by mu)
 	linkSocks map[string]map[string]*linkSock
 	linked    map[string]bool
+	// Each machine's link channel, which its links' connections are asked for on (guarded by mu)
+	linkers map[string]*net.UnixConn
 	// Machine names being started: taken until they are up, or not (guarded by mu)
 	starting map[string]bool
 	// Machines being stopped on purpose: not dead to the reaper (nor to their supervisor)
@@ -152,7 +154,7 @@ func New(o Options) (*Server, error) {
 	}
 	s := &Server{o: o, statePath: filepath.Join(o.Dir, "state.json"), forwards: map[string][]net.Listener{}, svc: newServices(), sup: newSupervisors(), reapEvery: reapEvery, scaleEvery: scaleEvery,
 		life: newLifecycle(), memOf: processMemory, ev: newEvents(), meter: newMeter(), metricsEvery: metricsEvery, runs: newRuns(),
-		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}, starting: map[string]bool{}, stopping: map[string]bool{}, groups: map[int]bool{}, stopped: make(chan struct{})}
+		linkSocks: map[string]map[string]*linkSock{}, linked: map[string]bool{}, linkers: map[string]*net.UnixConn{}, starting: map[string]bool{}, stopping: map[string]bool{}, groups: map[int]bool{}, stopped: make(chan struct{})}
 	if o.memOf != nil {
 		s.memOf = o.memOf
 	}
@@ -337,6 +339,9 @@ func (s *Server) Serve(ctx context.Context) error {
 		for _, ls := range mine {
 			ls.ln.Close()
 		}
+	}
+	for _, c := range s.linkers {
+		c.Close()
 	}
 	s.mu.Unlock()
 	s.svc.mu.Lock()
