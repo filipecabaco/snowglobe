@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= Site.h(@page.title) %> · snowglobe docs</title>
+  <link rel="canonical" href="<%= @site %><%= Site.doc_path(@page.slug) %>">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="snowglobe for agents">
+  <meta name="description" content="<%= Site.h(@page.desc) %>">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="snowglobe">
+  <meta property="og:title" content="snowglobe docs">
+  <meta property="og:description" content="Package a Docker image into a static site that runs it in the browser, then run it anywhere: in a page, headlessly, as one executable, or for an agent.">
+  <meta property="og:url" content="<%= @site %><%= Site.doc_path(@page.slug) %>">
+  <meta property="og:image" content="<%= @site %>/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
+  <link rel="preload" href="/fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/base.css">
+  <script>
+    // Apply a remembered theme before first paint, so the page never flashes the wrong one
+    try { const t = localStorage.getItem("snowglobe-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+  <div class="wrap">
+<%= Site.Templates.header(current: "/docs/", links: Site.links()) %>
+    <div class="layout">
+      <main class="doc">
+<%= @body %>
+        <nav class="pager" aria-label="Pages"><%= if @prev do %><a class="prev" href="<%= Site.doc_path(@prev.slug) %>"><small>Previous</small><%= Site.h(@prev.nav) %></a><% end %><%= if @next do %><a class="next" href="<%= Site.doc_path(@next.slug) %>"><small>Next</small><%= Site.h(@next.nav) %></a><% end %></nav>
+      </main>
+
+      <aside class="rail" aria-label="Docs">
+        <div class="side">
+          <div class="search" role="search">
+            <label class="sr" for="search">Search the docs</label>
+            <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="search-results" aria-expanded="false">
+            <kbd aria-hidden="true">/</kbd>
+            <ol class="results" id="search-results" role="listbox" aria-label="Results" hidden></ol>
+          </div>
+          <nav class="toc" aria-label="Docs pages">
+            <ol>
+<%= for p <- @pages do %>            <li><a href="<%= Site.doc_path(p.slug) %>"<%= if p.slug == @page.slug do %> aria-current="page"<% end %>><%= Site.h(p.nav) %></a></li>
+<% end %>            </ol>
+          </nav>
+        </div>
+      </aside>
+    </div>
+
+<%= Site.Templates.footer(credits: true, back: true) %>
+  </div>
+
+  <script src="/theme.js"></script>
+  <script src="/docs/docs.js"></script>
+</body>
+</html>

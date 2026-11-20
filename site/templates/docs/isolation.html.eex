@@ -1,0 +1,68 @@
+        <section id="security" aria-labelledby="security-title">
+          <h1 class="page-title" id="security-title">Isolation</h1>
+          <p class="intro">Read this before you run code you don't trust. The first wall is the same everywhere: the
+            guest is an emulated machine. Its only ways out are its terminal, its files and, if the site has one,
+            the network relay. Guest code never runs as host code.</p>
+          <p>Around the emulator, each place a site runs adds its own wall:</p>
+          <div class="table-wrap">
+            <table class="compare">
+              <thead><tr><th scope="col"></th><th scope="col">Browser</th><th scope="col">Native</th><th scope="col">Docker</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Around the emulator</th><td data-label="Browser">the browser's renderer sandbox</td><td data-label="Native">no_new_privs, Landlock and seccomp on Linux; Seatbelt on macOS</td><td data-label="Docker">read-only root, no capabilities, memory and pid limits</td></tr>
+                <tr><th scope="row">Host files</th><td data-label="Browser">none</td><td data-label="Native">reads the site; writes its cache, socket, logs and a job's workspace</td><td data-label="Docker">the site, read-only; logs if given</td></tr>
+                <tr><th scope="row">New processes</th><td data-label="Browser">none possible</td><td data-label="Native">refused</td><td data-label="Docker">inside the container only</td></tr>
+                <tr><th scope="row">Network</th><td data-label="Browser">the page's <code>fetch()</code> and <code>WebSocket</code></td><td data-label="Native">out the way your machine goes; private addresses off</td><td data-label="Docker">the same, from the container</td></tr>
+                <tr><th scope="row">Needs</th><td data-label="Browser">a browser</td><td data-label="Native">nothing (Linux or macOS)</td><td data-label="Docker">Docker</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h2 class="h3" id="native-sandbox">The native sandbox</h2>
+          <p>The native sandbox is strongest on Linux with Landlock (kernel 5.13 or later).</p>
+          <ul>
+            <li>A run says which parts of the sandbox it got.</li>
+            <li><code>SNOWGLOBE_SANDBOX=strict</code> refuses to run without all of them.</li>
+            <li><code>snowglobe-vm sandbox-check</code> tries what a run must not be able to do and reports
+              each; <code>sandbox-check --job</code> does the same for a job forked by a serving process.</li>
+          </ul>
+          <p>A serving process (<code>--serve</code>, and every template of <code>snowglobe daemon</code>) runs the
+            jobs of everyone who sends it one, so each forked job is narrowed further before any of its code
+            runs:</p>
+          <ul>
+            <li>It reads and writes its own workspace and nothing else of the jobs root: not another job's
+              files, environment or output.</li>
+            <li>It writes nothing the server shares between jobs. The JIT profile the server compiled from is
+              read only, and a job's own compiling is never saved into it, so what one job (one team) ran
+              can't shape, or be inferred from, how fast another's starts. The server's logs are closed in
+              the job before it runs and aren't writable to it, and its stdout and stderr (the template's
+              log, under the daemon) point at <code>/dev/null</code>: what a job prints is in its answer
+              only, whatever it writes to the guest's consoles. The profile learns only from the operator's
+              <code>template add --warm</code> runs; the daemon's <code>job.ended</code> event,
+              with the job's labels, is the per-job record.</li>
+            <li>It connects to no Unix socket: not its server's control socket, nor another machine's. On
+              Linux seccomp refuses to make one at all; on macOS Seatbelt refuses to connect one (the system's
+              DNS resolver's excepted, for a job with a network).</li>
+          </ul>
+          <p>macOS is a development platform for snowglobe, not a multi-tenant one: Seatbelt has no
+            equivalent of seccomp's system-call filter or of Landlock's stacking, and what is enforced there
+            is checked by <code>sandbox-check</code> rather than built into the kernel the way Linux's is. Run
+            other people's jobs on Linux.</p>
+
+          <h2 class="h3" id="shared-memory-safety">Shared memory stays private</h2>
+          <p>Native runs of one site share its snapshot's memory (<a href="../running/#shared-memory">how</a>). The
+            first run writes it to the cache as a read-only image, in <code>ram/</code>, which only you can open.
+            Every run maps it copy-on-write.</p>
+          <ul>
+            <li>A page a machine writes becomes its own, so one machine never sees another's memory.</li>
+            <li>Each restore gets fresh randomness: the guest kernel reseeds on it.</li>
+            <li>The image is named by a hash of the whole snapshot and checked before use: yours, read-only, one
+              link. Anything off, and the run restores the usual way. <code>SNOWGLOBE_RAM_IMAGE=off</code> always
+              does.</li>
+          </ul>
+
+          <h2 class="h3" id="not-covered">What none of them do</h2>
+          <ul>
+            <li>Hide a site's contents from whoever runs it. The snapshot is theirs to read.</li>
+            <li>Make network access safe beyond the rules on <a href="../networking/">Networking</a>. Give a guest a
+              network only when the work needs it.</li>
+          </ul>
+        </section>

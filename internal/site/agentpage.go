@@ -30,7 +30,7 @@ const AppHostDir = "apphost"
 // RuntimesFile is the agent page's list of its machines, written when the site is assembled
 const RuntimesFile = "runtimes.json"
 
-// The agent page's scripts: the page itself (site/agent/index.html on the demo site) loads them
+// The agent page's scripts: the page itself (site/templates/agent.html.eex, the site's /agent/) loads them
 // from its own directory, and each machine's worker loads the ones it runs
 var (
 	//go:embed agent.js
@@ -85,7 +85,7 @@ func FleetScripts() map[string][]byte {
 	return files
 }
 
-// AppHostScripts are the VM and HTTP preview transports; the app itself lives in site/apphost/.
+// AppHostScripts are the VM and HTTP preview transports; the app itself lives in site/static/apphost/ (its page, site/templates/apphost.html.eex).
 func AppHostScripts() map[string][]byte {
 	return map[string][]byte{
 		"sessions.js": sessionsJS, "agent.js": agentJS, "transfer.js": transferJS,
@@ -155,7 +155,7 @@ var (
 // root built with --agent: runtimes.json (each machine: its site, title, what it is for, a sample
 // command, its blobs, its build, its CPUs), the page's scripts and service worker, and at
 // root/agent/<site>/ a redirect to the page with that machine preselected. Each site's "For
-// agents" link points there. The page itself (index.html) is the demo site's own (site/agent/),
+// agents" link points there. The page itself (index.html) is the site's own (site/templates/agent.html.eex),
 // copied in after. Everything is static: the page needs no server. A site on several CPUs is a
 // machine there too: the page's service worker makes the page cross-origin isolated, as such a
 // site's own page is.
@@ -366,7 +366,7 @@ func WriteAgentPage(root string) ([]Runtime, error) {
 		}
 	}
 	// The fleet page's directory: the same machines and scripts, and its own (its index.html is the
-	// demo site's, site/fleet/, copied in after)
+	// site's /fleet/ route, site/templates/fleet.html.eex)
 	if err := os.MkdirAll(fleetRoot, 0o755); err != nil {
 		return nil, err
 	}

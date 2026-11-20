@@ -1,0 +1,33 @@
+        <section id="internals" aria-labelledby="internals-title">
+          <h1 class="page-title" id="internals-title">How it works</h1>
+          <p class="intro">Read this when you want to know what a build makes, or a build fails. A site is made in
+            five layers:</p>
+          <ol>
+            <li><strong>Boot layer.</strong> snowglobe adds a kernel, an initramfs that mounts the root filesystem
+              over 9p, and BusyBox's <code>init</code> and <code>getty</code> with a terminal running your command, as
+              files on top of your image's layers. Nothing runs in the image.</li>
+            <li><strong>Filesystem.</strong> The flattened layers become a 9p filesystem: a JSON tree and one
+              compressed blob per unique file, fetched on demand. Files of 2 MiB and more are split into
+              content-defined chunks, so a read fetches only what it covers.</li>
+            <li><strong>Snapshot.</strong> The guest boots headless until the app is ready, and the whole machine is
+              saved. Visitors, <code>snowglobe run</code>, bundles and <code>snowglobe mcp</code> all restore it.</li>
+            <li><strong>Machines.</strong> Natively, the snapshot's memory becomes an image the host maps
+              copy-on-write into every instance, and a template restores once and forks a machine per command, per
+              <code>snowglobe up</code> or per service replica, each sharing what it doesn't write.</li>
+            <li><strong>Warm pack.</strong> The files a restored machine reads (left to settle, then exercised) are
+              bundled into one download, in the order it first read them, which the page streams in the background.</li>
+          </ol>
+
+          <h2 class="h3" id="troubleshooting">When a build goes wrong</h2>
+          <ul>
+            <li><strong>"the boot stalled".</strong> Nothing was printed, fetched or computed for 5 minutes before the
+              app was ready. The build prints every CPU's state and boots once more; twice usually means the app
+              waits for something that never comes, such as <code>--ready</code> text it never prints.
+              <code>SNOWGLOBE_BOOT_STALL_SECS</code> changes the limit, and <code>0</code> turns it off.</li>
+            <li><strong>"not arm64".</strong> Build <code>FROM alpine</code> or <code>arm64v8/alpine</code>; on an x86
+              host, install QEMU's binfmt handlers first.</li>
+            <li><strong>A request answers 502.</strong> In a page, the server doesn't allow CORS. Under
+              <code>snowglobe run</code> the same request goes out from your machine instead.</li>
+            <li><strong>A service doesn't start.</strong> There is no OpenRC: start it from the image's command.</li>
+          </ul>
+        </section>

@@ -1,13 +1,17 @@
-name: CI and Pages
+name: CI and site
 
 # Every push to main and every pull request: the tests, then every site built and checked (the
 # demos on the site, plus the examples in EXAMPLES that aren't). Pushes to main then assemble the
-# demos into the site and deploy it to GitHub Pages. release.yml calls it with release: true to
-# gate a release on the same checks, without touching the site. Every site is also benchmarked
+# demos and deploy the site to Fly (snowglobe.build: site/server.exs renders the pages from
+# site/templates and serves them with site/static and the demos). release.yml calls it with
+# release: true to gate a release on the same checks, without touching the site. Every site is also benchmarked
 # (bench/); the bench-report job reports them and keeps each run on refs/snowglobe/bench.
 #
 # Run by hand with armless_ref, the sites are built and benchmarked on that armless (a branch,
 # tag or full commit) instead of the pinned release, and nothing is deployed.
+#
+# Deploying needs the repository secret FLY_API_TOKEN: a deploy token of the Fly app snowglobe
+# (fly tokens create deploy -a snowglobe).
 on:
   push:
     branches: [main]
@@ -29,8 +33,6 @@ permissions:
   # benchmark results (refs/snowglobe/bench); pull-requests: write comments the benchmark report
   contents: write
   pull-requests: write
-  pages: write
-  id-token: write
 
 # A newer push to a pull request replaces its run; main's runs (and deploys) queue
 concurrency:
@@ -90,6 +92,11 @@ jobs:
 
       - name: Test
         run: mise run test
+
+      # The site's server (site/server.exs) and every page it renders, on the Elixir the
+      # Dockerfile deploys it on
+      - name: The site's server
+        run: docker run --rm -v "$PWD:/w" -w /w elixir:1.20-alpine sh -c "mix local.hex --force > /dev/null && elixir site/test/server_test.exs"
 
       # The UI's page in Chrome, driven from Go over the DevTools protocol (chromedp): no Node.
       # The runner image has Chrome
@@ -530,10 +537,10 @@ jobs:
           path: dist
 
       # The demos share one blob store (`snowglobe pool`). It goes to git instead of Pages (whose
-      # sites are capped at 1 GB): a commit on refs/snowglobe/blobs, outside refs/heads so clones
+      # sites were capped at 1 GB, and which keeps the site's image small): a commit on refs/snowglobe/blobs, outside refs/heads so clones
       # don't fetch it, chained on the last one so only new blobs are pushed and older pages
       # (installed apps, cached copies) keep finding theirs. raw.githubusercontent.com serves it
-      # at that commit, with CORS. The rest of each site (pages, snapshots, warm packs) is Pages'.
+      # at that commit, with CORS. The rest of each site (pages, snapshots, warm packs) is Fly's.
       - name: Assemble site, and publish the blob store
         env:
           GIT_AUTHOR_NAME: github-actions[bot]
@@ -564,31 +571,24 @@ jobs:
           done
           rm -rf dist/blobs
 
-          # The rest of `mise run assemble`: every demo an installable app, the agent page's machines
-          # (/agent/runtimes.json, read from the pages just pointed at the blob store), and the index page
+          # The rest of `mise run assemble`: every demo an installable app, and the agent page's
+          # machines (/agent/runtimes.json, read from the pages just pointed at the blob store). The
+          # pages themselves are site/server.exs's, from site/templates
           for demo in $DEMOS; do ./snowglobe pwa "dist/$demo"; done
           ./snowglobe agent-pages dist
-          cp -R site/. dist/
           # The fleet page's example and the templates in its menu: the repo's own fleet files, which the page loads
           mkdir -p dist/fleet/templates && cp examples/fleet/snowglobe.toml dist/fleet/snowglobe.toml && cp examples/fleet/templates/*.toml dist/fleet/templates/
           cp -R dist/elixir/xterm dist/xterm
           du -sh dist
 
-      - uses: actions/configure-pages@v6
-
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: dist
-
-  deploy:
-    needs: assemble
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v5
+      # site/Dockerfile: the server, its templates and static files, and dist/. The image is built
+      # on Fly's builder. main's runs queue (concurrency, above), so its deploys go one at a time,
+      # in order
+      - uses: superfly/flyctl-actions/setup-flyctl@1.6
+      - name: Deploy to Fly
+        working-directory: site
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          mv "$GITHUB_WORKSPACE/dist" dist
+          flyctl deploy --remote-only --ha=false

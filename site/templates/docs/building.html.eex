@@ -1,0 +1,120 @@
+        <section id="build" aria-labelledby="build-title">
+          <h1 class="page-title" id="build-title">Building a site</h1>
+          <p class="intro">Read this when you turn your own image into a site. The Dockerfile describes the app.
+            Labels in it, or flags on <code>snowglobe build</code>, tell snowglobe how to snapshot it.</p>
+
+          <h2 class="h3" id="dockerfile">Describe it in the Dockerfile</h2>
+          <p>Labels let an image describe itself. A flag on the command line overrides its label. This is the
+            Python demo's whole Dockerfile:</p>
+          <pre>FROM alpine:3.24.2
+RUN apk add --no-cache python3
+CMD ["python3"]
+LABEL snowglobe.title="Python in the browser" \
+      snowglobe.ready=">>> " \
+      snowglobe.exercise='["import json, re, collections", "import asyncio; asyncio.run(asyncio.sleep(0))"]'</pre>
+          <p>Every flag and its label are in the <a href="../reference/#build-flags">build flags</a> table.</p>
+
+          <h2 class="h3" id="ready">When the snapshot is taken</h2>
+          <p>snowglobe boots the image until the app is ready, then saves the whole machine. Visitors restore that
+            snapshot instead of booting Linux.</p>
+          <ul>
+            <li><strong>With <code>--ready TEXT</code></strong> (or <code>snowglobe.ready</code>), the app is ready
+              once it prints that text. Use its prompt.</li>
+            <li><strong>Without it</strong>, the app counts as ready once its terminal has been quiet for 5
+              seconds.</li>
+          </ul>
+          <p><code>--cmd</code> swaps the program without touching the image. It also drops the image's
+            <code>ready</code> and <code>exercise</code> labels, which belonged to the image's own command.</p>
+
+          <h2 class="h3" id="freed-memory">Freed memory stays out of the snapshot</h2>
+          <p>Memory the guest freed would still hold what it held: a package manager's caches, a compiler's
+            work, a secret a setup step read. The guest's kernel zeroes each page as it frees it
+            (<code>init_on_free</code>), so none of that reaches the snapshot. A site with a kernel also has free page
+            reporting: the kernel reports the free memory to the machine in 2 MiB blocks, and the machine gives
+            those pages back. The build lets the guest idle a few seconds before saving, so the last of it is
+            reported. The guest keeps all of its memory: it can use those pages again at any time.</p>
+          <p>A snapshot restores only onto the devices it was saved with, so sites built before this have no such
+            device and restore as they are. Rebuild a site to make its snapshot smaller.</p>
+
+          <h2 class="h3" id="exercises">Exercises and the warm pack</h2>
+          <p>The guest fetches its files on demand. To hide that wait, every site preloads a
+            <code>warm.pack</code> in the background. snowglobe fills it by measuring, not guessing, with what a
+            restored machine reads, in the order it first reads it:</p>
+          <ul>
+            <li><strong>Restore reads:</strong> the build drops the guest's file cache before the snapshot, as a
+              visitor's machine starts. After saving it, snowglobe lets the machine run on its own for a few
+              seconds and records what its services read.</li>
+            <li><strong>Exercise reads:</strong> then it types each <code>--exercise</code>
+              command into the app and records what it reads. These are the files a visitor's first commands
+              would otherwise wait for. A command is done once the app prints its prompt again and goes
+              quiet.</li>
+            <li><strong>Pattern:</strong> anything matching <code>--warm REGEX</code>, for files no exercise
+              touches, after the rest.</li>
+          </ul>
+          <p>What only booting read stays out of the pack: the restored machine has it in memory already, or
+            never reads it again. A site with no exercises (or built with <code>--sandbox</code>) packs its boot
+            reads after the rest, the best guess there is.</p>
+          <p>The page reads the pack as it streams in, so the files the guest needs first arrive first. A read of a
+            file the pack brings soon waits for it; one far off (a visitor whose first command isn't the build's) is
+            fetched on its own, and the pack holds back while the guest waits on such fetches, so they have the
+            bandwidth. Files the machine's own cache lets go come again from the pack, or from the copy the page
+            keeps of files it fetched on their own, never from the network a second time.</p>
+          <p>Each build prints a breakdown and writes <code>warm-report.json</code>: what the restored machine read
+            settling, what each exercise read first, what only booting read, the pattern's files and the files
+            never read.</p>
+          <p>An app used over the network, not through its console, can be warmed from real traffic instead.
+            Record its reads while something talks to it, then add them to the pack:</p>
+          <pre>snowglobe run dist --name api --detach -p 5000:5000 --record-reads api-reads.json
+npm test                                    <span class="dim"># anything that talks to 127.0.0.1:5000</span>
+snowglobe stop api &amp;&amp; snowglobe warm dist api-reads.json</pre>
+
+          <h2 class="h3" id="cpus">CPUs and memory</h2>
+          <ul>
+            <li><code>--memory MB</code> sets the guest's RAM (512 by default).</li>
+            <li><code>--cpus N</code> (1 to 8) gives it more CPUs. Each runs in its own Web Worker on shared memory,
+              which helps programs that use them.</li>
+            <li>A build boots on at least 4 CPUs (<code>--build-cpus</code>) and takes the extra ones offline before
+              the snapshot.</li>
+          </ul>
+          <p>Browsers only share memory between workers on a cross-origin isolated page, and a static host can't
+            declare one. So a site on several CPUs ships a small service worker that reloads the page once on the
+            first visit. Such a site can't run inside another page's frame.</p>
+
+          <h2 class="h3" id="image-services">Services in the image</h2>
+          <p>The guest boots with BusyBox's <code>init</code> and no service manager, so the app is ready seconds
+            after the kernel starts.</p>
+          <ul>
+            <li>Services an image enables for OpenRC do not start. Start them from the command, as the Postgres and
+              Elixir examples' start scripts do.</li>
+            <li>Slow first-time setup (an <code>initdb</code>, migrations) belongs in a Dockerfile <code>RUN</code>.
+              There it runs at native speed instead of in emulation.</li>
+          </ul>
+
+          <h2 class="h3" id="without-docker">Building without Docker</h2>
+          <p><code>--builder native</code> (or <code>SNOWGLOBE_BUILDER=native</code>) builds from either:</p>
+          <ul>
+            <li>an image reference, pulled from its registry, or</li>
+            <li>an image archive: <code>docker save</code>, or an OCI layout from buildah, kaniko or anything
+              else.</li>
+          </ul>
+          <p>Nothing runs at build time either way. The image's layers are flattened, the prebuilt kernel and boot
+            files go on top, and <code>snowglobe-vm</code> boots and snapshots it on your machine.</p>
+          <pre>snowglobe build python:3.13-alpine --builder native --ready '>>> '
+docker save my-app:latest -o my-app.tar         <span class="dim"># on a machine with a builder</span>
+snowglobe build my-app.tar --builder native     <span class="dim"># anywhere else</span></pre>
+
+          <h2 class="h3" id="hosting">Hosting several sites, and installing them</h2>
+          <ul>
+            <li><code>snowglobe pool &lt;dir&gt;</code> lets every site under a directory share one blob store. Blobs
+              are named by content, so sites built on the same base share many, and a visitor's second site reuses
+              what their browser cached.</li>
+            <li><code>snowglobe pwa &lt;site&gt;</code> makes a site an installable app that keeps working offline
+              once it has run. It adds a manifest, icons and a service worker that caches the page, the machine and
+              every file the run fetched. The page asks for its build's own files (the snapshot, the filesystem
+              tree, the warm pack, the machine and its scripts) with that build's version (<code>?v=</code>), so a
+              repeat visit gets them from that cache instead of downloading them again, and a newer build's page asks
+              for other URLs and never gets an older build's copy. Run it after <code>pool</code>.</li>
+          </ul>
+          <p>Next: give the guest a network on <a href="../networking/">Networking</a>, or run the site without a
+            browser on <a href="../running/">Running outside a browser</a>.</p>
+        </section>

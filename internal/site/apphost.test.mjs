@@ -7,11 +7,11 @@ import {gzipSync} from 'node:zlib';
 import {once} from 'node:events';
 import http from 'node:http';
 import {createHash} from 'node:crypto';
-import {environment,buildSettings,relativePath} from '../../site/apphost/environments.mjs';
-import {detect,readFolder,archiveProject,sourcePath} from '../../site/apphost/project.mjs';
-import {extractProject,buildProject,createInstallRegistry} from '../../site/apphost/guest.mjs';
-import {createAppServer,rewritePaths} from '../../site/apphost/server.mjs';
-import {AppHostVm} from '../../site/apphost/vm.mjs';
+import {environment,buildSettings,relativePath} from '../../site/static/apphost/environments.mjs';
+import {detect,readFolder,archiveProject,sourcePath} from '../../site/static/apphost/project.mjs';
+import {extractProject,buildProject,createInstallRegistry} from '../../site/static/apphost/guest.mjs';
+import {createAppServer,rewritePaths} from '../../site/static/apphost/server.mjs';
+import {AppHostVm} from '../../site/static/apphost/vm.mjs';
 
 const archive = files => gzipSync(JSON.stringify({version:1,files:Object.entries(files).map(([path,text])=>({path,data:Buffer.from(text).toString('base64')}))}));
 const temporary = async t => {const dir=await fs.mkdtemp(path.join(os.tmpdir(),'apphost-test-')); t.after(()=>fs.rm(dir,{recursive:true,force:true}));return dir;};

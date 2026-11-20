@@ -1,4 +1,4 @@
-// The agent page's own elements (site/agent/index.html) over orchestrator.js. At the top, the
+// The agent page's own elements (site/templates/agent.html.eex) over orchestrator.js. At the top, the
 // studio: the app an agent builds in its preview (with its width, address, reload, and its build's
 // state), its code (studio.js: the project's tree and files, read from the machine) and database
 // (Supabase's tables), and beside it the agent's steps as a conversation (builder.js's feed), how
