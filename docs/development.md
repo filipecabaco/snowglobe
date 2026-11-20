@@ -2,7 +2,7 @@
 
 Build the web runtime and assemble the site with the normal repository workflow, then run
 `mise run serve` and open `http://localhost:8000/apphost/`. App Host uses the generated
-`dist/apphost/runtimes.json` and transport scripts alongside the sources in `site/apphost/`.
+`dist/apphost/runtimes.json` and transport scripts alongside the sources in `site/static/apphost/`.
 It does not require the separate Builder application or its gateway.
 
 # Remote development on Claudius (maintainer setup)
@@ -40,7 +40,7 @@ the App Host transports to `dist/apphost/`. The normal `mise run assemble` does 
 
 # App Host environments
 
-`site/apphost/environments.mjs` maintains the supported setups: static HTML/CSS/JavaScript,
+`site/static/apphost/environments.mjs` maintains the supported setups: static HTML/CSS/JavaScript,
 React + Vite, Svelte + Vite, Vue + Vite, other Vite frontends, Create React App, and a manual
 npm frontend setup. Detection reads the root `package.json`. Users can override detection,
 the npm script name, and the output folder. Next.js, SvelteKit/Nuxt server applications,

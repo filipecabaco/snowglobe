@@ -1,4 +1,4 @@
-// The fleet page's own elements (site/fleet/index.html) over fleet.js and orchestrator.js: a
+// The fleet page's own elements (site/templates/fleet.html.eex) over fleet.js and orchestrator.js: a
 // snowglobe.toml in a text box, read as you type into the steps the page can take with it (each its
 // own Run, or Run all), the machines those steps use, and a frame for the service it opens. Nothing
 // runs because of the file or the address: only a click (Run, Run all), which is the person's yes,

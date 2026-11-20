@@ -1,0 +1,39 @@
+# snowglobe's site on Fly (snowglobe.build): the CI and site workflow moves the assembled dist/
+# into site/ and runs `flyctl deploy --remote-only` here (Dockerfile: server.exs, templates/,
+# static/ and dist/).
+#
+# One machine of the smallest size: every page is rendered as it starts and a request is a lookup
+# or a file sent (sendfile), so one shared CPU and 256 MB carry it. It is suspended, not stopped,
+# when no one is on the site: a visit wakes it from its memory in well under a second instead of
+# starting the VM and compiling server.exs again.
+app = "snowglobe"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  # A demo's page asks for many files at once (its CPUs' workers each fetch theirs): count
+  # requests, not connections, and let one machine take a few visitors' worth before the proxy
+  # holds any back
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

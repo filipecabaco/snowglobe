@@ -1,20 +1,18 @@
-# Writes one X player card per demo from assets/cards.json:
+# Writes the poster of each X player card in site/cards.json. The card's page is the site's own
+# /card/<dir>/ route (site/templates/card.html.eex: it embeds <dir>/?embed, or <player>/?embed
+# when the card plays another build), rendered from the same file.
 #
-#   site/card/<dir>/index.html   the page whose tags make the card (it embeds <dir>/?embed, or <player>/?embed when the card plays another build)
 #   assets/posters/<dir>.html the poster's source; capture each at 480x480, deviceScaleFactor 2,
-#                             into site/card/<dir>/poster.png
+#                             into site/static/card/<dir>/poster.png
 #
 # Run from the repository root: elixir assets/cards.exs
 
 defmodule Cards do
   def run do
-    %{"base" => base, "cards" => cards} = JSON.decode!(File.read!("assets/cards.json"))
+    %{"cards" => cards} = JSON.decode!(File.read!("site/cards.json"))
     h = &html_escape/1
 
     for card <- cards do
-      page = EEx.eval_file("assets/card.html.eex", card: card, base: base, h: h)
-      write!("site/card/#{card["dir"]}/index.html", page)
-
       poster = EEx.eval_file("assets/poster.html.eex", card: card, h: h, lines: lines(card))
       write!("assets/posters/#{card["dir"]}.html", poster)
       IO.puts("card/#{card["dir"]}")

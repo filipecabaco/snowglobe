@@ -8,10 +8,11 @@ web
 
 ## Stack
 
-Plain static HTML/CSS/JS, no framework or build step for the site itself: the demo index
-(`site/index.html`) and the docs (`site/docs/index.html`), sharing `site/base.css` and
-`site/theme.js`, copied into `dist/` by `mise run build`. Deployed to GitHub Pages next to the demo
-builds.
+Plain HTML/CSS/JS, no framework or build step for the site itself. `site/server.exs` (Francis)
+renders each page from its own template under `site/templates/` (the demo index, the agent, fleet
+and App Host pages, each docs page inside the docs' frame, the X cards), serves the files they load
+from `site/static/` (`base.css`, `theme.js`, fonts) and the demo builds from `dist/`. Deployed to
+Fly (snowglobe.build).
 
 ## Users
 

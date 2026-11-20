@@ -37,9 +37,10 @@ mise run assemble
 '''
 
 # CI builds each demo in its own job, gathers them into dist/, and runs this same task, so the
-# site the Pages workflow publishes is assembled exactly as `mise run build` assembles it locally
+# demos the site serves are assembled exactly as `mise run build` assembles them locally. The pages
+# themselves aren't in dist/: site/server.exs renders them from site/templates
 [tasks.assemble]
-description = "Pool the blobs of the demos in dist/, make each an installable app, list the agent page's machines, and add the index page"
+description = "Pool the blobs of the demos in dist/, make each an installable app, and list the agent page's machines"
 run = '''
 set -e
 go build -o snowglobe ./cmd/snowglobe
@@ -50,16 +51,16 @@ for demo in $DEMOS; do
 done
 # The agent page's machines (/agent/runtimes.json and its scripts), once the sites' pages are final
 ./snowglobe agent-pages dist
-# The index page, its font, and a copy of xterm.js it renders the recorded transcripts with
-cp -R site/. dist/
 # The fleet page's example, and the templates in its menu: the repo's own fleet files, which the page loads
 mkdir -p dist/fleet/templates && cp examples/fleet/snowglobe.toml dist/fleet/snowglobe.toml && cp examples/fleet/templates/*.toml dist/fleet/templates/
+# A copy of xterm.js the index page renders the recorded transcripts with
 cp -R dist/elixir/xterm dist/xterm
 '''
 
+# The site as Fly serves it (needs Elixir): its pages, site/static and the demos in dist/
 [tasks.serve]
-description = "Serve dist/ locally at http://localhost:8000"
-run = "go run ./cmd/snowglobe serve dist"
+description = "Serve the site with the demos in dist/ at http://localhost:8000"
+run = "PORT=8000 elixir site/server.exs dist"
 
 [tasks.test]
 description = "Run the tests"

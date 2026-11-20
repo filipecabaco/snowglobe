@@ -24,7 +24,7 @@ project in [`examples/`](examples) running in the browser.
 networking, running headlessly, driving it from agents and programs, isolation, and the CLI
 reference.
 
-[![CI and Pages](https://github.com/filipecabaco/snowglobe/actions/workflows/pages.yml/badge.svg)](https://github.com/filipecabaco/snowglobe/actions/workflows/pages.yml)
+[![CI and site](https://github.com/filipecabaco/snowglobe/actions/workflows/pages.yml/badge.svg)](https://github.com/filipecabaco/snowglobe/actions/workflows/pages.yml)
 
 ```sh
 curl -fsSL https://filipecabaco.github.io/snowglobe/install.sh | sh   # or: go install github.com/filipecabaco/snowglobe/cmd/snowglobe@latest
@@ -41,7 +41,8 @@ snowglobe run dist                # or run it in your terminal, sandboxed
 
 The docs live on the site, written for people using snowglobe:
 [filipecabaco.github.io/snowglobe/docs](https://filipecabaco.github.io/snowglobe/docs/)
-(source: [`site/docs/index.html`](site/docs/index.html)).
+(source: one template per page under [`site/templates/docs/`](site/templates/docs/), inside the
+docs' frame, [`site/templates/docs.html.eex`](site/templates/docs.html.eex)).
 
 - [Getting started](https://filipecabaco.github.io/snowglobe/docs/): what you need, install, your first site
 - [Building a site](https://filipecabaco.github.io/snowglobe/docs/building/): labels and flags, readiness, exercises and the warm pack, CPUs, building without Docker
@@ -60,15 +61,16 @@ For agents, the site also serves a plain-text summary of the CLI at
 Every demo has an X player card at `card/<demo>/` (e.g.
 [filipecabaco.github.io/snowglobe/card/elixir/](https://filipecabaco.github.io/snowglobe/card/elixir/)):
 shared on X, the post itself boots the run in a 480×480 frame, and the link opens the demo page.
-`elixir assets/cards.exs` writes the card pages and poster sources from `assets/cards.json`, where
+The site renders each card page from [`site/cards.json`](site/cards.json)
+(`site/templates/card.html.eex`), and `elixir assets/cards.exs` writes the poster sources from it, where
 each poster's lines are real output from that run; capture each poster at 480×480 into
-`site/card/<demo>/poster.png`. X caches cards for about a week, so re-share with a new query string
+`site/static/card/<demo>/poster.png`. X caches cards for about a week, so re-share with a new query string
 after changing one.
 
 The frame inside a post can't be cross-origin isolated, so a card can only boot a one-CPU run. A
 demo on several CPUs gets a one-CPU build for its card: `supabase-1cpu` in `DEMOS` is
 `examples/supabase` built with `--cpus 1` (any `<example>-<n>cpu` works), and the card's `player`
-in `assets/cards.json` names it.
+in `site/cards.json` names it.
 
 ## Development checks
 
@@ -104,8 +106,9 @@ restore should also be checked against a built demo, since storage tests do not 
   has finished printing (its `ready` prompt is back, or the guest has gone quiet)
 
 with what each visit downloaded, its requests and the page's JS heap. A local server stands in
-for GitHub Pages (its caching headers; the throttling is done there, so the service worker's and
-the CPU workers' requests are slowed too).
+for the site's host (the caching headers `site/server.exs` sends a demo's files with, as GitHub
+Pages did; the throttling is done there, so the service worker's and the CPU workers' requests are
+slowed too).
 
 ```sh
 snowglobe build examples/python --out dist/python
@@ -136,7 +139,7 @@ same build (every command a little slower on one), so read smaller changes as no
 The numbers never fail CI; only a harness that can't measure does. A pull request from a fork has a
 read-only token: its report stays in the run's summary, and its results aren't kept.
 
-To measure an armless change, run "CI and Pages" by hand with `armless_ref` (a branch, tag or full
+To measure an armless change, run "CI and site" by hand with `armless_ref` (a branch, tag or full
 commit of armless): the tools image is built on it ([`bench/use-armless.sh`](bench/use-armless.sh):
 snowglobe-vm and the browser runtime both from that commit), every site is rebuilt and
 re-snapshotted on it, benchmarked and compared with main's latest, and nothing is deployed or kept.
@@ -150,11 +153,15 @@ new one.
 mise install       # Go, pinned in mise.toml
 mise run test
 mise run build     # build all ten demos into dist/ (a few minutes)
-mise run serve
+mise run serve     # the site (site/server.exs) with the demos in dist/, at http://localhost:8000
 ```
 
-Pushing to `main` runs the tests and the same build in GitHub Actions, and deploys `dist/` to
-GitHub Pages.
+Pushing to `main` runs the tests and the same build in GitHub Actions, and deploys the site to
+Fly, at [snowglobe.build](https://snowglobe.build): [`site/server.exs`](site/server.exs)
+(Francis) renders each page from its template and serves `site/static/` and the demos in `dist/`,
+on one shared CPU and 256 MB ([`site/Dockerfile`](site/Dockerfile),
+[`site/fly.toml`](site/fly.toml)). The blob store stays on `refs/snowglobe/blobs`, served by
+raw.githubusercontent.com. `elixir site/test/server_test.exs` tests the server.
 
 To release, change [`VERSION`](VERSION) in a pull request (`0.3.0`, or `0.3.0-rc.1` for a
 prerelease). Once it's on `main`, [`release.yml`](.github/workflows/release.yml) runs the same
@@ -190,7 +197,8 @@ bench/                end-to-end benchmarks of built sites (Playwright); bench/m
                       machine runtime, against Firecracker too
 docs/design/          designs, and what of them is built
 examples/             one Dockerfile per demo language; examples/fleet/: a fleet file
-site/                 the demo index page and the docs (site/docs/)
+site/                 the site: server.exs (Francis), one template per page (templates/), the
+                      files they load (static/), and its Fly deploy (Dockerfile, fly.toml)
 ```
 
 ## Credits

@@ -373,17 +373,17 @@ func TestTheDemoSiteHasEveryAgentRuntimeOnTheAgentPage(t *testing.T) {
 	for _, d := range strings.Fields(string(demos[1])) {
 		inDemos[d] = true
 	}
-	llms, err := os.ReadFile(filepath.Join(repo, "site", "llms.txt"))
+	llms, err := os.ReadFile(filepath.Join(repo, "site", "static", "llms.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := os.ReadFile(filepath.Join(repo, "site", "agent", "index.html"))
+	page, err := os.ReadFile(filepath.Join(repo, "site", "templates", "agent.html.eex"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, s := range []string{`src="agent-page.js"`, `src="orchestrator.js"`, `aria-label="Command output"`, `>Run<`, `>Cancel<`, `>Copy<`, "Shell command", "Runtime<select", "Earlier runs", `role="status"`} {
 		if !strings.Contains(string(page), s) {
-			t.Errorf("site/agent/index.html lacks %s", s)
+			t.Errorf("site/templates/agent.html.eex lacks %s", s)
 		}
 	}
 	if strings.Count(string(page), `role="status"`) != 1 {
@@ -436,7 +436,7 @@ func TestTheDemoSiteHasEveryAgentRuntimeOnTheAgentPage(t *testing.T) {
 			t.Errorf("llms.txt's \"The runtimes on this site\" doesn't list the runtime %s", name)
 		}
 		if !strings.Contains(string(page), ">"+label(df, "agent-purpose")+"<") {
-			t.Errorf("site/agent/index.html's static list lacks %s's purpose line", name)
+			t.Errorf("site/templates/agent.html.eex's static list lacks %s's purpose line", name)
 		}
 	}
 	for name := range listed {

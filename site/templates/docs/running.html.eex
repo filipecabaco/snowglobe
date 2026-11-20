@@ -1,0 +1,135 @@
+        <section id="run" aria-labelledby="run-title">
+          <h1 class="page-title" id="run-title">Running outside a browser</h1>
+          <p class="intro">Read this when you want a site in your terminal, in CI or on a server. The same snapshot
+            runs in a container or natively, from a folder, a tarball or a deployed site's URL. Each named run is an
+            <em>instance</em>.</p>
+
+          <h2 class="h3" id="run-sessions">Sessions and instances</h2>
+          <pre>snowglobe run dist/elixir                    <span class="dim"># a session; ctrl-] quits</span>
+printf 'Enum.sum(1..100)\n' | snowglobe run dist/elixir
+snowglobe run dist/elixir --name pg --detach
+snowglobe exec pg 'sql "SELECT 1"'           <span class="dim"># prints only what the command printed</span>
+snowglobe attach pg                          <span class="dim"># join it; ctrl-] detaches</span>
+snowglobe ps
+snowglobe stop pg</pre>
+          <ul>
+            <li><strong>In a container</strong> by default (<code>--runtime docker</code>): unprivileged, read-only,
+              memory-capped.</li>
+            <li><strong>Natively</strong> with <code>--runtime native</code> (or <code>SNOWGLOBE_RUNTIME=native</code>):
+              it runs <code>snowglobe-vm</code> itself, with no Docker.</li>
+          </ul>
+          <p>Piped input is typed in one line at a time, each waiting until the app goes quiet. Each instance starts
+            fresh from the snapshot.</p>
+
+          <h2 class="h3" id="remote">Sites from a URL</h2>
+          <p>A site doesn't have to be local. <code>snowglobe run</code> also takes:</p>
+          <ul>
+            <li>a deployed site's URL, which it mirrors into a cache, or</li>
+            <li>a tarball made with <code>snowglobe pack</code>, local or by URL.</li>
+          </ul>
+          <p>Downloads happen on the host and are revalidated. The second run starts from the cache, and the sandbox
+            stays offline.</p>
+          <pre>snowglobe run <%= @site %>/python/
+snowglobe pack dist/elixir -o elixir.tar.gz
+snowglobe run https://cdn.example.com/elixir.tar.gz</pre>
+
+          <h2 class="h3" id="ports">Serving from the guest</h2>
+          <p>A site built with <code>--network fetch</code> can serve. <code>-p HOST:GUEST</code> forwards a port on
+            your machine to one in the guest. Host ports bind to 127.0.0.1 unless you give an address:
+            <code>-p 0.0.0.0:8080:4000</code>.</p>
+
+          <h2 class="h3" id="bundle">One executable</h2>
+          <p><code>snowglobe bundle</code> makes a site a single executable: <code>snowglobe-vm</code> with the site
+            appended. It needs no Docker, hypervisor or KVM, so it runs on a laptop, in CI or inside someone else's
+            container.</p>
+          <p>Build with <code>--sandbox</code> for a bundle. The guest then keeps its file cache in the snapshot, and
+            exercises run before it.</p>
+          <pre>snowglobe build examples/python --sandbox --out dist/python
+snowglobe bundle dist/python -o python        <span class="dim"># Linux; --target darwin for Apple silicon</span>
+echo 'sum(i*i for i in range(10))' | ./python</pre>
+          <p>A bundle whose app is a shell also runs one-shot jobs:</p>
+          <ul>
+            <li><code>--workspace DIR</code> is written into a fresh machine, <code>--cmd</code> runs there, and its
+              output, exit status and <code>out/</code> come back.</li>
+            <li><code>--serve SOCKET --jobs-root DIR</code> restores the snapshot once and answers each job with a
+              fork of it, sharing the restored machine copy-on-write.</li>
+            <li><code>--server SOCKET</code> is that server's client.</li>
+          </ul>
+          <pre>./toolkit --workspace job --cmd 'sh main.sh' --env 'N=42'
+./toolkit --serve /run/toolkit.sock --jobs-root /var/lib/jobs &amp;
+./toolkit --server /run/toolkit.sock --workspace /var/lib/jobs/1 --cmd 'sh main.sh'</pre>
+          <h3 class="h4" id="job-limits">A job's limits</h3>
+          <p>Past its <code>--timeout</code>, nothing a job may use is limited unless asked. Each limit is a flag of
+            a one-shot job and the same field of a request to <code>--serve</code>, where every forked job has its
+            own:</p>
+          <ul>
+            <li><code>--disk-limit MB</code> (<code>disk_limit_mb</code>): what the guest's file writes may hold
+              (its filesystem is in the process's memory). Past it, writes fail with ENOSPC and <code>df</code>
+              shows what is left. What the job prints has a limit of its own, outside it.</li>
+            <li><code>--max-rss MB</code> (<code>max_rss_mb</code>): the process's (or the fork's) resident
+              memory. Past it the job ends at once, out of memory (exit 137).</li>
+            <li><code>--memory-limit MB</code>, <code>--cpus-limit N</code>, <code>--pids-limit N</code>
+              (<code>memory_limit_mb</code>, <code>cpus_limit</code>, <code>pids_limit</code>): the command runs in
+              a cgroup v2 in the guest, made at boot and reused, so a limit costs a job a few writes, not a
+              process. A guest OOM kill ends it with 137, and whatever the job left running ends with it. The
+              memory limit needs a site built with <code>snowglobe build --memory-limits</code> (its guest
+              boots with the kernel's memory controller, which costs fork-heavy jobs about 5%); the CPU and
+              process limits work on any site built by this snowglobe. A guest that can't enforce one (a site
+              built without it, before its kernel had cgroups, or with no kernel) fails the job, saying
+              so.</li>
+            <li><code>--cpu-time S</code> (<code>cpu_time_s</code>): the process's CPU time, every thread. Past it
+              the job ends (exit 152); RLIMIT_CPU backs it up.</li>
+            <li><code>--output-limit BYTES</code> (<code>output_limit</code>): past it the command is killed and its
+              output cut there (exit 153).</li>
+            <li><code>--copy-limit MB</code> (<code>copy_limit_mb</code>, default 2048): the workspace copied in,
+              and <code>out/</code> copied back, each. <code>out/</code> comes back even from a job out of time,
+              and is never written through a symbolic link.</li>
+            <li><code>--read-only-in</code> (<code>read_only_in</code>): <code>in/</code> is mounted read-only in
+              the guest.</li>
+            <li><code>--egress none|https|internet|private</code> (<code>egress</code>): <code>https</code> is TCP
+              443 to public addresses only. A forked job's is at most its server's.</li>
+          </ul>
+          <p><code>--status-file PATH</code> writes the result as JSON as the run ends: <code>status</code> (null if
+            the command didn't end by itself), <code>exit</code>, <code>timed_out</code>, <code>killed</code>,
+            <code>oom</code>, <code>output_truncated</code>, <code>disk_full</code>, <code>cpu_time_exceeded</code>,
+            <code>out_truncated</code>, <code>ms</code>. A server's answer carries the same fields. Each forked job
+            is confined to its own workspace (Landlock, or Seatbelt), not the rest of the jobs root, can't
+            connect to any Unix socket, and is cancelled when its client's connection closes. A job writes
+            nothing its server shares with other jobs: a server's <code>--log-dir</code> has the server's own
+            events (each job's log handles are closed before it runs), and the JIT profile a server starts
+            from is only read, never added to by its jobs (a single-tenant <code>snowglobe run</code> or
+            one-shot job still adds to it).</p>
+          <pre>./toolkit --workspace job --cmd 'sh main.sh' --memory-limit 256 --disk-limit 512 --status-file job.json</pre>
+
+          <h2 class="h3" id="shared-memory">Instances share their memory</h2>
+          <p>Native instances of one site don't each hold a copy of its snapshot:</p>
+          <ol>
+            <li>The first one writes the snapshot's memory to an image in the cache.</li>
+            <li>Every instance after it maps that image copy-on-write. Pages no instance writes are kept once for all
+              of them. A page an instance writes becomes its own.</li>
+            <li>An instance restores in a few milliseconds instead of decompressing the snapshot first.</li>
+          </ol>
+          <div class="table-wrap">
+            <table class="compare">
+              <thead><tr><th scope="col">Ten instances of the Python run</th><th scope="col">Each, before</th><th scope="col">Each, now</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Memory on Linux (PSS)</th><td data-label="Before">111 MB</td><td data-label="Now">46 MB</td></tr>
+                <tr><th scope="row">Memory on macOS (physical footprint)</th><td data-label="Before">175 MB</td><td data-label="Now">96 MB</td></tr>
+                <tr><th scope="row">Restore</th><td data-label="Before">60–74 ms</td><td data-label="Now">4–6 ms</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <ul>
+            <li><strong>Where:</strong> <code>ram/</code> under the cache (<code>SNOWGLOBE_CACHE</code>, by default
+              <code>~/.cache/snowglobe</code>), one image per snapshot, named by its hash.</li>
+            <li><strong>Disk:</strong> about as much as the snapshot's memory in use (71 MB for the Python run).
+              Images unused for two weeks go when a new one is made.</li>
+            <li><strong>Forks:</strong> machines forked from a template, by <code>--fork</code> or the daemon, already
+              shared the template's memory and still do. Their template server maps the image too.</li>
+            <li><strong>Off:</strong> <code>SNOWGLOBE_RAM_IMAGE=off</code> restores into memory of the instance's
+              own.</li>
+          </ul>
+          <p>How the image is kept from changing under a machine is on <a href="../isolation/#security">Isolation</a>.</p>
+          <p>Next: drive an instance from a program on <a href="../agents/">For agents and programs</a>, or run many
+            machines on <a href="../orchestration/">Orchestration and fleets</a>.</p>
+        </section>
