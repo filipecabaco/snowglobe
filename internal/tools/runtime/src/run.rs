@@ -279,12 +279,10 @@ pub fn site_spec(site: &Site) -> Result<(serde_json::Value, Spec, String), Strin
     let spec = Spec {
         memory_mb: info["memory_mb"].as_u64().unwrap_or(512) as usize,
         cpus: info["cpus"].as_u64().unwrap_or(1) as usize,
-        // A site with the GPU and no network has a network device for the GPU's link alone (its
-        // egress denied in `machine::host`)
-        network: match (info["network"].as_str().unwrap_or("none"), info["gpu"].as_bool() == Some(true)) {
-            ("none", true) => "fetch".to_string(),
-            (n, _) => n.to_string(),
-        },
+        // The site's own network: "none" for a site with the GPU alone, so its sandbox and its
+        // jobs' egress see no network (the device for the GPU's link is `gpu`'s)
+        network: info["network"].as_str().unwrap_or("none").to_string(),
+        gpu: info["gpu"].as_bool() == Some(true),
         // Missing: a site built before free page reporting, saved without the device
         free_page_reporting: info["free_page_reporting"].as_bool().unwrap_or(false),
     };
@@ -341,7 +339,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // A site built with --gpu: its GPU found now, while the driver's files can be read, and what
     // the driver opens later let through
     let mut policy = policy(args, &site, &controls, log_dir.as_deref(), &socket, spec.network == "fetch");
-    if machine::site_gpu(&site) && machine::open_gpu() {
+    if machine::site_gpu(&site) && machine::open_gpu(&site) {
         machine::allow_gpu(&mut policy, &site);
     }
     let sandboxed = sandbox::apply(&policy)?;
@@ -1044,6 +1042,19 @@ mod tests {
         let (_, s) = site("run-spec-default", &[("run.json", b"{}")]);
         let (_, spec, title) = site_spec(&s).unwrap();
         assert_eq!((spec.memory_mb, spec.cpus, spec.network.as_str(), title.as_str()), (512, 1, "none", "snowglobe"));
+        assert!(!spec.gpu && !spec.device());
+    }
+
+    #[test]
+    fn a_site_with_the_gpu_alone_has_a_device_but_no_network_in_its_sandbox() {
+        let (_, s) = site("run-spec-gpu", &[("run.json", br#"{"network":"none","gpu":true}"#)]);
+        let (_, spec, _) = site_spec(&s).unwrap();
+        assert!(spec.gpu && spec.device(), "the guest has a device for the GPU's link");
+        assert_eq!(spec.network, "none", "what the sandbox and egress go by");
+        let controls = driver::Controls::default();
+        let args = Args::parse(&[], &[]).unwrap();
+        let p = policy(&args, &s, &controls, None, "/tmp/run-spec-gpu.sock", spec.network == "fetch");
+        assert!(!p.network, "no TCP out, DNS or TLS roots for the GPU alone");
     }
 
     #[test]

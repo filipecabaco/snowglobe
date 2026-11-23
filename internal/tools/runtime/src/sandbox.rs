@@ -197,8 +197,9 @@ mod imp {
     const FS_MAKE_REG: u64 = 1 << 8;
     const FS_MAKE_SOCK: u64 = 1 << 9;
     const FS_TRUNCATE: u64 = 1 << 14;
+    const FS_IOCTL_DEV: u64 = 1 << 15;
     /// Rights a rule on a file (not a directory) may carry
-    const FS_FILE: u64 = FS_EXECUTE | FS_WRITE_FILE | FS_READ_FILE | FS_TRUNCATE | (1 << 15);
+    const FS_FILE: u64 = FS_EXECUTE | FS_WRITE_FILE | FS_READ_FILE | FS_TRUNCATE | FS_IOCTL_DEV;
     const NET_BIND_TCP: u64 = 1 << 0;
     const NET_CONNECT_TCP: u64 = 1 << 1;
     const SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
@@ -272,7 +273,13 @@ mod imp {
         rules.push(("/dev/urandom".into(), FS_READ_FILE));
         rules.push(("/dev/null".into(), FS_READ_FILE | FS_WRITE_FILE));
         for d in &p.write {
-            rules.push((d.clone(), read | FS_WRITE_FILE | FS_TRUNCATE | FS_MAKE_REG | FS_MAKE_DIR | FS_REMOVE_FILE | FS_REMOVE_DIR | (1 << 13)));
+            let mut rights = read | FS_WRITE_FILE | FS_TRUNCATE | FS_MAKE_REG | FS_MAKE_DIR | FS_REMOVE_FILE | FS_REMOVE_DIR | (1 << 13);
+            // A device written (a GPU's, `machine::gpu_paths`) is driven by ioctl, which Landlock
+            // (ABI 5, Linux 6.10) denies on devices opened after it unless granted
+            if d.starts_with("/dev") {
+                rights |= FS_IOCTL_DEV;
+            }
+            rules.push((d.clone(), rights));
         }
         if let Some(d) = &p.socket_dir {
             rules.push((d.clone(), FS_MAKE_SOCK | FS_REMOVE_FILE));
@@ -473,7 +480,7 @@ mod imp {
         fn rules_grant_reads_writes_and_the_socket_directory() {
             let p = Policy {
                 read: vec!["/site".into()],
-                write: vec!["/cache".into()],
+                write: vec!["/cache".into(), "/dev/dri".into()],
                 socket_dir: Some("/sock".into()),
                 bind: vec![],
                 network: false,
@@ -485,6 +492,9 @@ mod imp {
             let cache = rights("/cache").unwrap();
             assert_eq!(cache & (FS_WRITE_FILE | FS_MAKE_DIR | FS_REMOVE_FILE), FS_WRITE_FILE | FS_MAKE_DIR | FS_REMOVE_FILE);
             assert_eq!(cache & FS_EXECUTE, 0, "nothing runs from what a run writes");
+            assert_eq!(cache & FS_IOCTL_DEV, 0, "no ioctls but on devices");
+            // A GPU's device nodes are driven by ioctl
+            assert_eq!(rights("/dev/dri").unwrap() & FS_IOCTL_DEV, FS_IOCTL_DEV);
             assert_eq!(rights("/sock"), Some(FS_MAKE_SOCK | FS_REMOVE_FILE));
             assert_eq!(rights("/dev/urandom"), Some(FS_READ_FILE));
             assert_eq!(rights("/etc/resolv.conf"), None);

@@ -15,7 +15,7 @@
 <button id="session-folder"></button><button id="session-reconnect"></button></div>
 <p id="session-help" hidden></p><span id="session-detail"></span>
 <button id="session-fresh"></button><select id="session-list"></select><button id="session-open"></button>
-<button id="session-new"></button><button id="session-delete"></button>
+<button id="session-new"></button><button id="session-delete"></button><button id="session-clear"></button>
 </details></div>
 <div id="terminal"></div><div id="keys"></div><div id="session-paused" hidden></div>
 <script src="sessions.js"></script>
@@ -468,6 +468,32 @@
     ui.schedule(0);
     assert(!work && !ui.timer, 'Closed page started new checkpoint work');
     await ui.browser.settings({}); ui.browser.db.close(); await release();
+  });
+  await test('Delete everything removes every save and the settings of this page only, after one confirmation, and stops saving', async () => {
+    const mine = await S.BrowserStore.open(scope + '-clear'), theirs = await S.BrowserStore.open(scope + '-clear-other');
+    await mine.put(c); await mine.put({ ...c, id: 'second' }); await mine.settings({ active: c.id, autosave: true });
+    await theirs.put(c); await theirs.settings({ active: c.id });
+    mine.db.close();
+    ui = new SnowglobeSessionUI(config); ui.scope = scope + '-clear';
+    assert(await ui.prepare(), 'Workspace did not open');
+    ui.attach(fakeVM(), {});
+    const confirm = window.confirm;
+    let reloaded = false, confirmations = 0;
+    ui.reload = () => { reloaded = true; };
+    try {
+      window.confirm = () => { confirmations++; return false; };
+      await ui.operation(() => ui.clearAll(), 'Nothing deleted');
+      assert(!reloaded && (await ui.browser.list()).length === 2, 'Cancelled Delete everything deleted something');
+      window.confirm = () => { confirmations++; return true; };
+      await ui.operation(() => ui.clearAll(), 'Nothing deleted');
+      assert(reloaded && confirmations === 2, 'Delete everything did not start over after one confirmation');
+      assert((await ui.browser.list()).length === 0, 'Saves of this page were kept');
+      assert(Object.keys(await ui.browser.settings()).length === 0, 'Settings of this page were kept');
+      assert(ui.blocked && !ui.timer, 'Saving could go on after Delete everything');
+      await ui.operation(() => ui.save());
+      assert((await ui.browser.list()).length === 0, 'A save landed after Delete everything');
+      assert((await theirs.get(c.id))?.savedAt === c.savedAt && (await theirs.settings()).active === c.id, 'Another page\'s saves were deleted');
+    } finally { window.confirm = confirm; await theirs.clear(); theirs.db.close(); }
   });
   await store?.remove(c.id);
   await store?.settings({});

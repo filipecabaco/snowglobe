@@ -74,7 +74,10 @@ pub fn main(args: &Args) -> Result<u8, String> {
     let spec = Spec {
         memory_mb: args.get("memory").unwrap_or("512").parse().map_err(|_| "--memory: not a number")?,
         cpus: build_cpus,
+        // (a site with the GPU alone is snapshotted as "fetch" with --egress none: the build
+        // doesn't use the GPU, only the device the runs will have)
         network: args.get("network").unwrap_or("none").to_string(),
+        gpu: false,
         free_page_reporting: args.has("free-page-reporting"),
     };
     let ready = args.get("ready").map(str::to_string);

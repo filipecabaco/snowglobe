@@ -54,6 +54,7 @@
       document.getElementById("session-fresh").onclick = () => this.operation(() => this.startFresh(), "Workspace not changed");
       document.getElementById("session-new").onclick = () => this.operation(() => this.newSession(), "Workspace not changed");
       document.getElementById("session-delete").onclick = () => this.operation(() => this.deleteSession(), "Workspace not deleted");
+      document.getElementById("session-clear").onclick = () => this.operation(() => this.clearAll(), "Nothing deleted");
       document.getElementById("session-export").onclick = () => this.operation(() => this.exportSession(), "Backup not created");
       document.getElementById("session-import").onchange = e => {
         const file = e.target.files[0];
@@ -146,7 +147,7 @@
       document.getElementById("session-save").disabled ||= unavailable || !this.vm;
       this.autosave.disabled ||= unavailable || !this.vm;
       this.autosave.value = this.settings.autosave === false ? "off" : String(this.settings.autosaveInterval ?? 60000);
-      for (const id of ["session-fresh", "session-new", "session-delete", "session-import", "session-list", "session-folder", "session-browser"]) {
+      for (const id of ["session-fresh", "session-new", "session-delete", "session-clear", "session-import", "session-list", "session-folder", "session-browser"]) {
         document.getElementById(id).disabled ||= !this.browser;
       }
       document.getElementById("session-open").disabled ||= !this.store || !this.select.value || this.select.value === this.active?.id;
@@ -341,7 +342,7 @@
       if (this.closed || !this.store || this.blocked || !this.settings.autosave || !this.vm) return;
       this.timer = setTimeout(async () => {
         const started = performance.now();
-        if (!this.blocked && !this.busy && this.vm.running && !document.hidden) {
+        if (!this.blocked && !this.busy && this.vm.running && !document.hidden && !this.onGPU()) {
           await this.operation(() => this.save());
         }
         // Never spend most of the session serializing a large machine.
@@ -370,8 +371,12 @@
       return { version: 1, id: this.active.id, name: this.active.name, config: this.config,
         savedAt: Math.max(Date.now(), (this.active.savedAt ?? 0) + 1), console, revision, ...packed, ...process };
     }
+    /** The guest has work on the GPU (machine-core counts its connections): a save can't hold it,
+     *  and restoring one taken now would leave the guest's GPU connection broken. */
+    onGPU() { return (this.vm?.gpu_connections ?? 0) > 0; }
     async save() {
       if (!this.store || this.blocked || !this.vm) throw new Error("Workspace storage is unavailable");
+      if (this.onGPU()) throw new Error("A model is on the GPU, which a save can't hold: saving waits until it is unloaded");
       const c = await this.checkpoint();
       this.progress(this.settings.folderHandle ? "Saving… Writing to folder" : "Saving… Writing to browser", this.workHint());
       await this.store.put(c);
@@ -463,6 +468,32 @@
       delete this.settings.pendingName;
       await this.browser.settings(this.settings);
       this.reload();
+    }
+    /**
+     * Everything this page keeps in the browser: its saves and settings (this scope's, not other
+     * pages'), and its offline copy (a `snowglobe pwa` site's service worker and caches). A folder
+     * chosen for saves is forgotten with the settings; its files are the visitor's, and kept.
+     * Nothing saves after it starts (blocked), and the page starts over from the site's own state.
+     */
+    async clearAll() {
+      if (!confirm("Delete everything this page stored in this browser? Every saved workspace of this page, its settings and its offline copy are deleted. This cannot be undone: download a backup first to keep one. Files in a folder you chose for saves are kept.")) return;
+      this.blocked = true;
+      clearTimeout(this.timer);
+      this.timer = null;
+      this.progress("Deleting everything this page stored…", "Please wait. The page starts over when it is done.");
+      await this.browser.clear();
+      await this.forgetOffline();
+      this.reload();
+    }
+    /** This page's service worker and its caches (named "snowglobe-…:" and the page's directory). */
+    async forgetOffline() {
+      const scope = new URL("./", location.href).href;
+      const registration = await globalThis.navigator?.serviceWorker?.getRegistration(scope).catch(() => null);
+      if (registration?.scope === scope) await registration.unregister().catch(() => {});
+      const caches = globalThis.caches;
+      if (!caches) return;
+      const names = await caches.keys().catch(() => []);
+      await Promise.all(names.filter((n) => n.startsWith("snowglobe-") && n.endsWith(":" + scope)).map((n) => caches.delete(n).catch(() => {})));
     }
     async exportSession() {
       let filename = this.filename.value.trim();

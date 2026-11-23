@@ -183,6 +183,17 @@
       tx.objectStore("checkpoints").delete([this.scope, id]);
       await done;
     }
+    /** Every save of this scope, and its settings, in one transaction. Other pages' saves on the
+     *  origin (the same database, other scopes) are kept. */
+    async clear() {
+      const tx = this.db.transaction(["checkpoints", "settings"], "readwrite");
+      const done = committed(tx);
+      const checkpoints = tx.objectStore("checkpoints");
+      const keys = checkpoints.index("scope").getAllKeys(this.scope);
+      keys.onsuccess = () => { for (const key of keys.result) checkpoints.delete(key); };
+      tx.objectStore("settings").delete(this.scope);
+      await done;
+    }
     async settings(value) {
       const tx = this.db.transaction("settings", value === undefined ? "readonly" : "readwrite");
       if (value === undefined) return await request(tx.objectStore("settings").get(this.scope)) ?? {};

@@ -48,8 +48,13 @@ type Options struct {
 	Network  string
 	// GPU is "on" or "off": whether the guest may run WebGPU compute on the host's GPU (armless-gpu:
 	// its connections to gpu.internal:7070 are answered with the page's WebGPU, or natively with
-	// wgpu). Needs Network fetch. Empty: the label snowglobe.gpu, else off
+	// wgpu). With no network, the guest gets a device for the GPU's link alone. Empty: the label
+	// snowglobe.gpu, else off
 	GPU string
+	// GPUMemory is the GPU memory, in MB, the guest's buffers may take (all its connections
+	// together). 0: the label snowglobe.gpu-memory, else armless's default (4 GiB natively, 2 GiB
+	// in the page). A model's weights live there: a large one needs more
+	GPUMemory int
 	// Tunnels are guest TCP destinations carried over WebSockets, "[HOST:]PORT=URL"
 	Tunnels []string
 	// TunnelToken answers a GET with an access token for tunnel URLs with {token} in them
@@ -89,6 +94,9 @@ type Options struct {
 	// that runs with no guest kernel, its system calls answered by the machine (armless user mode),
 	// in the page as natively. Much smaller snapshots; one CPU in the page, no agent page for now
 	Kernel string
+	// BuildArgs are a Dockerfile's ARGs, "NAME=VALUE" (docker build --build-arg): one Dockerfile,
+	// several sites (examples/ollama's Ollama version, say). Only for a Dockerfile source
+	BuildArgs []string
 	// SourceName is what the site calls its source (the page's default title, run.json's source):
 	// the source itself unless given, as a daemon names a context it was sent rather than where
 	// it keeps it
@@ -112,6 +120,7 @@ type Settings struct {
 	Exercise    []string
 	Network     string
 	GPU         bool
+	GPUMemory   int // MB; 0: armless's default
 	Tunnels     []tunnel.Tunnel
 	TunnelToken string
 	CPUs        int
@@ -164,6 +173,14 @@ func Run(o Options, version string) error {
 		return fmt.Errorf("--builder %s: docker or native", builder)
 	}
 	nativeBuild := builder == "native"
+	for _, a := range o.BuildArgs {
+		if name, _, ok := strings.Cut(a, "="); !ok || name == "" {
+			return fmt.Errorf("--build-arg %q: NAME=VALUE", a)
+		}
+	}
+	if len(o.BuildArgs) > 0 && nativeBuild {
+		return fmt.Errorf("--build-arg: the native builder builds no Dockerfile (use --builder docker)")
+	}
 
 	var t *tools.Image
 	var vm string
@@ -206,7 +223,7 @@ func Run(o Options, version string) error {
 		if err := step("Build tools image", func() (err error) { t, err = tools.Build(version); return }); err != nil {
 			return err
 		}
-		if err := step("Resolve source image", func() error { return resolveSource(o.Source, platform) }); err != nil {
+		if err := step("Resolve source image", func() error { return resolveSource(o.Source, platform, o.BuildArgs) }); err != nil {
 			return err
 		}
 		// From here on as a native build does: the boot layer is files added to the image's
@@ -388,7 +405,7 @@ func packsBoot(o Options, s *Settings) bool {
 
 // Page is the page a build with these settings renders.
 func Page(s *Settings, version string) site.Page {
-	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, GPU: s.GPU, CPUs: s.CPUs, JIT: s.JIT, User: s.Kernel == "none", FreePageReporting: s.Kernel != "none",
+	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, GPU: s.GPU, GPUMemoryMB: s.GPUMemory, CPUs: s.CPUs, JIT: s.JIT, User: s.Kernel == "none", FreePageReporting: s.Kernel != "none",
 		Tunnels: s.Tunnels, TunnelToken: s.TunnelToken, ConsoleCols: tools.ConsoleCols, ConsoleRows: tools.ConsoleRows,
 		Agent: s.Agent, AgentExposedTo: s.AgentExposedTo, Version: version}
 }
@@ -406,6 +423,7 @@ type RunInfo struct {
 	Kernel        string          `json:"kernel,omitempty"` // "none": the command runs with no kernel
 	Network       string          `json:"network"`
 	GPU           bool            `json:"gpu,omitempty"`                 // the guest may use the host's GPU (armless-gpu)
+	GPUMemoryMB   int             `json:"gpu_memory_mb,omitempty"`       // its buffers' budget; 0: armless's default
 	FreePages     bool            `json:"free_page_reporting,omitempty"` // the snapshot leaves out freed memory: restores need its device
 	Tunnels       []tunnel.Tunnel `json:"tunnels,omitempty"`
 	TunnelToken   string          `json:"tunnel_token,omitempty"`
@@ -454,7 +472,7 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 
 	info := RunInfo{
 		Title: s.Title, Source: first(o.SourceName, o.Source), Command: s.Command, Ready: s.Ready, Exercise: s.Exercise,
-		MemoryMB: s.Memory, Network: s.Network, GPU: s.GPU,
+		MemoryMB: s.Memory, Network: s.Network, GPU: s.GPU, GPUMemoryMB: s.GPUMemory,
 		JIT:    s.JIT,
 		Kernel: map[bool]string{true: "none"}[s.Kernel == "none"],
 		// The snapshot was saved with the device (tools.SnapshotArgs): every restore needs it too
@@ -581,6 +599,10 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	if s.Memory < 1 {
 		return nil, fmt.Errorf("memory %d: a number of MB", s.Memory)
 	}
+	// An armless machine's RAM sits below its devices: at most 3.5 GiB
+	if s.Memory > MaxMemoryMB {
+		return nil, fmt.Errorf("memory %d: an armless machine has at most %d MB of RAM (a larger model is read from its file as it is used, not held in RAM)", s.Memory, MaxMemoryMB)
+	}
 
 	switch jit := first(o.JIT, label("jit"), "on"); jit {
 	case "on", "off":
@@ -602,6 +624,17 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 		s.GPU = gpu == "on"
 	default:
 		return nil, fmt.Errorf("gpu %q: use on or off", gpu)
+	}
+	s.GPUMemory = o.GPUMemory
+	if s.GPUMemory == 0 && label("gpu-memory") != "" {
+		n, err := strconv.Atoi(label("gpu-memory"))
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("label %sgpu-memory: %q is not a number of MB", labelPrefix, label("gpu-memory"))
+		}
+		s.GPUMemory = n
+	}
+	if s.GPUMemory < 0 || (s.GPUMemory > 0 && !s.GPU) {
+		return nil, fmt.Errorf("gpu-memory %d: a number of MB, for a site with the GPU (--gpu on)", s.GPUMemory)
 	}
 
 	// Raw TCP the browser can't make, carried over WebSockets: only with a network
@@ -760,15 +793,25 @@ func flattenRootfs(img *oci.Image, systemDir string, noChunks bool) (*rootfs.Res
 	return res, err
 }
 
-func resolveSource(source, platform string) error {
+func resolveSource(source, platform string, buildArgs []string) error {
 	if isDockerfileDir(source) {
-		return docker.Run("build", "--platform", platform, "--tag", sourceTag, source)
+		args := []string{"build", "--platform", platform, "--tag", sourceTag}
+		for _, a := range buildArgs {
+			args = append(args, "--build-arg", a)
+		}
+		return docker.Run(append(args, source)...)
+	}
+	if len(buildArgs) > 0 {
+		return fmt.Errorf("--build-arg: %s is an image, not a Dockerfile to build", source)
 	}
 	if err := docker.Run("pull", "--platform", platform, source); err != nil {
 		return err
 	}
 	return docker.Run("tag", source, sourceTag)
 }
+
+// MaxMemoryMB is the most RAM an armless machine has (armless's RAM_MAX, 0xE000_0000).
+const MaxMemoryMB = 3584
 
 // bootNetwork is the network the guest boots and is snapshotted with: its own, or for a site with
 // the GPU and no network "gpu", a network device for the GPU's link alone (its egress denied), as

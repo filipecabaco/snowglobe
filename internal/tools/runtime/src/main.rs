@@ -208,7 +208,7 @@ mod testing {
     /// The smallest machine, never started.
     pub fn machine(name: &str) -> (Arc<armless::Board>, armless::runner::Runner) {
         let (_, site) = site(name, &[("system/filesystem.json", EMPTY_FS)]);
-        let spec = Spec { memory_mb: 16, cpus: 1, network: "none".into(), free_page_reporting: false };
+        let spec = Spec { memory_mb: 16, cpus: 1, network: "none".into(), gpu: false, free_page_reporting: false };
         let (vm, clock) = machine::new_vm_jit(&spec, &site, false).unwrap();
         let board = vm.board.clone();
         (board, armless::runner::Runner::new(vm, clock, false))

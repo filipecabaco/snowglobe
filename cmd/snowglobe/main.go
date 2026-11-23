@@ -293,6 +293,8 @@ Usage:
 
 Build flags:
   --out DIR       output directory (default: dist)
+  --build-arg NAME=VALUE
+                  a Dockerfile ARG for the image's build (repeatable; Dockerfile sources only)
   --cmd CMD       shell command to run on the terminal (default: the image's ENTRYPOINT + CMD)
   --ready TEXT    terminal output that means the app is ready to snapshot
                   (default: once the terminal has been quiet for 5 seconds)
@@ -300,10 +302,14 @@ Build flags:
   --source-name NAME
                   what the site calls its source (run.json, the default title), when the path
                   built isn't a name to show (a daemon's copy of an uploaded context)
-  --memory MB     guest RAM (default: 512)
+  --memory MB     guest RAM (default: 512, at most 3584)
   --warm REGEX    extra guest paths to preload, on top of what the guest read
   --network NAME  none (default) or fetch: the guest's plain HTTP requests go out through the
                   browser's fetch(), upgraded to HTTPS on HTTPS pages; servers must allow CORS
+  --gpu on|off    the guest may run WebGPU compute on the GPU (the visitor's in the page, the
+                  host's natively) at gpu.internal:7070. Needs no network
+  --gpu-memory MB the GPU memory the guest's buffers may take (default: 4096 natively, 2048 in
+                  the page): a model's weights live there
   --tunnel [HOST:]PORT=URL
                   carry the guest's TCP to HOST:PORT (any name, if HOST is left out) over a
                   WebSocket to URL (ws:// or wss://), as binary messages: websockify, websocat
@@ -543,8 +549,10 @@ func runBuild(args []string) error {
 	fs.IntVar(&o.Memory, "memory", 0, "")
 	fs.StringVar(&o.Warm, "warm", "", "")
 	fs.Func("exercise", "", func(v string) error { o.Exercise = append(o.Exercise, v); return nil })
+	fs.Func("build-arg", "", func(v string) error { o.BuildArgs = append(o.BuildArgs, v); return nil })
 	fs.StringVar(&o.Network, "network", "", "")
 	fs.StringVar(&o.GPU, "gpu", "", "")
+	fs.IntVar(&o.GPUMemory, "gpu-memory", 0, "")
 	fs.Func("tunnel", "", func(v string) error { o.Tunnels = append(o.Tunnels, v); return nil })
 	fs.StringVar(&o.TunnelToken, "tunnel-token", "", "")
 	fs.BoolVar(&o.AllowPrivate, "allow-private", false, "")

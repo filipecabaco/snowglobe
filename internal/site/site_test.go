@@ -143,6 +143,24 @@ func TestWorkspaceShowsSaveControlsAndExplicitMethods(t *testing.T) {
 	}
 }
 
+func TestTheGPUWithItsBudgetAndNoNetwork(t *testing.T) {
+	page, _ := render(t, Page{Title: "Demo", MemoryMB: 512, Network: "none", GPU: true, GPUMemoryMB: 12288, CPUs: 1})
+	for _, want := range []string{`<script src="armless/armless-gpu.js?v=`, "network: { allow: () => false }",
+		"gpu: { max_memory: 12288 * 1048576 }", "your GPU through WebGPU"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	page, _ = render(t, Page{Title: "Demo", MemoryMB: 512, Network: "none", GPU: true, CPUs: 1})
+	if !strings.Contains(page, "gpu: true,") {
+		t.Error("without a budget, armless-gpu.js's default")
+	}
+	page, _ = render(t, Page{Title: "Demo", MemoryMB: 512, Network: "none", CPUs: 1})
+	if strings.Contains(page, "armless-gpu.js") || strings.Contains(page, "gpu:") {
+		t.Error("a site without the GPU loads none of it")
+	}
+}
+
 func TestSeveralCPUsWithNetwork(t *testing.T) {
 	page, dir := render(t, Page{Title: "Demo", MemoryMB: 512, Network: "fetch", CPUs: 4})
 	for _, want := range []string{"const cpus = 4 ;", `network: { tls: versioned("system/tls.json") }`, `register("sw.js")`} {
@@ -217,7 +235,7 @@ func TestThePageMakesItsMachineWithTheFactory(t *testing.T) {
 	page, dir := render(t, Page{Title: "t", MemoryMB: 256, CPUs: 1, Network: "none"})
 	lacks(t, "the page", page, `<script src="machine-core.js?v=`, `<script src="machine-host.js?v=`,
 		`SnowglobeHost.createMachine({ base: document.baseURI, transport: "inline"`, `baseurl: "system/filesystem/"`,
-		`warm: versioned("system/warm.pack")`, `host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null)`, `await host.run()`)
+		`warm: versioned("system/warm.pack")`, `host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null, sessions.processSavedAt ?? null)`, `await host.run()`)
 	for _, f := range []string{"machine-core.js", "machine-host.js"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("the site lacks %s", f)
@@ -288,7 +306,7 @@ func TestBuildFilesCarryTheAssetVersion(t *testing.T) {
 	for _, url := range []string{`versioned("armless/armless.wasm")`, `versioned("armless/armless-smp.wasm")`,
 		`versioned("system/filesystem.json")`, `initial_state: versioned("system/state.bin.zst")`,
 		`versioned("system/warm.pack")`, `versioned("system/tls.json")`, `fetch(versioned("system/console.bin"))`,
-		`host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null)`} {
+		`host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null, sessions.processSavedAt ?? null)`} {
 		lacks(t, "the page", page, url)
 	}
 	for _, bare := range []string{`"armless/armless.wasm"`, `"system/state.bin.zst"`, `"system/filesystem.json"`, `"system/warm.pack"`,

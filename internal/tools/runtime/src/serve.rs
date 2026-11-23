@@ -1090,7 +1090,7 @@ mod tests {
     #[test]
     fn a_job_or_machine_gets_no_egress_its_site_has_no_network_for() {
         let net = || machine::Net::from_args(&args(&[]), None).unwrap();
-        let spec = |network: &str| machine::Spec { memory_mb: 64, cpus: 1, network: network.into(), free_page_reporting: false };
+        let spec = |network: &str| machine::Spec { memory_mb: 64, cpus: 1, network: network.into(), gpu: false, free_page_reporting: false };
         let https = Some(crate::limits::Egress::Https);
         assert_eq!(narrowed(net(), https, &spec("fetch")).unwrap().egress(), crate::limits::Egress::Https);
         let e = narrowed(net(), https, &spec("none")).err().unwrap();

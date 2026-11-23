@@ -1,36 +1,38 @@
-# An Ollama model on your GPU
+# Ollama on your GPU
 
-A chat with a model from Ollama's library, in the browser tab, its layers on the visitor's GPU.
+Ollama itself, the official release unchanged, in the browser tab, its models on the visitor's
+GPU. The site carries no model: the visitor pulls one at a shell prompt.
 
-- **The model** is pulled from registry.ollama.ai when the site is built (`MODEL`, default
-  `smollm2:135m`), into Ollama's own layout under `/root/.ollama/models`. The guest fetches its
-  file from the site the first time it loads it.
-- **llama.cpp's server** runs it, built with armless's WebGPU backend for guests
-  (armless's `gpu/guest`): its GPU work goes to the page's WebGPU through armless-gpu.js, or, run
-  natively (`snowglobe run`), to the host's GPU through wgpu.
-- **ollama-compat** answers Ollama's REST API in front of it (`/api/chat`, `/api/generate`,
-  `/api/tags`, `/api/show`, `/api/ps`, `/api/version`, and OpenAI's `/v1/...`) on port 11434, and
-  gives the terminal `ollama run`'s chat. It is not Ollama: it uses Ollama's registry and API with
-  llama.cpp underneath, because Ollama's own build has no WebGPU backend.
+```
+$ ollama pull hf.co/bartowski/SmolLM2-135M-Instruct-GGUF
+$ ollama run hf.co/bartowski/SmolLM2-135M-Instruct-GGUF
+```
+
+- **Ollama** is its `ollama-linux-arm64` release (`OLLAMA_VERSION`). It runs llama.cpp's
+  `llama-server` and loads a GPU backend from each directory under `lib/ollama`; this example
+  adds one, `lib/ollama/webgpu/libggml-webgpu.so`: llama.cpp's WebGPU backend, built from the
+  llama.cpp version that release pins (`LLAMA_CPP`, its `LLAMA_CPP_VERSION`) against armless's
+  guest WebGPU (`gpu/guest`), whose GPU work goes to the page's WebGPU (natively, to wgpu).
+  Ollama's own device discovery finds it (`OLLAMA_LLM_LIBRARY=webgpu` skips the CUDA probes).
+- **Its server starts with the first `ollama` command** (`ollama.sh`, read by the shell as
+  `$ENV`): Ollama finds its devices once, when it starts, and the GPU is only there once the
+  page runs the machine, after the snapshot (which is taken at the shell's prompt).
+- **Models** come with `ollama pull hf.co/OWNER/REPO[:QUANT]` (Q4_K_M unless said) from Hugging
+  Face's registry for Ollama, which lets browsers in: the guest's HTTPS goes through armless's
+  proxy (`HTTPS_PROXY=http://proxy.internal:3128`) and out as the page's fetch(). Behind a
+  proxy Ollama leaves names to it, so its checks on where a registry's redirect resolves to stay
+  on and pass. Ollama's own registry doesn't let browsers in, so its library names
+  (`qwen3:0.6b`) can't be pulled in a page. Models to pull:
+  [huggingface.co/models?library=gguf](https://huggingface.co/models?library=gguf&sort=downloads).
+- **The guest is Alpine** (snowglobe's boot is BusyBox's init) with Debian's glibc under
+  `/usr/glibc` for Ollama, as in `examples/supabase`.
 
 ```sh
-snowglobe build examples/ollama    # another model: change ARG MODEL in the Dockerfile
+snowglobe build examples/ollama
 snowglobe serve dist
 ```
 
-The chat waits at its prompt in the snapshot; the model loads, and the GPU is connected, with the
-first message. A browser without WebGPU (or a GPU without `shader-f16`, which llama.cpp's WebGPU
-backend needs) runs it on the emulated CPU instead: it still answers, much more slowly.
-
-The guest has no network: it reaches the GPU and nothing else.
-
-Natively, `snowglobe run dist` chats in the terminal, on the host's GPU (through wgpu: Vulkan,
-Metal or DX12); `snowglobe run dist --name ol --detach --fork` then `snowglobe sh ol
-'ollama-compat run smollm2:135m "Hi"'` asks it from a script, each in a fresh copy of the machine.
-
-Measured with smollm2:135m on a machine with no GPU (Mesa's lavapipe, software Vulkan, as the
-GPU): 2.4 tokens/s through the browser's code path (armless.wasm and armless-gpu.js, with Dawn as
-WebGPU), 1.2 natively, against 0.37 on the CPU alone.
-
-Models are kept small by the guest's memory (`snowglobe.memory`, at most 4 GB, and less in a
-browser tab) and the download: a few hundred MB is a reasonable model for a page.
+`MEMORY` (1536 MB) and `GPU_MEMORY` (4096 MB) size the machine: a model's weights go to the
+GPU, and a pulled model's file lives in the machine's filesystem (in the tab, and in its saves).
+Downloads go through the emulated network, at a few MB/s. A browser without WebGPU (or a GPU
+without `shader-f16`, which llama.cpp's WebGPU backend needs) runs the model on the emulated CPU.

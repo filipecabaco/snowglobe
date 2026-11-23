@@ -40,12 +40,23 @@ pub fn cmdline(memory_cgroup: bool) -> String {
 pub struct Spec {
     pub memory_mb: usize,
     pub cpus: usize,
-    /// "none" or "fetch"
+    /// "none" or "fetch": the site's network, what the sandbox and egress go by
     pub network: String,
+    /// The site was built with --gpu (run.json's `gpu`): the guest has a network device for the
+    /// GPU's link even with no network, its egress denied (`device`, `host`)
+    pub gpu: bool,
     /// A virtio-balloon through which the guest's kernel reports the memory it freed, which is
     /// zeroed so a snapshot leaves it out (run.json's `free_page_reporting`: sites built before
     /// it have no such device, and their snapshots restore only without one)
     pub free_page_reporting: bool,
+}
+
+impl Spec {
+    /// Whether the guest has a network device: for its network, or for the GPU's link alone (as
+    /// the snapshot was taken, `tools.SnapshotArgs`).
+    pub fn device(&self) -> bool {
+        self.network == "fetch" || self.gpu
+    }
 }
 
 pub fn new_vm(spec: &Spec, site: &Site) -> Result<(Vm<NativePlatform>, Arc<Clock>), String> {
@@ -99,7 +110,7 @@ pub fn new_vm_on(spec: &Spec, site: &Site, jit: bool, ram: Option<armless::Ram>)
         devices: DeviceConfig {
             console: true,
             fs_tag: Some("host9p".into()),
-            net: spec.network == "fetch",
+            net: spec.device(),
             free_page_reporting: spec.free_page_reporting,
             ..Default::default()
         },
@@ -115,8 +126,9 @@ pub fn new_vm_on(spec: &Spec, site: &Site, jit: bool, ram: Option<armless::Ram>)
     }
     vm.board.load_filesystem(&site.need("system/filesystem.json")?)?;
     // With a network, the guest's HTTPS ends in the machine's web relay, with certificates from
-    // the CA made for this site (which the guest trusts); its requests then go out from here
-    if spec.network == "fetch" {
+    // the CA made for this site (which the guest trusts); its requests then go out from here. A
+    // device for the GPU alone was snapshotted with the relay too (none of it goes out)
+    if spec.device() {
         vm.board.set_tls(&site.need("system/tls.json")?)?;
     }
     Ok((vm, clock))
@@ -472,7 +484,8 @@ pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, a
         HostOptions {
             blobs: None,
             blob_source: Some(site.blobs()),
-            network: network == "fetch",
+            // For the network, or for the GPU's link alone (egress none, above)
+            network: network == "fetch" || site_gpu(site),
             // Direct, or through the proxy the environment names: sandboxes that only let HTTPS
             // out through a (TLS-intercepting) proxy work too
             egress: Egress { allow_private: net.allow_private, deny_all: net.deny_all, ports: net.ports, ..Egress::from_env() },
@@ -484,10 +497,11 @@ pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, a
     // to no Unix socket itself. The GPU's (a site built with --gpu) is answered here
     let gpu = site_gpu(site);
     GPU_ON.store(gpu, std::sync::atomic::Ordering::SeqCst);
+    let budget = gpu_memory_mb(site);
     let daemon = crate::linker::dialer();
     host.set_link_dialer(Arc::new(move |t: &armless::native::Tunnel| {
         if gpu && is_gpu_link(t) {
-            return Some(gpu::connect());
+            return Some(gpu::connect(budget));
         }
         daemon(t)
     }));
@@ -505,6 +519,15 @@ fn gpu_only(site: &Site) -> bool {
     site.file("run.json")
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b[..]).ok())
         .is_some_and(|v| v["gpu"].as_bool() == Some(true) && v["network"].as_str().unwrap_or("none") == "none")
+}
+
+/// The GPU memory the site's guest may take, in MB (run.json's `gpu_memory_mb`, from
+/// --gpu-memory); `None`: armless-gpu's default (or ARMLESS_GPU_MEMORY_MB).
+pub fn gpu_memory_mb(site: &Site) -> Option<u64> {
+    site.file("run.json")
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b[..]).ok())
+        .and_then(|v| v["gpu_memory_mb"].as_u64())
+        .filter(|&mb| mb > 0)
 }
 
 pub fn site_gpu(site: &Site) -> bool {
@@ -525,8 +548,8 @@ fn is_gpu_link(t: &armless::native::Tunnel) -> bool {
 
 /// For a site built with --gpu: finds the host's GPU (before the sandbox), and says what the
 /// sandbox must still let the driver reach (`gpu_paths`). Whether there is a GPU.
-pub fn open_gpu() -> bool {
-    gpu::open()
+pub fn open_gpu(site: &Site) -> bool {
+    gpu::open(gpu_memory_mb(site))
 }
 
 /// What a GPU driver reads and opens after the device is found: the loader's and drivers'
@@ -565,14 +588,26 @@ mod gpu {
     /// The host's GPU, found at the guest's first connection (None: wgpu found no adapter).
     static GPU: OnceLock<Option<Arc<armless_gpu::server::Gpu>>> = OnceLock::new();
 
-    /// Finds the GPU now: before the sandbox, while the driver's files can still be read. Whether
-    /// there is one.
-    pub fn open() -> bool {
-        GPU.get_or_init(|| armless_gpu::server::Gpu::new().map(Arc::new)).is_some()
+    /// The GPU, its guest limited to `memory_mb` of buffers if given.
+    fn find(memory_mb: Option<u64>) -> Option<Arc<armless_gpu::server::Gpu>> {
+        let gpu = armless_gpu::server::Gpu::new()?;
+        Some(Arc::new(match memory_mb {
+            Some(mb) => {
+                let limits = armless_gpu::server::Limits { memory: mb << 20, ..armless_gpu::server::Limits::from_env() };
+                gpu.with_limits(limits)
+            },
+            None => gpu,
+        }))
     }
 
-    pub fn connect() -> std::io::Result<std::net::TcpStream> {
-        match GPU.get_or_init(|| armless_gpu::server::Gpu::new().map(Arc::new)) {
+    /// Finds the GPU now: before the sandbox, while the driver's files can still be read. Whether
+    /// there is one.
+    pub fn open(memory_mb: Option<u64>) -> bool {
+        GPU.get_or_init(|| find(memory_mb)).is_some()
+    }
+
+    pub fn connect(memory_mb: Option<u64>) -> std::io::Result<std::net::TcpStream> {
+        match GPU.get_or_init(|| find(memory_mb)) {
             Some(g) => armless_gpu::server::connect(g.clone()),
             None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no GPU adapter on this host")),
         }
@@ -581,11 +616,11 @@ mod gpu {
 
 #[cfg(not(feature = "gpu"))]
 mod gpu {
-    pub fn open() -> bool {
+    pub fn open(_: Option<u64>) -> bool {
         false
     }
 
-    pub fn connect() -> std::io::Result<std::net::TcpStream> {
+    pub fn connect(_: Option<u64>) -> std::io::Result<std::net::TcpStream> {
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "this snowglobe-vm was built without the gpu feature"))
     }
 }
@@ -917,7 +952,7 @@ mod tests {
 
     #[test]
     fn a_machine_needs_its_filesystem_and_with_a_network_its_certificates() {
-        let spec = |network: &str| Spec { memory_mb: 16, cpus: 1, network: network.into(), free_page_reporting: false };
+        let spec = |network: &str| Spec { memory_mb: 16, cpus: 1, network: network.into(), gpu: false, free_page_reporting: false };
         let (_, bare) = site("machine-bare", &[]);
         assert_eq!(new_vm_jit(&spec("none"), &bare, false).err().unwrap(), "system/filesystem.json: not in the site");
         let (_, s) = site("machine-net", &[("system/filesystem.json", EMPTY_FS)]);

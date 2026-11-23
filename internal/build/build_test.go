@@ -1,6 +1,7 @@
 package build
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/filipecabaco/snowglobe/internal/docker"
@@ -116,6 +117,39 @@ func TestResolveGPU(t *testing.T) {
 	}
 	if _, err := Resolve(Options{GPU: "yes", Network: "fetch"}, image(nil, "sh")); err == nil {
 		t.Error("gpu takes on or off")
+	}
+}
+
+func TestResolveGPUMemory(t *testing.T) {
+	s, err := Resolve(Options{GPU: "on"}, image(nil, "sh"))
+	if err != nil || s.GPUMemory != 0 {
+		t.Errorf("armless's default unless asked: %d, %v", s.GPUMemory, err)
+	}
+	s, err = Resolve(Options{}, image(map[string]string{"snowglobe.gpu": "on", "snowglobe.gpu-memory": "12288"}, "sh"))
+	if err != nil || s.GPUMemory != 12288 {
+		t.Errorf("label: %d, %v", s.GPUMemory, err)
+	}
+	s, _ = Resolve(Options{GPUMemory: 8192}, image(map[string]string{"snowglobe.gpu": "on", "snowglobe.gpu-memory": "12288"}, "sh"))
+	if s.GPUMemory != 8192 {
+		t.Errorf("the flag overrides the label: %d", s.GPUMemory)
+	}
+	if _, err := Resolve(Options{GPUMemory: 4096}, image(nil, "sh")); err == nil {
+		t.Error("gpu-memory without the GPU")
+	}
+	if _, err := Resolve(Options{}, image(map[string]string{"snowglobe.gpu": "on", "snowglobe.gpu-memory": "lots"}, "sh")); err == nil {
+		t.Error("gpu-memory takes a number")
+	}
+	if p := Page(s, "v"); p.GPUMemoryMB != 8192 {
+		t.Errorf("the page's budget: %d", p.GPUMemoryMB)
+	}
+}
+
+func TestResolveMemoryIsWhatAnArmlessMachineHas(t *testing.T) {
+	if _, err := Resolve(Options{Memory: MaxMemoryMB}, image(nil, "sh")); err != nil {
+		t.Errorf("%d MB: %v", MaxMemoryMB, err)
+	}
+	if _, err := Resolve(Options{Memory: MaxMemoryMB + 1}, image(nil, "sh")); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Errorf("past armless's RAM: %v", err)
 	}
 }
 

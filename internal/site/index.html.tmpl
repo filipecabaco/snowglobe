@@ -1,5 +1,4 @@
-    // A restored workspace's state, and with no kernel its process; else the site's own
-    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null, sessions.processSavedAt ?? null);<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -36,6 +35,12 @@
       border-radius: 50%; background: #c48a1e; vertical-align: .05em; }
     #status[data-state="ready"]::before { background: #d6300c; animation: live 2s ease-in-out infinite; }
     @keyframes live { 50% { opacity: .35; } }
+    /* A large file the guest is reading (a model's weights): how much of it is in */
+    #reading { display: inline-flex; align-items: center; gap: .45em; font-variant-numeric: tabular-nums; }
+    #reading .track { display: inline-block; width: 8em; height: .5em; border: 1px solid currentColor; box-sizing: border-box; }
+    #reading .fill { display: block; height: 100%; width: 0; background: currentColor; transition: width .25s linear; }
+    @media (prefers-reduced-motion: reduce) { #reading .fill { transition: none; } }
+    @media (max-width: 640px) { #reading .track { width: 4em; } }
     @media (prefers-reduced-motion: reduce) { #status[data-state="ready"]::before { animation: none; } }
     /* The terminal is as wide as the screen: the guest is told its size, so what the app prints
        from here wraps to it, and full-screen apps redraw for it */
@@ -148,6 +153,7 @@
       {{- if .Agent}}
       <a id="agent-link" href="../agent/?runtime={{.Name}}">For agents</a><span class="sep" aria-hidden="true">·</span>
       {{- end}}
+      <span id="reading" role="progressbar" aria-label="Reading a large file" aria-valuemin="0" aria-valuemax="100" hidden><span class="track"><span class="fill"></span></span><span class="text"></span></span>
       <span id="status" role="status" data-state="loading">loading 0%</span>
     </span>
   </header>
@@ -269,12 +275,12 @@
       {{- end}}
       // The guest's connections to gpu.internal:7070 run WebGPU compute on this page's GPU
       // (armless-gpu.js); without WebGPU here they are refused and the guest uses its CPU
-      gpu: true,
+      gpu: {{if .GPUMemoryMB}}{ max_memory: {{.GPUMemoryMB}} * 1048576 }{{else}}true{{end}},
       {{- end}}
     } });
     // The terminal is set up (and the screen replayed) before the guest runs. A restored workspace
     // brings its state, and with no kernel its program's process; else the site's own
-    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null);
+    const booted = isolationNeeded ? null : host.boot(sessions.initialState ?? versioned("system/state.bin.zst"), "raw", sessions.processState ?? null, sessions.processSavedAt ?? null);
     const emulator = host.emulator;
     // For tests and benchmarks: the machine (console_input, the console event)
     window.snowglobe = { get emulator() { return host.emulator; }, memory: () => host.memoryReport() };
@@ -324,6 +330,22 @@
         run.progress = Math.round((e.loaded / e.total) * 100);
         setStatus("loading", `loading ${run.progress}%`);
       }
+    });
+    // A large file the guest reads (a model's weights, fetched as it reads them): how much is in,
+    // until all of it is, or it stops coming (the guest read only part of it)
+    const reading = document.getElementById("reading");
+    let readingGone = null;
+    const gb = (n) => (n / 1e9).toFixed(n < 10e9 ? 2 : 1);
+    host.on("files", ({ reading: r }) => {
+      if (!r || r.loaded >= r.total) { reading.hidden = true; return; }
+      const pct = Math.floor((r.loaded / r.total) * 100);
+      reading.querySelector(".fill").style.width = `${pct}%`;
+      reading.querySelector(".text").textContent = `reading ${gb(r.loaded)} / ${gb(r.total)} GB`;
+      reading.title = r.file;
+      reading.setAttribute("aria-valuenow", String(pct));
+      reading.hidden = false;
+      clearTimeout(readingGone);
+      readingGone = setTimeout(() => { reading.hidden = true; }, 15000);
     });
     host.on("error", (error) => {
       // A stale copy (an offline cache from an earlier build, served by an older service worker)
@@ -543,6 +565,8 @@
             <summary>Recovery</summary>
             <div class="workspace-actions"><button id="reset" type="button" title="Reload without deleting saved work">Reload without deleting saves…</button></div>
             <p class="note">Reload if the demo stops responding. Changes since the last save may be lost.</p>
+            <div class="workspace-actions"><button id="session-clear" class="danger" type="button">Delete everything this page stored…</button></div>
+            <p class="note">Deletes every saved workspace of this page, its settings and its offline copy from this browser, and starts over. Other pages' saves are kept.</p>
           </details>
           <p id="session-detail" class="note">No saved version yet.</p>
         </div>
