@@ -97,6 +97,27 @@ func TestResolveNetwork(t *testing.T) {
 	}
 }
 
+func TestResolveGPU(t *testing.T) {
+	s, _ := Resolve(Options{Network: "fetch"}, image(nil, "sh"))
+	if s.GPU {
+		t.Error("the GPU should be off by default")
+	}
+	s, err := Resolve(Options{}, image(map[string]string{"snowglobe.network": "fetch", "snowglobe.gpu": "on"}, "sh"))
+	if err != nil || !s.GPU {
+		t.Errorf("label: %v, %v", s.GPU, err)
+	}
+	s, _ = Resolve(Options{GPU: "off"}, image(map[string]string{"snowglobe.network": "fetch", "snowglobe.gpu": "on"}, "sh"))
+	if s.GPU {
+		t.Error("the flag overrides the label")
+	}
+	if _, err := Resolve(Options{GPU: "on"}, image(nil, "sh")); err == nil {
+		t.Error("a GPU without a network is an error (the guest reaches it as gpu.internal)")
+	}
+	if _, err := Resolve(Options{GPU: "yes", Network: "fetch"}, image(nil, "sh")); err == nil {
+		t.Error("gpu takes on or off")
+	}
+}
+
 func TestResolveTunnels(t *testing.T) {
 	labels := map[string]string{"snowglobe.network": "fetch", "snowglobe.tunnels": `["db:5432=wss://proxy/db"]`}
 	s, err := Resolve(Options{}, image(labels, "sh"))

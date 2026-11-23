@@ -1109,7 +1109,7 @@ fn serve(shared: &Arc<Shared>, host: &Arc<armless::native::NativeHost>, stream: 
             let answer = match crate::run::links(&request["links"]) {
                 Ok(l) => {
                     let n = l.len();
-                    host.set_links(l);
+                    host.set_links(crate::machine::with_gpu_link(l));
                     json!({ "links": n })
                 },
                 Err(e) => json!({ "error": e }),

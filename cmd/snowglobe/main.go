@@ -544,6 +544,7 @@ func runBuild(args []string) error {
 	fs.StringVar(&o.Warm, "warm", "", "")
 	fs.Func("exercise", "", func(v string) error { o.Exercise = append(o.Exercise, v); return nil })
 	fs.StringVar(&o.Network, "network", "", "")
+	fs.StringVar(&o.GPU, "gpu", "", "")
 	fs.Func("tunnel", "", func(v string) error { o.Tunnels = append(o.Tunnels, v); return nil })
 	fs.StringVar(&o.TunnelToken, "tunnel-token", "", "")
 	fs.BoolVar(&o.AllowPrivate, "allow-private", false, "")

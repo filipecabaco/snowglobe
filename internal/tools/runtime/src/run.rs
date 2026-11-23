@@ -333,7 +333,15 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // The snapshot's RAM, shared with every other machine restored from it: opened (made, the
     // first time) before the sandbox, which then needn't reach the cache's images
     let image = image::open(&site, spec.memory_mb << 20);
-    let sandboxed = sandbox::apply(&policy(args, &site, &controls, log_dir.as_deref(), &socket, spec.network == "fetch"))?;
+    // A site built with --gpu: its GPU found now, while the driver's files can be read, and what
+    // the driver opens later let through
+    let mut policy = policy(args, &site, &controls, log_dir.as_deref(), &socket, spec.network == "fetch");
+    if machine::site_gpu(&site) && machine::open_gpu() {
+        let (read, write) = machine::gpu_paths();
+        policy.read.extend(read);
+        policy.write.extend(write);
+    }
+    let sandboxed = sandbox::apply(&policy)?;
     // Tied to what started it, if that asked: watched once confined, from a thread of its own
     if let Some(line) = crate::lifeline::inherited() {
         crate::lifeline::watch(line, || crate::lifeline::stop("what started this run"));
@@ -757,7 +765,7 @@ fn serve(session: &Session, stream: UnixStream) {
             let answer = match links(&request["links"]) {
                 Ok(l) => {
                     let n = l.len();
-                    session.host.set_links(l);
+                    session.host.set_links(machine::with_gpu_link(l));
                     json!({ "links": n })
                 },
                 Err(e) => json!({ "error": e }),

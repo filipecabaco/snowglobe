@@ -46,6 +46,10 @@ type Options struct {
 	Warm     string
 	Exercise []string
 	Network  string
+	// GPU is "on" or "off": whether the guest may run WebGPU compute on the host's GPU (armless-gpu:
+	// its connections to gpu.internal:7070 are answered with the page's WebGPU, or natively with
+	// wgpu). Needs Network fetch. Empty: the label snowglobe.gpu, else off
+	GPU string
 	// Tunnels are guest TCP destinations carried over WebSockets, "[HOST:]PORT=URL"
 	Tunnels []string
 	// TunnelToken answers a GET with an access token for tunnel URLs with {token} in them
@@ -107,6 +111,7 @@ type Settings struct {
 	Warm        *regexp.Regexp
 	Exercise    []string
 	Network     string
+	GPU         bool
 	Tunnels     []tunnel.Tunnel
 	TunnelToken string
 	CPUs        int
@@ -286,8 +291,18 @@ func Run(o Options, version string) error {
 		if err := copySite(); err != nil {
 			return err
 		}
+		if err := tools.OverrideArmless(out); err != nil {
+			return err
+		}
 		if err := pruneRuntime(out, s.CPUs); err != nil {
 			return err
+		}
+		if s.GPU {
+			if _, err := os.Stat(filepath.Join(out, "armless", "armless-gpu.js")); err != nil {
+				return fmt.Errorf("gpu: this armless release has no armless-gpu.js (set %s to a newer armless's page files)", tools.ArmlessWebEnv)
+			}
+		} else {
+			os.Remove(filepath.Join(out, "armless", "armless-gpu.js"))
 		}
 		if ca != nil {
 			if err := ca.WritePage(filepath.Join(out, "system", "tls.json")); err != nil {
@@ -372,7 +387,7 @@ func packsBoot(o Options, s *Settings) bool {
 
 // Page is the page a build with these settings renders.
 func Page(s *Settings, version string) site.Page {
-	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, CPUs: s.CPUs, JIT: s.JIT, User: s.Kernel == "none", FreePageReporting: s.Kernel != "none",
+	return site.Page{Title: s.Title, MemoryMB: s.Memory, Network: s.Network, GPU: s.GPU, CPUs: s.CPUs, JIT: s.JIT, User: s.Kernel == "none", FreePageReporting: s.Kernel != "none",
 		Tunnels: s.Tunnels, TunnelToken: s.TunnelToken, ConsoleCols: tools.ConsoleCols, ConsoleRows: tools.ConsoleRows,
 		Agent: s.Agent, AgentExposedTo: s.AgentExposedTo, Version: version}
 }
@@ -389,6 +404,7 @@ type RunInfo struct {
 	JIT           bool            `json:"jit"`              // runs compile hot guest code; false: the interpreter
 	Kernel        string          `json:"kernel,omitempty"` // "none": the command runs with no kernel
 	Network       string          `json:"network"`
+	GPU           bool            `json:"gpu,omitempty"`                 // the guest may use the host's GPU (armless-gpu)
 	FreePages     bool            `json:"free_page_reporting,omitempty"` // the snapshot leaves out freed memory: restores need its device
 	Tunnels       []tunnel.Tunnel `json:"tunnels,omitempty"`
 	TunnelToken   string          `json:"tunnel_token,omitempty"`
@@ -437,7 +453,7 @@ func writeRunInfo(out string, o Options, s *Settings, fs *rootfs.Result, packFil
 
 	info := RunInfo{
 		Title: s.Title, Source: first(o.SourceName, o.Source), Command: s.Command, Ready: s.Ready, Exercise: s.Exercise,
-		MemoryMB: s.Memory, Network: s.Network,
+		MemoryMB: s.Memory, Network: s.Network, GPU: s.GPU,
 		JIT:    s.JIT,
 		Kernel: map[bool]string{true: "none"}[s.Kernel == "none"],
 		// The snapshot was saved with the device (tools.SnapshotArgs): every restore needs it too
@@ -576,6 +592,18 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	s.Network = first(o.Network, label("network"), "none")
 	if s.Network != "none" && s.Network != "fetch" {
 		return nil, fmt.Errorf("network %q: use none or fetch", s.Network)
+	}
+
+	// The host's GPU for WebGPU compute (armless-gpu): reached as a guest connection, so only
+	// with a network
+	switch gpu := first(o.GPU, label("gpu"), "off"); gpu {
+	case "on", "off":
+		s.GPU = gpu == "on"
+	default:
+		return nil, fmt.Errorf("gpu %q: use on or off", gpu)
+	}
+	if s.GPU && s.Network != "fetch" {
+		return nil, errors.New("gpu needs a guest with a network (the GPU is reached as gpu.internal:7070): build with --network fetch")
 	}
 
 	// Raw TCP the browser can't make, carried over WebSockets: only with a network

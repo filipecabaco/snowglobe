@@ -479,9 +479,97 @@ pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, a
         Box::new(move |e| a.observe(e)),
     );
     // A daemon's links: opened by the daemon over its channel, as a confined machine connects
-    // to no Unix socket itself
-    host.set_link_dialer(crate::linker::dialer());
+    // to no Unix socket itself. The GPU's (a site built with --gpu) is answered here
+    let gpu = site_gpu(site);
+    GPU_ON.store(gpu, std::sync::atomic::Ordering::SeqCst);
+    let daemon = crate::linker::dialer();
+    host.set_link_dialer(Arc::new(move |t: &armless::native::Tunnel| {
+        if gpu && is_gpu_link(t) {
+            return Some(gpu::connect());
+        }
+        daemon(t)
+    }));
+    if gpu {
+        host.set_links(vec![gpu_link()]);
+    }
     host
+}
+
+/// Whether this run's site was built with --gpu (run.json's `gpu`), as `host` found.
+static GPU_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn site_gpu(site: &Site) -> bool {
+    site.file("run.json")
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b[..]).ok())
+        .is_some_and(|v| v["gpu"].as_bool() == Some(true))
+}
+
+/// The guest's way to the host's GPU: gpu.internal:7070, a link the dialer answers in-process
+/// (the unix:// address is a placeholder; nothing is connected to).
+fn gpu_link() -> armless::native::Tunnel {
+    armless::native::Tunnel { host: Some("gpu.internal".into()), port: 7070, url: "unix:///snowglobe-gpu".into() }
+}
+
+fn is_gpu_link(t: &armless::native::Tunnel) -> bool {
+    t.port == 7070 && t.host.as_deref() == Some("gpu.internal")
+}
+
+/// For a site built with --gpu: finds the host's GPU (before the sandbox), and says what the
+/// sandbox must still let the driver reach (`gpu_paths`). Whether there is a GPU.
+pub fn open_gpu() -> bool {
+    gpu::open()
+}
+
+/// What a GPU driver reads and opens after the device is found: the loader's and drivers'
+/// configuration and libraries, the devices' descriptions in /sys, and the device nodes (opened
+/// read-write). Read paths, then written ones; those not on this system are left out.
+pub fn gpu_paths() -> (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
+    let read = ["/usr/share/vulkan", "/etc/vulkan", "/usr/local/share/vulkan", "/usr/share/glvnd", "/usr/share/drirc.d",
+        "/etc/drirc", "/usr/lib", "/usr/lib64", "/lib", "/lib64", "/sys/devices", "/sys/bus/pci", "/sys/class/drm",
+        "/proc/self"];
+    let write = ["/dev/dri", "/dev/nvidiactl", "/dev/nvidia0", "/dev/nvidia-uvm", "/dev/nvidia-modeset"];
+    let keep = |l: &[&str]| l.iter().map(std::path::PathBuf::from).filter(|p| p.exists()).collect::<Vec<_>>();
+    (keep(&read), keep(&write))
+}
+
+/// A daemon's links, and the GPU's when the site has one: what `set_links` is given.
+pub fn with_gpu_link(mut links: Vec<armless::native::Tunnel>) -> Vec<armless::native::Tunnel> {
+    if GPU_ON.load(std::sync::atomic::Ordering::SeqCst) && !links.iter().any(is_gpu_link) {
+        links.push(gpu_link());
+    }
+    links
+}
+
+#[cfg(feature = "gpu")]
+mod gpu {
+    use std::sync::{Arc, OnceLock};
+
+    /// The host's GPU, found at the guest's first connection (None: wgpu found no adapter).
+    static GPU: OnceLock<Option<Arc<armless_gpu::server::Gpu>>> = OnceLock::new();
+
+    /// Finds the GPU now: before the sandbox, while the driver's files can still be read. Whether
+    /// there is one.
+    pub fn open() -> bool {
+        GPU.get_or_init(|| armless_gpu::server::Gpu::new().map(Arc::new)).is_some()
+    }
+
+    pub fn connect() -> std::io::Result<std::net::TcpStream> {
+        match GPU.get_or_init(|| armless_gpu::server::Gpu::new().map(Arc::new)) {
+            Some(g) => armless_gpu::server::connect(g.clone()),
+            None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no GPU adapter on this host")),
+        }
+    }
+}
+
+#[cfg(not(feature = "gpu"))]
+mod gpu {
+    pub fn open() -> bool {
+        false
+    }
+
+    pub fn connect() -> std::io::Result<std::net::TcpStream> {
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "this snowglobe-vm was built without the gpu feature"))
+    }
 }
 
 /// Whether the guest's CPUs are working: a command that computes without printing is not done

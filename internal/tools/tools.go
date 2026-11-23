@@ -154,6 +154,39 @@ func FetchSite(out string) error {
 			return fmt.Errorf("%s: %w", archive, err)
 		}
 	}
+	// armless-gpu.js (WebGPU compute for guests) where the release has it
+	if local, ok := sources["armless-web.tar.gz"]; ok {
+		_ = extractMembers(local, map[string]string{"armless-web/armless-gpu.js": "armless/armless-gpu.js"}, out)
+	}
+	return nil
+}
+
+// ArmlessWebEnv names a directory of armless's page files (armless.js, armless.wasm,
+// armless-smp.wasm, armless-gpu.js: an armless checkout's js/ and build/ copied together, or an
+// unpacked armless-web.tar.gz) a build uses instead of the pinned release's: for trying an armless
+// that isn't released yet.
+const ArmlessWebEnv = "SNOWGLOBE_ARMLESS_WEB"
+
+// OverrideArmless copies the files $SNOWGLOBE_ARMLESS_WEB has over the site's armless/.
+func OverrideArmless(out string) error {
+	dir := os.Getenv(ArmlessWebEnv)
+	if dir == "" {
+		return nil
+	}
+	n := 0
+	for _, name := range []string{"armless.js", "armless.wasm", "armless-smp.wasm", "armless-gpu.js"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(out, "armless", name), data, 0o644); err != nil {
+			return err
+		}
+		n++
+	}
+	if n == 0 {
+		return fmt.Errorf("%s=%s: none of armless's page files are there", ArmlessWebEnv, dir)
+	}
 	return nil
 }
 

@@ -33,6 +33,7 @@ RUN mkdir -p site/armless site/xterm /tmp/x && \
     tar -xzf /tmp/armless-web.tar.gz -C /tmp/x && \
     cp /tmp/x/armless-web/armless.js /tmp/x/armless-web/armless.wasm /tmp/x/armless-web/armless-smp.wasm \
        /tmp/x/armless-web/LICENSE site/armless/ && \
+    { cp /tmp/x/armless-web/armless-gpu.js site/armless/ 2>/dev/null || true; } && \
     tar -xzf /tmp/xterm.tgz -C /tmp/x && cp /tmp/x/package/lib/xterm.js /tmp/x/package/css/xterm.css site/xterm/ && \
     rm -rf /tmp/x/package && \
     tar -xzf /tmp/addon-fit.tgz -C /tmp/x && cp /tmp/x/package/lib/addon-fit.js site/xterm/ && \

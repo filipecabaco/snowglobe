@@ -681,6 +681,10 @@
         vm = new this.Armless({ fs_cache_mb: FS_CACHE_MB, predecode_mb: PREDECODE_MB, ...this.config, filesystem, network, warm: undefined, initial_state: url,
           user_state: userState ?? undefined, ...(userState ? { user_asleep_ms: userAsleepMs } : {}), autostart: false });
         this.vm = vm;
+        // WebGPU compute for the guest (armless-gpu.js): its connections to gpu.internal:7070
+        if (this.config.gpu && root.ArmlessGPU) {
+          root.ArmlessGPU.attach(vm);
+        }
         vm.on("progress", (e) => this.emit("progress", { file: e.file, loaded: e.loaded, total: e.total }));
         vm.on("console", (bytes) => { if (vm === this.vm) this.emit("console", bytes); });
         // With no kernel, the program's end: { reason: "exit", code } or { reason: "fault", message }
