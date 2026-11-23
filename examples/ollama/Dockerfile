@@ -82,8 +82,10 @@ ENV ENV=/etc/profile.d/ollama.sh OLLAMA_LLM_LIBRARY=webgpu OLLAMA_HOST=127.0.0.1
 # proxy resolves names, so Ollama's checks on what a registry's redirect resolves to (the
 # machine's addresses for names are private ones) stay on and pass, with no --insecure
 ENV HTTPS_PROXY=http://proxy.internal:3128 https_proxy=http://proxy.internal:3128 NO_PROXY=localhost,127.0.0.1,gpu.internal no_proxy=localhost,127.0.0.1,gpu.internal
-# A shell; the snapshot is taken at its prompt, before Ollama has started
-CMD ["/bin/sh", "-c", "PS1='$ ' exec /bin/sh -i"]
+# How to pull models with Ollama as it is (motd: no "$ " in it, which the snapshot waits for), then
+# a shell; the snapshot is taken at its prompt, before Ollama has started
+COPY motd /etc/motd
+CMD ["/bin/sh", "-c", "cat /etc/motd; PS1='$ ' exec /bin/sh -i"]
 
 ARG MEMORY
 ARG GPU_MEMORY
