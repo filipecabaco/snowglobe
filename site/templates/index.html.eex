@@ -85,7 +85,8 @@
     .btn.go[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); }
 
     /* The panel: a recorded transcript, or the live machine in the same footprint */
-    .panel { position: relative; height: 460px; border-radius: 6px; background: var(--panel); overflow: hidden; box-shadow: inset 0 0 0 1px var(--panel-edge); }
+    /* As tall as the window allows beside the list of runs (taller than the screen would hide the specs) */
+    .panel { position: relative; height: clamp(460px, 75vh, 860px); border-radius: 6px; background: var(--panel); overflow: hidden; box-shadow: inset 0 0 0 1px var(--panel-edge); }
     .panel .transcript { position: absolute; inset: 0; padding: 40px 20px 18px; overflow: auto hidden; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #3a3a38 transparent; }
     .panel .transcript::after { content: ""; position: absolute; inset: auto 0 0 0; height: 72px; background: linear-gradient(to bottom, transparent, var(--panel)); pointer-events: none; }
     .panel .label { position: absolute; z-index: 2; top: 12px; right: 14px; font: 400 12px/1 var(--mono); color: #8d8d88; letter-spacing: .02em; }
