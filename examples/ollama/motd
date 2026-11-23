@@ -1,0 +1,16 @@
+Ollama, the official release, unchanged: its models run on your GPU through WebGPU.
+
+Pull a GGUF model from Hugging Face as Ollama does, by hf.co/OWNER/REPO, with :QUANT to
+pick a file (Q4_K_M unless said), then run it:
+
+  ollama pull hf.co/bartowski/SmolLM2-135M-Instruct-GGUF        105 MB, quick to try
+  ollama run hf.co/bartowski/SmolLM2-135M-Instruct-GGUF
+  ollama pull hf.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF       1.1 GB, writes code
+  ollama pull hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M                2.5 GB
+
+More GGUF models: https://huggingface.co/models?library=gguf&sort=downloads
+Small ones load fastest: the file comes into this tab at a few MB/s, and lives in it.
+Ollama's own library names (qwen3:0.6b) can't be pulled here: its registry doesn't let
+browsers in. ollama list shows what you have, ollama rm deletes one.
+Ollama's log, with the GPU it found: /tmp/ollama.log
+
