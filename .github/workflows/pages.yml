@@ -308,6 +308,10 @@ jobs:
             conduit)    commands=$'for i in $(seq 30); do curl -fsS -o /dev/null -m 10 http://127.0.0.1:4173/supabase/auth/v1/health && break; sleep 2; done\ncurl -fsS -m 30 http://127.0.0.1:4173/ -o /tmp/conduit-page && grep -q \'<div id="root">\' /tmp/conduit-page && echo "conduit-web-$((6 * 7))"\ncurl -fsS -m 30 -H "apikey: $ANON_KEY" \'http://127.0.0.1:4173/supabase/rest/v1/articles?select=slug\' -o /tmp/conduit-articles && jq -e \'type == "array"\' /tmp/conduit-articles >/dev/null && echo "conduit-api-$((6 * 7))"\nu=check-$(date +%s); curl -fsS -m 30 -H "apikey: $ANON_KEY" -H \'Content-Type: application/json\' -d "{\\"email\\":\\"$u@example.com\\",\\"password\\":\\"check-password-2026\\",\\"data\\":{\\"username\\":\\"$u\\"}}" \'http://127.0.0.1:4173/supabase/auth/v1/signup\' -o /tmp/conduit-signup && jq -e \'.access_token | length > 0\' /tmp/conduit-signup >/dev/null && echo "conduit-signup-$((6 * 7))"'
                         expect=$'conduit-web-42\nconduit-api-42\nconduit-signup-42' ;;
             go)         commands= ;;
+            # The official Ollama binary, and the WebGPU backend it finds its GPU with. /usr/bin/ollama, not
+            # the shell's ollama function: that starts the server, which looks for a GPU the runner hasn't got
+            ollama)     commands=$'/usr/bin/ollama --version 2>&1 | grep -o "client version is [0-9.]*"\nls /usr/lib/ollama/webgpu/'
+                        expect=$'client version is 0.40.17\nlibggml-webgpu.so' ;;
             *)          echo "::error title=$SITE::no check for $SITE"; exit 1 ;;
           esac
           if [ -z "$commands" ]; then

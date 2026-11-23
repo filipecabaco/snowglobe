@@ -10,7 +10,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="snowglobe">
   <meta property="og:title" content="snowglobe: real programs, sandboxed in your browser">
-  <meta property="og:description" content="Run a Docker image in a browser tab, with no Docker and no server. Eleven live runs, from the Supabase stack to curl + jq.">
+  <meta property="og:description" content="Run a Docker image in a browser tab, with no Docker and no server. Twelve live runs, from the Supabase stack to Ollama on your GPU.">
   <meta property="og:url" content="<%= @site %>/">
   <meta property="og:image" content="<%= @site %>/og.png">
   <meta property="og:image:width" content="1200">
@@ -18,10 +18,10 @@
   <meta property="og:image:alt" content="snowglobe: real programs, sandboxed in your browser, with a terminal showing Postgres, curl and jq output recorded at build">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="snowglobe: real programs, sandboxed in your browser">
-  <meta name="twitter:description" content="Run a Docker image in a browser tab, with no Docker and no server. Eleven live runs.">
+  <meta name="twitter:description" content="Run a Docker image in a browser tab, with no Docker and no server. Twelve live runs.">
   <meta name="twitter:image" content="<%= @site %>/og.png">
   <meta name="twitter:image:alt" content="snowglobe: real programs, sandboxed in your browser">
-  <meta name="description" content="Eleven real programs running on Linux in your browser, each packaged from a Dockerfile. No Docker to install, no server.">
+  <meta name="description" content="Twelve real programs running on Linux in your browser, each packaged from a Dockerfile. No Docker to install, no server.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d0d0d'/%3E%3Ccircle cx='8' cy='8' r='3.2' fill='%23d6300c'/%3E%3C/svg%3E">
   <link rel="preload" href="fonts/Switzer-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="xterm/xterm.css">
@@ -443,6 +443,8 @@ $ snowglobe apply</pre>
       { dir: "duckdb", tag: "Analytical SQL over CSV, Parquet and JSON", name: "DuckDB", stack: "The DuckDB CLI in the tab: analytical SQL, with CSV, JSON and Parquet files written and read back, offline.", show: [0, 1, 2, 3] },
       { dir: "web", tag: "React 19 with Vite, on Node 24", name: "React + Vite", stack: "Node 24 from Alpine's packages and a React app with Vite and supabase-js installed: built offline in the tab, served on the machine's network address, and rebuilt on every change.", show: [0, 1, 2], command: "sh, in the React app at /root/app, served on port 4173" },
       { dir: "curl", tag: "A shell online through your browser", name: "curl + jq", stack: "Plain Alpine packages in a shell, online through your browser: curl against live APIs, piped into jq.", show: [0, 1, 2, 3], command: "sh, with curl and jq from Alpine's packages" },
+      // No X card: the post's player is a cross-origin frame, where WebGPU isn't on by default
+      { dir: "ollama", tag: "Ollama itself, on your GPU", name: "Ollama + WebGPU", stack: "The official Ollama release, unchanged, with llama.cpp's WebGPU backend added: models run on your GPU. Pull one from Hugging Face (ollama pull hf.co/bartowski/SmolLM2-135M-Instruct-GGUF) and chat with it. Without WebGPU it runs on the emulated CPU.", show: "screen", command: "sh, with ollama on the PATH", card: false },
     ];
 
     // The directory of the site a demo runs: `site` when it isn't the demo's own (the 1-CPU build of

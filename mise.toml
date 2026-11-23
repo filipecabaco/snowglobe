@@ -7,15 +7,16 @@ go = "1.27.1"
 # its X card plays; supabase and conduit, on two, are the agent page's
 # <example>-nokernel: examples/<example> built with --kernel none (its program with no guest kernel)
 # python-agent is the agent page's python (a network for pip install); the index page doesn't list it
-DEMOS = "conduit conduit-1cpu supabase supabase-1cpu iex postgres elixir python python-agent typescript go rust java curl duckdb web bun"
+DEMOS = "conduit conduit-1cpu supabase supabase-1cpu iex postgres elixir python python-agent typescript go rust java curl duckdb web bun ollama"
 # A demo runs its program with no guest kernel (--kernel none: a smaller snapshot, a faster start,
 # and natively on as many CPUs as it was built on) unless it is here. These keep one: the agent
 # page's (supabase and conduit on two CPUs, python-agent; the page has no machine without a kernel
 # yet), conduit-1cpu (its image's Supabase CLI predates what runs with no kernel) and web (its dev
 # server watches files with inotify, which armless's user mode doesn't have) and java (in the page,
 # on one CPU with no kernel, jshell's Gson commands don't finish: to be found in armless's user mode)
-# and bun (the agent and fleet pages run shell commands in it)
-KERNEL = "conduit conduit-1cpu supabase python-agent web java bun"
+# and bun (the agent and fleet pages run shell commands in it) and ollama (its server's subprocesses,
+# glibc, the GPU link and the proxy are tried with Linux only)
+KERNEL = "conduit conduit-1cpu supabase python-agent web java bun ollama"
 # Examples built and checked in CI but not on the site (too big, or need the host's network, or
 # being tried: bun-nokernel, to see Bun run in armless's user mode)
 EXAMPLES = "apk bun-nokernel"
