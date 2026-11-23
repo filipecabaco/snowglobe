@@ -8,12 +8,12 @@
 ARG MODEL=smollm2:135m
 
 # llama.cpp, from llama-cpp-python's source package (pinned and checked), cross-compiled with Zig
-# against armless's guest WebGPU header. Until armless releases it, from armless's branch.
+# against armless's guest WebGPU header (gpu/guest, from the armless release).
 FROM --platform=$BUILDPLATFORM python:3.13-alpine AS llama
 RUN apk add --no-cache git cmake ninja llvm && pip install --no-cache-dir ziglang==0.17.1
 ADD --checksum=sha256:bf4108fc76e933ea4969b61b1e281a2d232dd3e43361d1fdca5e2e029d62f729 \
     https://files.pythonhosted.org/packages/7f/9a/3ebc0b3ef42b8d9cc7d15dc9b147b3e8ce11bfdb61eb381c3eb7d9762373/llama_cpp_python-0.3.37.tar.gz /tmp/llama.tar.gz
-ARG ARMLESS_REF=feat/webgpu-passthrough
+ARG ARMLESS_REF=armless-v0.26.0
 RUN git clone --depth 1 --branch "$ARMLESS_REF" https://github.com/filipecabaco/armless /src/armless && \
     mkdir -p /src/llama && tar -xzf /tmp/llama.tar.gz -C /src/llama --strip-components=3 llama_cpp_python-0.3.37/vendor/llama.cpp && \
     /src/armless/gpu/guest/build-llama.sh /src/llama /out llama-server

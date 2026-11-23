@@ -59,7 +59,7 @@
                 <tr><td>--exercise CMD</td><td>snowglobe.exercise</td><td class="wrap-cell">a command whose reads are preloaded; repeatable (label: a JSON array)</td></tr>
                 <tr><td>--warm REGEX</td><td>snowglobe.warm</td><td class="wrap-cell">extra guest paths to preload</td></tr>
                 <tr><td>--network fetch</td><td>snowglobe.network</td><td class="wrap-cell">give the guest a network through the browser (default <code>none</code>)</td></tr>
-                <tr><td>--gpu on</td><td>snowglobe.gpu</td><td class="wrap-cell">let the guest run WebGPU compute on the visitor's GPU, or natively the host's (default <code>off</code>): its connections to <code>gpu.internal:7070</code> are answered with WebGPU. Without <code>--network fetch</code> the guest reaches the GPU and nothing else. A browser without WebGPU refuses them and the guest uses its CPU. Each guest has a GPU memory budget (2 GiB in a page, 4 GiB natively, <code>ARMLESS_GPU_MEMORY_MB</code>). Experimental: needs an armless release with <code>armless-gpu.js</code></td></tr>
+                <tr><td>--gpu on</td><td>snowglobe.gpu</td><td class="wrap-cell">let the guest run WebGPU compute on the visitor's GPU, or natively the host's (default <code>off</code>): its connections to <code>gpu.internal:7070</code> are answered with WebGPU. Without <code>--network fetch</code> the guest reaches the GPU and nothing else. A browser without WebGPU refuses them and the guest uses its CPU. Each guest has a GPU memory budget (2 GiB in a page, 4 GiB natively, <code>ARMLESS_GPU_MEMORY_MB</code>). Experimental.</td></tr>
                 <tr><td>--tunnel [HOST:]PORT=URL</td><td>snowglobe.tunnels</td><td class="wrap-cell">carry TCP to HOST:PORT over a WebSocket; repeatable</td></tr>
                 <tr><td>--tunnel-token URL</td><td>snowglobe.tunnel-token</td><td class="wrap-cell">where a fresh token comes from, for <code>{token}</code> in tunnel URLs</td></tr>
                 <tr><td>--allow-private</td><td></td><td class="wrap-cell">let the build reach loopback and private addresses</td></tr>
@@ -99,7 +99,7 @@
                 <tr><td>SNOWGLOBE_BUILDER</td><td class="wrap-cell">default for <code>--builder</code></td></tr>
                 <tr><td>SNOWGLOBE_RUNTIME</td><td class="wrap-cell">default for <code>--runtime</code></td></tr>
                 <tr><td>SNOWGLOBE_VM</td><td class="wrap-cell">the <code>snowglobe-vm</code> to use instead of the release's</td></tr>
-                <tr><td>SNOWGLOBE_ARMLESS_WEB</td><td class="wrap-cell">a directory of armless's page files (<code>armless.js</code>, <code>armless.wasm</code>, <code>armless-smp.wasm</code>, <code>armless-gpu.js</code>) a build uses instead of the pinned release's</td></tr>
+                <tr><td>SNOWGLOBE_ARMLESS_WEB</td><td class="wrap-cell">a directory of armless's page files (<code>armless.js</code>, <code>armless.wasm</code>, <code>armless-smp.wasm</code>, <code>armless-gpu.js</code>) a build uses instead of the pinned release's: for trying an armless that isn't released</td></tr>
                 <tr><td>SNOWGLOBE_BOOT</td><td class="wrap-cell">a kernel archive to use instead of the release's</td></tr>
                 <tr><td>SNOWGLOBE_TOOLS_BUILD=1</td><td class="wrap-cell">always compile the tools image locally</td></tr>
                 <tr><td>SNOWGLOBE_SANDBOX</td><td class="wrap-cell"><code>strict</code> refuses to run without the whole native sandbox; <code>off</code> skips it</td></tr>
