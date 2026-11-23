@@ -541,6 +541,15 @@ pub fn gpu_paths() -> (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
     (keep(&read), keep(&write))
 }
 
+/// For a site built with --gpu: lets `policy` reach what the GPU's driver opens (`gpu_paths`).
+pub fn allow_gpu(policy: &mut crate::sandbox::Policy, site: &Site) {
+    if site_gpu(site) {
+        let (read, write) = gpu_paths();
+        policy.read.extend(read);
+        policy.write.extend(write);
+    }
+}
+
 /// A daemon's links, and the GPU's when the site has one: what `set_links` is given.
 pub fn with_gpu_link(mut links: Vec<armless::native::Tunnel>) -> Vec<armless::native::Tunnel> {
     if GPU_ON.load(std::sync::atomic::Ordering::SeqCst) && !links.iter().any(is_gpu_link) {

@@ -67,6 +67,10 @@ pub fn main(args: &Args, site: Site, socket: &str) -> Result<u8, String> {
     let log_dir = args.get("log-dir").map(std::path::absolute).transpose().map_err(|e| format!("--log-dir: {e}"))?;
     let mut policy = policy(&site, &root, socket, spec.network == "fetch");
     policy.write.extend(log_dir.clone());
+    // A site built with --gpu: each forked machine finds the GPU itself on its guest's first
+    // connection (a driver's state doesn't survive a fork, so not here), through what its sandbox
+    // lets the driver reach
+    machine::allow_gpu(&mut policy, &site);
     let sandboxed = sandbox::apply_stage(&policy, sandbox::Stage::Parent)?;
     // The logs, kept by this process and each job it forks (their events say which: `pid`, `job`)
     if let Some(dir) = &log_dir {
@@ -740,7 +744,9 @@ fn job_policy(_server: &sandbox::Policy, site: &Site, root: &Path, workspace: Op
         read.push(ws.to_path_buf());
         write.push(ws.to_path_buf());
     }
-    sandbox::Policy { read, write, socket_dir: None, bind: Vec::new(), network, hidden: vec![root.to_path_buf()] }
+    let mut p = sandbox::Policy { read, write, socket_dir: None, bind: Vec::new(), network, hidden: vec![root.to_path_buf()] };
+    machine::allow_gpu(&mut p, site);
+    p
 }
 
 /// The job is cancelled (`job::stop_all`: killed, and answered as stopped) when its client goes:

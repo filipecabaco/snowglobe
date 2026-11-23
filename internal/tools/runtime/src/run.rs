@@ -342,9 +342,7 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // the driver opens later let through
     let mut policy = policy(args, &site, &controls, log_dir.as_deref(), &socket, spec.network == "fetch");
     if machine::site_gpu(&site) && machine::open_gpu() {
-        let (read, write) = machine::gpu_paths();
-        policy.read.extend(read);
-        policy.write.extend(write);
+        machine::allow_gpu(&mut policy, &site);
     }
     let sandboxed = sandbox::apply(&policy)?;
     // Tied to what started it, if that asked: watched once confined, from a thread of its own
