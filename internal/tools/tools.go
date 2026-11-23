@@ -304,10 +304,17 @@ type UserProgram struct {
 // needs; off, a fork-heavy job runs ~5% faster).
 func SnapshotArgs(system string, memoryMB int, ready string, exercises []string, network string,
 	tunnels []tunnel.Tunnel, allowPrivate bool, cpus, buildCPUs int, sandbox, memoryCgroup bool, user *UserProgram) []string {
+	// "gpu": a network device for the GPU's link and nothing else (a site built with --gpu and no
+	// network): the device is there, its egress denied
+	egress := []string{}
+	if network == "gpu" {
+		network, egress = "fetch", []string{"--egress", "none"}
+	}
 	args := []string{"snapshot", system,
 		"--memory", fmt.Sprint(memoryMB), "--network", network,
 		"--cpus", fmt.Sprint(cpus), "--build-cpus", fmt.Sprint(buildCPUs),
 		"--cols", fmt.Sprint(ConsoleCols), "--rows", fmt.Sprint(ConsoleRows)}
+	args = append(args, egress...)
 	if ready != "" {
 		args = append(args, "--ready", ready)
 	}

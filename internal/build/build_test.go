@@ -110,8 +110,9 @@ func TestResolveGPU(t *testing.T) {
 	if s.GPU {
 		t.Error("the flag overrides the label")
 	}
-	if _, err := Resolve(Options{GPU: "on"}, image(nil, "sh")); err == nil {
-		t.Error("a GPU without a network is an error (the guest reaches it as gpu.internal)")
+	s, err = Resolve(Options{GPU: "on"}, image(nil, "sh"))
+	if err != nil || !s.GPU || s.Network != "none" || bootNetwork(s) != "gpu" {
+		t.Errorf("a GPU without a network boots with a device for the GPU alone: %v %q %q, %v", s.GPU, s.Network, bootNetwork(s), err)
 	}
 	if _, err := Resolve(Options{GPU: "yes", Network: "fetch"}, image(nil, "sh")); err == nil {
 		t.Error("gpu takes on or off")

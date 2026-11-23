@@ -263,6 +263,10 @@
       network: { tls: versioned("system/tls.json"){{if .Tunnels}}, tunnels: {{if .TunnelToken}}withTokens({{.Tunnels}}){{else}}{{.Tunnels}}{{end}}{{end}} },
       {{- end}}
       {{- if .GPU}}
+      {{- if ne .Network "fetch"}}
+      // A network device for the GPU's connection alone: nothing the guest asks for goes out
+      network: { allow: () => false },
+      {{- end}}
       // The guest's connections to gpu.internal:7070 run WebGPU compute on this page's GPU
       // (armless-gpu.js); without WebGPU here they are refused and the guest uses its CPU
       gpu: true,

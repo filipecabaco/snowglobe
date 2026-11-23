@@ -37,10 +37,9 @@ ENV MODEL=$MODEL LANG=C.UTF-8 TERM=xterm-256color OLLAMA_HOST=0.0.0.0:11434
 # the GPU connected) with the first message, after the page has restored the machine
 CMD ["/bin/sh", "-c", "exec ollama-compat run \"$MODEL\""]
 
-# The network is on because the GPU is reached through it (gpu.internal:7070, answered in the page).
-# The model's file comes from the site as the guest reads it, the first time it loads.
+# The GPU and no network: the guest reaches gpu.internal:7070 (answered in the page) and nothing
+# else. The model's file comes from the site as the guest reads it, the first time it loads.
 LABEL snowglobe.title="An Ollama model on your GPU" \
       snowglobe.ready=">>> " \
-      snowglobe.network="fetch" \
       snowglobe.gpu="on" \
       snowglobe.memory="1536"

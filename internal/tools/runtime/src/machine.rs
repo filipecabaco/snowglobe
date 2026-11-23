@@ -462,6 +462,8 @@ impl Net {
 /// The host side of the machine: the site's blobs, the network if the site has one.
 pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, activity: &Arc<Activity>) -> NativeHost {
     *activity.tunnels.lock().unwrap() = net.tunnels.clone();
+    // A site with the GPU and no network: its device is for the GPU's link alone
+    let net = if gpu_only(site) { net.with_egress(Egress_::None) } else { net };
     let e = if network == "fetch" { net.egress() } else { Egress_::None };
     EGRESS.store(e as u8, std::sync::atomic::Ordering::SeqCst);
     let a = activity.clone();
@@ -497,6 +499,13 @@ pub fn host(board: &Arc<armless::Board>, site: &Site, network: &str, net: Net, a
 
 /// Whether this run's site was built with --gpu (run.json's `gpu`), as `host` found.
 static GPU_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A site built with --gpu and no network (run.json `"network": "none", "gpu": true`).
+fn gpu_only(site: &Site) -> bool {
+    site.file("run.json")
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b[..]).ok())
+        .is_some_and(|v| v["gpu"].as_bool() == Some(true) && v["network"].as_str().unwrap_or("none") == "none")
+}
 
 pub fn site_gpu(site: &Site) -> bool {
     site.file("run.json")

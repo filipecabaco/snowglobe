@@ -279,7 +279,12 @@ pub fn site_spec(site: &Site) -> Result<(serde_json::Value, Spec, String), Strin
     let spec = Spec {
         memory_mb: info["memory_mb"].as_u64().unwrap_or(512) as usize,
         cpus: info["cpus"].as_u64().unwrap_or(1) as usize,
-        network: info["network"].as_str().unwrap_or("none").to_string(),
+        // A site with the GPU and no network has a network device for the GPU's link alone (its
+        // egress denied in `machine::host`)
+        network: match (info["network"].as_str().unwrap_or("none"), info["gpu"].as_bool() == Some(true)) {
+            ("none", true) => "fetch".to_string(),
+            (n, _) => n.to_string(),
+        },
         // Missing: a site built before free page reporting, saved without the device
         free_page_reporting: info["free_page_reporting"].as_bool().unwrap_or(false),
     };

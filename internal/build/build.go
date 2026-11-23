@@ -243,9 +243,10 @@ func Run(o Options, version string) error {
 	}
 
 	// With networking on, the page terminates the guest's HTTPS with certificates from a CA
-	// made for this build
+	// made for this build. A guest with a network device for the GPU alone has one too (its
+	// machine has the relay, though nothing it asks for goes out)
 	var ca *sandboxca.CA
-	if s.Network != "none" {
+	if bootNetwork(s) != "none" {
 		if ca, err = sandboxca.New(); err != nil {
 			return err
 		}
@@ -266,7 +267,7 @@ func Run(o Options, version string) error {
 		if err != nil {
 			return err
 		}
-		source.Layers = append(source.Layers, oci.TarGzLayer(kernel), oci.FilesLayer(boot.Files(s.Console, s.Network, caPEM)))
+		source.Layers = append(source.Layers, oci.TarGzLayer(kernel), oci.FilesLayer(boot.Files(s.Console, bootNetwork(s), caPEM)))
 		return nil
 	}); err != nil {
 		return err
@@ -324,7 +325,7 @@ func Run(o Options, version string) error {
 			}
 			if nativeBuild {
 				cmd := exec.Command(vm, tools.SnapshotArgs(filepath.Join(out, "system"), s.Memory, s.Ready, s.Exercise,
-					s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, o.MemoryLimits, userProgram(s))...)
+					bootNetwork(s), tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, o.MemoryLimits, userProgram(s))...)
 				cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 				// It ends with this build, however the build ends (a SIGTERM, a kill -9, the
 				// daemon that started the build stopping): never left booting on its own
@@ -333,7 +334,7 @@ func Run(o Options, version string) error {
 				}
 				return cmd.Run()
 			}
-			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, s.Network, tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, o.MemoryLimits, userProgram(s))
+			return t.Snapshot(out, s.Memory, s.Ready, s.Exercise, bootNetwork(s), tunnels, o.AllowPrivate, s.CPUs, s.BuildCPUs, o.Sandbox, o.MemoryLimits, userProgram(s))
 		}
 		return retryStalled(snapshot, os.Stderr)
 	}); err != nil {
@@ -602,9 +603,6 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	default:
 		return nil, fmt.Errorf("gpu %q: use on or off", gpu)
 	}
-	if s.GPU && s.Network != "fetch" {
-		return nil, errors.New("gpu needs a guest with a network (the GPU is reached as gpu.internal:7070): build with --network fetch")
-	}
 
 	// Raw TCP the browser can't make, carried over WebSockets: only with a network
 	specs := o.Tunnels
@@ -770,6 +768,16 @@ func resolveSource(source, platform string) error {
 		return err
 	}
 	return docker.Run("tag", source, sourceTag)
+}
+
+// bootNetwork is the network the guest boots and is snapshotted with: its own, or for a site with
+// the GPU and no network "gpu", a network device for the GPU's link alone (its egress denied), as
+// every run of the site gives it too.
+func bootNetwork(s *Settings) string {
+	if s.GPU && s.Network == "none" {
+		return "gpu"
+	}
+	return s.Network
 }
 
 // pruneRuntime keeps only the machine build this site loads: armless.wasm for one CPU,
