@@ -372,6 +372,9 @@
   const CHUNKS_AHEAD = 4;
   /** How often a `files` event says how the files are coming. */
   const FILES_EVERY_MS = 250;
+  /** A file this large (a model's weights, say) is one whose reading the `files` event follows
+   *  (`reading`: how much of it is in the machine), for the page to show while the guest waits. */
+  const READING_MIN_BYTES = 256 << 20;
   /**
    * The machine's own cache of file contents (armless's fs_cache_mb), decompressed, in its memory,
    * which never shrinks: armless's default is 256 MB, and the guest keeps what it reads in its own
@@ -627,6 +630,9 @@
       this.kept = new Map();
       this.keptBytes = 0;
       this.fileStats = { fromPack: 0, fromKept: 0, fetched: 0, fetchedBytes: 0, prefetched: 0, prefetchedBytes: 0 };
+      // The large file the guest last read a chunk of: { path, size, loaded, chunks in }
+      this.reading = null;
+      this.readingMinBytes = READING_MIN_BYTES;
       // The job runner for any machine with agent.js loaded (its Controller says what it supports)
       if (agent) {
         const core = this;
@@ -681,6 +687,19 @@
         vm = new this.Armless({ fs_cache_mb: FS_CACHE_MB, predecode_mb: PREDECODE_MB, ...this.config, filesystem, network, warm: undefined, initial_state: url,
           user_state: userState ?? undefined, ...(userState ? { user_asleep_ms: userAsleepMs } : {}), autostart: false });
         this.vm = vm;
+        // WebGPU compute for the guest (armless-gpu.js): its connections to gpu.internal:7070
+        // (`gpu` is true, or { max_memory } for a site built with --gpu-memory)
+        if (this.config.gpu && root.ArmlessGPU) {
+          root.ArmlessGPU.attach(vm, typeof this.config.gpu === "object" ? this.config.gpu : {});
+        }
+        // The guest's GPU connections open now (vm.gpu_connections): a saved state can't hold
+        // what they put on the GPU, so the page doesn't save while there are any
+        vm.gpu_connections = 0;
+        vm.on("tcp-connection", (conn) => {
+          if (conn.port !== 7070 || String(conn.host).toLowerCase() !== "gpu.internal") return;
+          vm.gpu_connections++;
+          conn.on("close", () => { vm.gpu_connections = Math.max(0, vm.gpu_connections - 1); });
+        });
         vm.on("progress", (e) => this.emit("progress", { file: e.file, loaded: e.loaded, total: e.total }));
         vm.on("console", (bytes) => { if (vm === this.vm) this.emit("console", bytes); });
         // With no kernel, the program's end: { reason: "exit", code } or { reason: "fault", message }
@@ -715,14 +734,14 @@
       const kept = this._kept(name);
       if (kept) {
         this.fileStats.fromKept++;
-        this._filesChanged();
+        this._read(name);
         return kept;
       }
       // From the warm pack, if it holds the file: now, or once the pack brings it
       const packed = await this.pack?.get(name);
       if (packed) {
         this.fileStats.fromPack++;
-        this._filesChanged();
+        this._read(name);
         return packed;
       }
       this.demanded.add(name);
@@ -745,7 +764,7 @@
         }
         const b = await bytes;
         this.fileStats.fetchedBytes += b.length;
-        this._filesChanged();
+        this._read(name);
         return b;
       } finally {
         this.demanded.delete(name);
@@ -804,7 +823,8 @@
     // sequential read-ahead. The machine's own filesystem.json (which armless has loaded already,
     // so the browser has it) says which chunks make a file.
 
-    /** The chunks of `filesystem.json`'s large files by blob: { chunks, at }. */
+    /** The chunks of `filesystem.json`'s large files by blob: { chunks, at, length (the chunk's,
+     *  decompressed), file }, `file` for one of readingMinBytes and more ({ path, size }). */
     async _fsIndex() {
       this._fsIndexing ??= (async () => {
         const url = this.config.filesystem?.json;
@@ -813,20 +833,42 @@
         if (!r.ok) return null;
         const root = await r.json();
         const byBlob = new Map();
-        const walk = (nodes) => {
-          for (const [, , , mode, , , target] of nodes ?? []) {
+        const walk = (nodes, dir) => {
+          for (const [name, size, , mode, , , target] of nodes ?? []) {
             const kind = mode & 0o170000;
-            if (kind === 0o040000) walk(target);
+            if (kind === 0o040000) walk(target, `${dir}${name}/`);
             else if (kind === 0o100000 && Array.isArray(target)) {
               const chunks = target.map(([blob]) => blob);
-              chunks.forEach((blob, at) => { if (!byBlob.has(blob)) byBlob.set(blob, { chunks, at }); });
+              const file = size >= this.readingMinBytes ? { path: dir + name, size } : null;
+              chunks.forEach((blob, at) => { if (!byBlob.has(blob)) byBlob.set(blob, { chunks, at, length: target[at][1], file }); });
             }
           }
         };
-        walk(root?.fsroot);
+        walk(root?.fsroot, "/");
         return { byBlob };
       })().catch(() => null);
       return this._fsIndexing;
+    }
+
+    /**
+     * `name` is in the machine (for a read, or ahead of one). A chunk of a file of readingMinBytes
+     * and more counts toward how much of it is in, which `files` says as `reading`: the last such
+     * file a chunk came for, each chunk counted once. Only once the index is wanted anyway (the
+     * first file fetched on its own reads ahead with it): a boot's reads, all from the warm pack,
+     * don't fetch it.
+     */
+    _read(name) {
+      this._filesChanged();
+      this._fsIndexing?.then((index) => {
+        const f = index?.byBlob.get(name);
+        if (!f?.file) return;
+        let r = this.reading;
+        if (r?.path !== f.file.path) r = this.reading = { ...f.file, loaded: 0, in: new Set() };
+        if (r.in.has(name)) return;
+        r.in.add(name);
+        r.loaded = Math.min(r.size, r.loaded + f.length);
+        this._filesChanged();
+      }, () => {});
     }
 
     /** Fetch the chunks after `name`, if it is a chunk of a large file just fetched on its own. */
@@ -863,7 +905,10 @@
           this.fileStats.prefetched++;
           this.fileStats.prefetchedBytes += b.length;
           // Into the machine, unless the guest asked meanwhile (its read hands it over itself)
-          if (vm === this.vm && !vm.stopped && !this.demanded.has(name) && !vm.has_blob(name)) vm.provide_blob(name, b);
+          if (vm === this.vm && !vm.stopped && !this.demanded.has(name) && !vm.has_blob(name)) {
+            vm.provide_blob(name, b);
+            this._read(name);
+          }
         }, () => {}).finally(() => {
           this.inflight.delete(name);
           this._fetchedIn();
@@ -909,6 +954,7 @@
         fetchedBytes: this.fileStats.fetchedBytes,
         prefetched: this.fileStats.prefetched,
         prefetchedBytes: this.fileStats.prefetchedBytes,
+        reading: this.reading ? { file: this.reading.path, loaded: this.reading.loaded, total: this.reading.size } : null,
       };
     }
 

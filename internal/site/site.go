@@ -58,7 +58,12 @@ type Page struct {
 	Assets   string
 	MemoryMB int    // must match the snapshot
 	Network  string // "none" or "fetch"; must match the snapshot
-	CPUs     int    // must match the snapshot; more than one needs cross-origin isolation
+	// GPU: the guest may run WebGPU compute on the visitor's GPU (armless-gpu.js answers its
+	// connections to gpu.internal:7070)
+	GPU bool
+	// GPUMemoryMB: what the guest's GPU buffers may take in the page; 0: armless-gpu.js's default
+	GPUMemoryMB int
+	CPUs        int // must match the snapshot; more than one needs cross-origin isolation
 	// JIT: the machine compiles hot guest code to WebAssembly (armless's jit); false keeps the
 	// interpreter, slower and smaller
 	JIT bool

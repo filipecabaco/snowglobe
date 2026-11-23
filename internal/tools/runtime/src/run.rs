@@ -279,7 +279,10 @@ pub fn site_spec(site: &Site) -> Result<(serde_json::Value, Spec, String), Strin
     let spec = Spec {
         memory_mb: info["memory_mb"].as_u64().unwrap_or(512) as usize,
         cpus: info["cpus"].as_u64().unwrap_or(1) as usize,
+        // The site's own network: "none" for a site with the GPU alone, so its sandbox and its
+        // jobs' egress see no network (the device for the GPU's link is `gpu`'s)
         network: info["network"].as_str().unwrap_or("none").to_string(),
+        gpu: info["gpu"].as_bool() == Some(true),
         // Missing: a site built before free page reporting, saved without the device
         free_page_reporting: info["free_page_reporting"].as_bool().unwrap_or(false),
     };
@@ -333,7 +336,13 @@ pub fn main(args: &Args, bundled: Option<Site>) -> Result<u8, String> {
     // The snapshot's RAM, shared with every other machine restored from it: opened (made, the
     // first time) before the sandbox, which then needn't reach the cache's images
     let image = image::open(&site, spec.memory_mb << 20);
-    let sandboxed = sandbox::apply(&policy(args, &site, &controls, log_dir.as_deref(), &socket, spec.network == "fetch"))?;
+    // A site built with --gpu: its GPU found now, while the driver's files can be read, and what
+    // the driver opens later let through
+    let mut policy = policy(args, &site, &controls, log_dir.as_deref(), &socket, spec.network == "fetch");
+    if machine::site_gpu(&site) && machine::open_gpu(&site) {
+        machine::allow_gpu(&mut policy, &site);
+    }
+    let sandboxed = sandbox::apply(&policy)?;
     // Tied to what started it, if that asked: watched once confined, from a thread of its own
     if let Some(line) = crate::lifeline::inherited() {
         crate::lifeline::watch(line, || crate::lifeline::stop("what started this run"));
@@ -757,7 +766,7 @@ fn serve(session: &Session, stream: UnixStream) {
             let answer = match links(&request["links"]) {
                 Ok(l) => {
                     let n = l.len();
-                    session.host.set_links(l);
+                    session.host.set_links(machine::with_gpu_link(l));
                     json!({ "links": n })
                 },
                 Err(e) => json!({ "error": e }),
@@ -1033,6 +1042,19 @@ mod tests {
         let (_, s) = site("run-spec-default", &[("run.json", b"{}")]);
         let (_, spec, title) = site_spec(&s).unwrap();
         assert_eq!((spec.memory_mb, spec.cpus, spec.network.as_str(), title.as_str()), (512, 1, "none", "snowglobe"));
+        assert!(!spec.gpu && !spec.device());
+    }
+
+    #[test]
+    fn a_site_with_the_gpu_alone_has_a_device_but_no_network_in_its_sandbox() {
+        let (_, s) = site("run-spec-gpu", &[("run.json", br#"{"network":"none","gpu":true}"#)]);
+        let (_, spec, _) = site_spec(&s).unwrap();
+        assert!(spec.gpu && spec.device(), "the guest has a device for the GPU's link");
+        assert_eq!(spec.network, "none", "what the sandbox and egress go by");
+        let controls = driver::Controls::default();
+        let args = Args::parse(&[], &[]).unwrap();
+        let p = policy(&args, &s, &controls, None, "/tmp/run-spec-gpu.sock", spec.network == "fetch");
+        assert!(!p.network, "no TCP out, DNS or TLS roots for the GPU alone");
     }
 
     #[test]

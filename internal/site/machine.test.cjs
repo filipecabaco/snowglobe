@@ -1200,6 +1200,33 @@ test('reading ahead: the chunks after a large file\'s, fetched alongside and han
   assert.equal(st.prefetched, 4);
 });
 
+test('reading: how much of a large file is in the machine, its chunks read and read ahead each counted once; small files not followed', async () => {
+  // fsJson's chunked files: 3 MB, in chunks of 1 MB
+  const tree = { models: { weights: ['w0.bin.zst', 'w1.bin.zst', 'w2.bin.zst'] }, bin: { sh: 's.bin.zst' } };
+  const { core } = fileCore((url) => url === 'https://b/fs.json' ? { ok: true, json: async () => fsJson(tree) }
+    : url.startsWith('https://b/') ? blobResponse(bytesOf(url.slice(10))) : null);
+  const settle = async () => { for (let i = 0; i < 20; i++) await tick(); };
+  core.readingMinBytes = 2 << 20;
+  await core.fetchBlob('s.bin.zst');
+  await settle();
+  assert.equal(core.filesStatus().reading, null, 'a small file is not followed');
+  await core.fetchBlob('w0.bin.zst');
+  await settle();
+  // w0 read, w1 and w2 read ahead
+  assert.deepEqual(core.filesStatus().reading, { file: '/models/weights', loaded: 3 << 20, total: 3 << 20 });
+  // Read again (the machine's cache let them go): not counted twice
+  await core.fetchBlob('w1.bin.zst');
+  await settle();
+  assert.equal(core.filesStatus().reading.loaded, 3 << 20);
+
+  // Followed only from 256 MB by default
+  const small = fileCore((url) => url === 'https://b/fs.json' ? { ok: true, json: async () => fsJson(tree) }
+    : url.startsWith('https://b/') ? blobResponse(bytesOf('x')) : null);
+  await small.core.fetchBlob('w0.bin.zst');
+  await settle();
+  assert.equal(small.core.filesStatus().reading, null);
+});
+
 test('a read of a file being fetched ahead shares its request', async () => {
   let release;
   const gate = new Promise((r) => { release = r; });

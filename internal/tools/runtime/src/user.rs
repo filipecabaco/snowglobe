@@ -1109,7 +1109,7 @@ fn serve(shared: &Arc<Shared>, host: &Arc<armless::native::NativeHost>, stream: 
             let answer = match crate::run::links(&request["links"]) {
                 Ok(l) => {
                     let n = l.len();
-                    host.set_links(l);
+                    host.set_links(crate::machine::with_gpu_link(l));
                     json!({ "links": n })
                 },
                 Err(e) => json!({ "error": e }),
@@ -1334,7 +1334,7 @@ mod tests {
     #[test]
     fn a_saved_program_is_restored_with_its_hostname_reaping_and_the_time_it_was_saved_for() {
         let (root, site) = testing::site("user-restore", &[("system/filesystem.json", EMPTY_FS)]);
-        let spec = Spec { memory_mb: 32, cpus: 1, network: "none".into(), free_page_reporting: false };
+        let spec = Spec { memory_mb: 32, cpus: 1, network: "none".into(), gpu: false, free_page_reporting: false };
         let (mut vm, _clock) = machine::new_vm_jit(&spec, &site, false).unwrap();
         vm.board.fs_write_file("/sleeper", &sleeper(), 0o755).unwrap();
         let opts = ExecOptions { std: StdStreams::Terminal, hostname: Some(hostname("My Site!")) };

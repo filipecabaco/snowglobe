@@ -7,13 +7,22 @@ description = "snowglobe's machine runtime: boots and snapshots a site's guest, 
 license = "MIT"
 
 [dependencies]
-armless = { git = "https://github.com/filipecabaco/armless", tag = "armless-v0.25.2" }
-armless-user = { git = "https://github.com/filipecabaco/armless", tag = "armless-v0.25.2" }
+armless = { git = "https://github.com/filipecabaco/armless", tag = "armless-v0.27.0" }
+armless-user = { git = "https://github.com/filipecabaco/armless", tag = "armless-v0.27.0" }
+# WebGPU compute for sites built with --gpu: the guest's gpu.internal:7070 answered here, on wgpu.
+# Its own crate (no armless in it)
+armless-gpu = { git = "https://github.com/filipecabaco/armless", tag = "armless-v0.27.0", optional = true }
 libc = "0.2"
 regex = { version = "1", default-features = false, features = ["std", "perf"] }
 serde_json = "1"
 sha2 = "0.10"
 zstd = { version = "0.13", default-features = false, features = ["zstdmt"] }
+
+[features]
+default = ["gpu"]
+# Sites built with --gpu get the host's GPU (Vulkan, Metal, DX12 or GL through wgpu). Without it
+# their guests find no GPU and use their CPU.
+gpu = ["dep:armless-gpu"]
 
 [profile.release]
 opt-level = 3

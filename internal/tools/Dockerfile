@@ -20,9 +20,9 @@ FROM alpine:3.24.2
 WORKDIR /tools
 
 # The browser runtime, pinned and integrity-checked: armless (armless.js, armless.wasm,
-# armless-smp.wasm) from its release, and xterm.js from npm
-ADD --checksum=sha256:d4526efe2c5a5a19b12ce6fa6d3795cda99f51d18c113fc46111bdb79ab5088f \
-    https://github.com/filipecabaco/armless/releases/download/armless-v0.23.0/armless-web.tar.gz /tmp/armless-web.tar.gz
+# armless-smp.wasm, armless-gpu.js) from its release, and xterm.js from npm
+ADD --checksum=sha256:c89067463fdeb60cb8bddc777e34374c0d455d6d633f1c60e3076e09734a0f11 \
+    https://github.com/filipecabaco/armless/releases/download/armless-v0.27.0/armless-web.tar.gz /tmp/armless-web.tar.gz
 ADD --checksum=sha256:908e66e04af6c8dc6b00dd3b54de088e2e81e5ed866284fd6c2fb3c2d1c7a3f6 \
     https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz /tmp/xterm.tgz
 ADD --checksum=sha256:26003b4517a132b64e4ff228fd88a5fda3fff5e606c76093f6dcff772e9ecec0 \
@@ -32,7 +32,7 @@ ADD --checksum=sha256:26003b4517a132b64e4ff228fd88a5fda3fff5e606c76093f6dcff772e
 RUN mkdir -p site/armless site/xterm /tmp/x && \
     tar -xzf /tmp/armless-web.tar.gz -C /tmp/x && \
     cp /tmp/x/armless-web/armless.js /tmp/x/armless-web/armless.wasm /tmp/x/armless-web/armless-smp.wasm \
-       /tmp/x/armless-web/LICENSE site/armless/ && \
+       /tmp/x/armless-web/armless-gpu.js /tmp/x/armless-web/LICENSE site/armless/ && \
     tar -xzf /tmp/xterm.tgz -C /tmp/x && cp /tmp/x/package/lib/xterm.js /tmp/x/package/css/xterm.css site/xterm/ && \
     rm -rf /tmp/x/package && \
     tar -xzf /tmp/addon-fit.tgz -C /tmp/x && cp /tmp/x/package/lib/addon-fit.js site/xterm/ && \

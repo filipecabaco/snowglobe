@@ -301,6 +301,13 @@ SHA256SUMS, installs to ~/.local/bin; `SNOWGLOBE_VERSION`, `SNOWGLOBE_INSTALL_DI
 - `--exercise CMD` (repeatable) / `snowglobe.exercise` (JSON array): commands typed after the snapshot; the files they read are preloaded.
 - `--warm REGEX` / `snowglobe.warm`: extra guest paths to preload.
 - `--network fetch` / `snowglobe.network`: give the guest a network (default `none`).
+- `--gpu on` / `snowglobe.gpu`: let the guest run WebGPU compute on the visitor's GPU (natively, the
+  host's) through `gpu.internal:7070` (default `off`; experimental). Without `--network fetch` the
+  guest reaches the GPU and nothing else.
+  `examples/ollama` runs Ollama itself on it, pulling GGUF models from Hugging Face (`hf.co/OWNER/REPO`).
+- `--gpu-memory MB` / `snowglobe.gpu-memory`: the GPU memory the guest's buffers may take, all its
+  connections together (default 2048 in a page, 4096 natively).
+- `--build-arg NAME=VALUE` (repeatable): a Dockerfile ARG for the image's build.
 - `--tunnel [HOST:]PORT=URL` (repeatable) / `snowglobe.tunnels`: carry other TCP over a WebSocket.
 - `--tunnel-token URL` / `snowglobe.tunnel-token`: a fresh token per tunnel connection, put where the URL says `{token}`.
 - `--allow-private`: let the build's snapshot reach loopback and private addresses.
