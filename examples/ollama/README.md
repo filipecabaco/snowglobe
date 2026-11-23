@@ -22,8 +22,11 @@ The chat waits at its prompt in the snapshot; the model loads, and the GPU is co
 first message. A browser without WebGPU (or a GPU without `shader-f16`, which llama.cpp's WebGPU
 backend needs) runs it on the emulated CPU instead: it still answers, much more slowly.
 
-Natively, `snowglobe run dist` chats in the terminal; with `-p 11434:11434` Ollama's clients reach
-its API (`OLLAMA_HOST=127.0.0.1:11434 ollama list`, or any Ollama library).
+The guest has no network: it reaches the GPU and nothing else.
+
+Natively, `snowglobe run dist` chats in the terminal, on the host's GPU (through wgpu: Vulkan,
+Metal or DX12); `snowglobe run dist --name ol --detach --fork` then `snowglobe sh ol
+'ollama-compat run smollm2:135m "Hi"'` asks it from a script, each in a fresh copy of the machine.
 
 Measured with smollm2:135m on a machine with no GPU (Mesa's lavapipe, software Vulkan, as the
 GPU): 2.4 tokens/s through the browser's code path (armless.wasm and armless-gpu.js, with Dawn as
