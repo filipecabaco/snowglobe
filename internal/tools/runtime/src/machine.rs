@@ -105,7 +105,7 @@ pub fn new_vm_jit(spec: &Spec, site: &Site, jit: bool) -> Result<(Vm<NativePlatf
 /// `new_vm_jit`, on `ram` when there is one (the snapshot's image, `image::open`).
 pub fn new_vm_on(spec: &Spec, site: &Site, jit: bool, ram: Option<armless::Ram>) -> Result<(Vm<NativePlatform>, Arc<Clock>), String> {
     let config = Config {
-        memory_size: spec.memory_mb << 20,
+        memory_size: (spec.memory_mb as u64) << 20,
         cpus: spec.cpus,
         devices: DeviceConfig {
             console: true,

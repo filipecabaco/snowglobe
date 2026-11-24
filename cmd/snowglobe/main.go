@@ -302,7 +302,8 @@ Build flags:
   --source-name NAME
                   what the site calls its source (run.json, the default title), when the path
                   built isn't a name to show (a daemon's copy of an uploaded context)
-  --memory MB     guest RAM (default: 512, at most 3584)
+  --memory MB     guest RAM (default: 512, at most 64512; past 3072, a page needs a browser
+                  with WebAssembly multi-memory)
   --warm REGEX    extra guest paths to preload, on top of what the guest read
   --network NAME  none (default) or fetch: the guest's plain HTTP requests go out through the
                   browser's fetch(), upgraded to HTTPS on HTTPS pages; servers must allow CORS

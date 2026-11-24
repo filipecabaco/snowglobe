@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(err(&[&dir, "--memory", "lots"]), "--memory: not a number");
         assert_eq!(err(&[&dir, "--cols", "wide"]), "--cols: not a number");
         assert_eq!(err(&[&dir, "--rows", "-1"]), "--rows: not a number");
-        assert_eq!(err(&[&dir, "--memory", "1"]), "memory size must be between 16 MiB and 3.5 GiB");
+        assert_eq!(err(&[&dir, "--memory", "1"]), "memory size must be between 16 MiB and 63 GiB");
         // A machine is made, but there is no kernel in its filesystem to boot
         assert!(err(&[&dir, "--memory", "16"]).contains("no kernel"));
         assert_eq!(err(&[&tmp("snapshot-empty").display().to_string(), "--memory", "16"]), "system/filesystem.json: not in the site");
