@@ -599,9 +599,8 @@ func Resolve(o Options, img *docker.Image) (*Settings, error) {
 	if s.Memory < 1 {
 		return nil, fmt.Errorf("memory %d: a number of MB", s.Memory)
 	}
-	// An armless machine's RAM sits below its devices: at most 3.5 GiB
 	if s.Memory > MaxMemoryMB {
-		return nil, fmt.Errorf("memory %d: an armless machine has at most %d MB of RAM (a larger model is read from its file as it is used, not held in RAM)", s.Memory, MaxMemoryMB)
+		return nil, fmt.Errorf("memory %d: an armless machine has at most %d MB of RAM", s.Memory, MaxMemoryMB)
 	}
 
 	switch jit := first(o.JIT, label("jit"), "on"); jit {
@@ -810,8 +809,9 @@ func resolveSource(source, platform string, buildArgs []string) error {
 	return docker.Run("tag", source, sourceTag)
 }
 
-// MaxMemoryMB is the most RAM an armless machine has (armless's RAM_MAX, 0xE000_0000).
-const MaxMemoryMB = 3584
+// MaxMemoryMB is the most RAM an armless machine has (armless's RAM_MAX, 63 GiB). Past 3 GiB it
+// goes on above 4 GiB, which in a page takes a browser with WebAssembly multi-memory.
+const MaxMemoryMB = 63 << 10
 
 // bootNetwork is the network the guest boots and is snapshotted with: its own, or for a site with
 // the GPU and no network "gpu", a network device for the GPU's link alone (its egress denied), as

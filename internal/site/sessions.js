@@ -16,7 +16,7 @@
     if (c.version !== 1 || typeof c.name !== "string" || !c.name.trim() || c.name.length > 100 ||
         !Number.isSafeInteger(c.savedAt) || c.savedAt < 0 ||
         typeof c.config?.build !== "string" || !c.config.build ||
-        !Number.isInteger(c.config.memory) || c.config.memory < 16 || c.config.memory > 3584 ||
+        !Number.isInteger(c.config.memory) || c.config.memory < 16 || c.config.memory > 64512 ||
         !Number.isInteger(c.config.cpus) || c.config.cpus < 1 || c.config.cpus > 8 ||
         !["none", "fetch"].includes(c.config.network) || !["raw", "gzip"].includes(c.encoding)) {
       throw new Error("Invalid session backup metadata");

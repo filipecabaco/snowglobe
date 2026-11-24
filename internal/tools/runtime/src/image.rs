@@ -77,7 +77,7 @@ fn open_in(root: &Path, state: &[u8], memory: usize) -> Result<Image, String> {
         (rest_file, without_pages) = read()?;
     }
     let image = open_checked(&ram)?;
-    let mapped = armless::Ram::from_image(&image, memory).map_err(|e| format!("{}: {e}", ram.display()))?;
+    let mapped = armless::Ram::from_image(&image, memory as u64).map_err(|e| format!("{}: {e}", ram.display()))?;
     // In use: kept from the pruning of unused ones
     let _ = image.set_modified(SystemTime::now());
     let _ = rest_file.set_modified(SystemTime::now());
