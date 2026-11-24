@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "sha": "4819318d1f08436b6a0136df1af8009f0735801e",
-  "created_at": "2026-11-24T01:32:11.341Z",
+  "created_at": "2026-11-24T01:40:30.004Z",
   "sites": {
     "web": {
       "schema": 1,
@@ -6142,6 +6142,354 @@
               "median": 1205,
               "min": 1202,
               "max": 1207,
+              "n": 3
+            }
+          ]
+        }
+      },
+      "errors": []
+    },
+    "conduit-1cpu": {
+      "schema": 1,
+      "site": "conduit-1cpu",
+      "title": "Conduit + Supabase",
+      "cpus": 1,
+      "network": "fetch",
+      "snowglobe": "v0.0.0-20261124010940-c875968cf073+dirty",
+      "built_at": "2026-11-24T01:35:18Z",
+      "measured_at": "2026-11-24T01:40:17.604Z",
+      "env": {
+        "sha": "c875968cf073ba93758bdab4a8deb04c9a366d13",
+        "ref": "refs/pull/144/merge",
+        "event": "pull_request",
+        "runner": "linux arm64, 4 × unknown",
+        "browser": "chromium 141.0.7390.37"
+      },
+      "config": {
+        "reps": 3,
+        "throttled_reps": 2,
+        "throttle": "9mbps,75ms",
+        "settle_s": 35,
+        "quiet_ms": 3000,
+        "scenarios": [
+          "cold",
+          "warm",
+          "throttled",
+          "workload"
+        ]
+      },
+      "scenarios": {
+        "cold": {
+          "reps": [
+            {
+              "ready_ms": 1283,
+              "running_ms": 1328,
+              "first_output_ms": 1364,
+              "requests": 21,
+              "bytes": 69099502,
+              "not_modified": 0,
+              "sw_served": 4,
+              "heap_peak_bytes": 3070712
+            },
+            {
+              "ready_ms": 1228,
+              "running_ms": 1272,
+              "first_output_ms": 1308,
+              "requests": 21,
+              "bytes": 69099502,
+              "not_modified": 0,
+              "sw_served": 4,
+              "heap_peak_bytes": 3113336
+            },
+            {
+              "ready_ms": 1185,
+              "running_ms": 1226,
+              "first_output_ms": 1266,
+              "requests": 21,
+              "bytes": 69099502,
+              "not_modified": 0,
+              "sw_served": 4,
+              "heap_peak_bytes": 3131948
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 1228,
+              "min": 1185,
+              "max": 1283,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 1272,
+              "min": 1226,
+              "max": 1328,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 1308,
+              "min": 1266,
+              "max": 1364,
+              "n": 3
+            },
+            "requests": {
+              "median": 21,
+              "min": 21,
+              "max": 21,
+              "n": 3
+            },
+            "bytes": {
+              "median": 69099502,
+              "min": 69099502,
+              "max": 69099502,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 4,
+              "min": 4,
+              "max": 4,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3113336,
+              "min": 3070712,
+              "max": 3131948,
+              "n": 3
+            }
+          }
+        },
+        "warm": {
+          "reps": [
+            {
+              "ready_ms": 894,
+              "running_ms": 929,
+              "first_output_ms": 970,
+              "requests": 1,
+              "bytes": 0,
+              "not_modified": 1,
+              "sw_served": 16,
+              "heap_peak_bytes": 3119216
+            },
+            {
+              "ready_ms": 904,
+              "running_ms": 947,
+              "first_output_ms": 983,
+              "requests": 1,
+              "bytes": 0,
+              "not_modified": 1,
+              "sw_served": 16,
+              "heap_peak_bytes": 3122764
+            },
+            {
+              "ready_ms": 903,
+              "running_ms": 949,
+              "first_output_ms": 986,
+              "requests": 1,
+              "bytes": 0,
+              "not_modified": 1,
+              "sw_served": 16,
+              "heap_peak_bytes": 3128784
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 903,
+              "min": 894,
+              "max": 904,
+              "n": 3
+            },
+            "running_ms": {
+              "median": 947,
+              "min": 929,
+              "max": 949,
+              "n": 3
+            },
+            "first_output_ms": {
+              "median": 983,
+              "min": 970,
+              "max": 986,
+              "n": 3
+            },
+            "requests": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "bytes": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 3
+            },
+            "not_modified": {
+              "median": 1,
+              "min": 1,
+              "max": 1,
+              "n": 3
+            },
+            "sw_served": {
+              "median": 16,
+              "min": 16,
+              "max": 16,
+              "n": 3
+            },
+            "heap_peak_bytes": {
+              "median": 3122764,
+              "min": 3119216,
+              "max": 3128784,
+              "n": 3
+            }
+          }
+        },
+        "throttled": {
+          "reps": [
+            {
+              "ready_ms": 56576,
+              "running_ms": 56619,
+              "first_output_ms": 56659,
+              "requests": 53,
+              "bytes": 73656431,
+              "not_modified": 0,
+              "sw_served": 37,
+              "heap_peak_bytes": 4580340
+            },
+            {
+              "ready_ms": 56568,
+              "running_ms": 56611,
+              "first_output_ms": 56652,
+              "requests": 53,
+              "bytes": 73656431,
+              "not_modified": 0,
+              "sw_served": 37,
+              "heap_peak_bytes": 4609772
+            }
+          ],
+          "summary": {
+            "ready_ms": {
+              "median": 56572,
+              "min": 56568,
+              "max": 56576,
+              "n": 2
+            },
+            "running_ms": {
+              "median": 56615,
+              "min": 56611,
+              "max": 56619,
+              "n": 2
+            },
+            "first_output_ms": {
+              "median": 56655.5,
+              "min": 56652,
+              "max": 56659,
+              "n": 2
+            },
+            "requests": {
+              "median": 53,
+              "min": 53,
+              "max": 53,
+              "n": 2
+            },
+            "bytes": {
+              "median": 73656431,
+              "min": 73656431,
+              "max": 73656431,
+              "n": 2
+            },
+            "not_modified": {
+              "median": 0,
+              "min": 0,
+              "max": 0,
+              "n": 2
+            },
+            "sw_served": {
+              "median": 37,
+              "min": 37,
+              "max": 37,
+              "n": 2
+            },
+            "heap_peak_bytes": {
+              "median": 4595056,
+              "min": 4580340,
+              "max": 4609772,
+              "n": 2
+            }
+          }
+        },
+        "workload": {
+          "reps": [
+            {
+              "total_ms": 2483,
+              "commands": [
+                {
+                  "command": "curl -s http://127.0.0.1:4173/ | head -c 200",
+                  "ms": 521,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select count(*) from articles\"",
+                  "ms": 1962,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 2240,
+              "commands": [
+                {
+                  "command": "curl -s http://127.0.0.1:4173/ | head -c 200",
+                  "ms": 525,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select count(*) from articles\"",
+                  "ms": 1715,
+                  "done": "prompt"
+                }
+              ]
+            },
+            {
+              "total_ms": 2374,
+              "commands": [
+                {
+                  "command": "curl -s http://127.0.0.1:4173/ | head -c 200",
+                  "ms": 555,
+                  "done": "prompt"
+                },
+                {
+                  "command": "psql \"$DB_URL\" -c \"select count(*) from articles\"",
+                  "ms": 1819,
+                  "done": "prompt"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total_ms": {
+              "median": 2374,
+              "min": 2240,
+              "max": 2483,
+              "n": 3
+            }
+          },
+          "commands": [
+            {
+              "command": "curl -s http://127.0.0.1:4173/ | head -c 200",
+              "median": 525,
+              "min": 521,
+              "max": 555,
+              "n": 3
+            },
+            {
+              "command": "psql \"$DB_URL\" -c \"select count(*) from articles\"",
+              "median": 1819,
+              "min": 1715,
+              "max": 1962,
               "n": 3
             }
           ]
