@@ -15,7 +15,7 @@
 
 ARG OLLAMA_VERSION=v0.40.17
 ARG LLAMA_CPP=b12257
-ARG ARMLESS_REF=armless-v0.28.0
+ARG ARMLESS_REF=armless-v0.29.0
 ARG MEMORY=1536
 ARG GPU_MEMORY=4096
 ARG TITLE="Ollama on your GPU"
@@ -82,6 +82,9 @@ ENV ENV=/etc/profile.d/ollama.sh OLLAMA_LLM_LIBRARY=webgpu OLLAMA_HOST=127.0.0.1
 # proxy resolves names, so Ollama's checks on what a registry's redirect resolves to (the
 # machine's addresses for names are private ones) stay on and pass, with no --insecure
 ENV HTTPS_PROXY=http://proxy.internal:3128 https_proxy=http://proxy.internal:3128 NO_PROXY=localhost,127.0.0.1,gpu.internal no_proxy=localhost,127.0.0.1,gpu.internal
+# No Ollama cloud: ollama.com doesn't let browsers in, so its cloud models and the server's
+# model-recommendations fetch (an error in the page's console at each start) can't work here
+ENV OLLAMA_NO_CLOUD=1
 # How to pull models with Ollama as it is (motd: no "$ " in it, which the snapshot waits for), then
 # a shell; the snapshot is taken at its prompt, before Ollama has started
 COPY motd /etc/motd
